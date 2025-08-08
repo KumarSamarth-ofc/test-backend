@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const authService = require('../utils/auth');
+const whatsappService = require('../utils/whatsapp');
 const {
     AuthController,
     validateSendOTP,
@@ -10,8 +11,18 @@ const {
 
 // Public routes
 router.post('/send-otp', validateSendOTP, AuthController.sendOTP);
+router.post('/send-registration-otp', validateSendOTP, AuthController.sendRegistrationOTP);
 router.post('/verify-otp', validateVerifyOTP, AuthController.verifyOTP);
 router.post('/refresh-token', AuthController.refreshToken);
+
+// WhatsApp service status (for debugging)
+router.get('/whatsapp-status', (req, res) => {
+    const status = whatsappService.getServiceStatus();
+    res.json({
+        success: true,
+        whatsapp: status
+    });
+});
 
 // Protected routes
 router.get('/profile', authService.authenticateToken, AuthController.getProfile);

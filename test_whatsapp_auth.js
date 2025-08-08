@@ -18,11 +18,12 @@ async function testWhatsAppAuth() {
 
         // Step 2: Wait a moment for OTP to be processed
         console.log('\n⏳ Waiting for OTP processing...');
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 2000));
 
         // Step 3: Verify OTP (you'll need to check console logs for the actual OTP)
         console.log('\n2️⃣ Verifying OTP...');
         console.log('📝 Note: Check server console logs for the actual OTP code');
+        console.log('💡 Look for the WhatsApp message in console output');
         
         // For testing, we'll use a placeholder OTP
         // In real testing, you'd get this from WhatsApp or console logs
@@ -78,6 +79,80 @@ async function testHealthCheck() {
     }
 }
 
+async function testWhatsAppService() {
+    console.log('\n📱 Testing WhatsApp Service Configuration...');
+    
+    try {
+        const response = await axios.get(`${BASE_URL}/api/auth/whatsapp-status`);
+        console.log('✅ WhatsApp service status:', response.data);
+    } catch (error) {
+        console.log('⚠️  WhatsApp status endpoint not available (this is normal)');
+    }
+}
+
+async function testOTPFlow() {
+    console.log('\n🔄 Testing Complete OTP Flow...');
+    
+    try {
+        // Step 1: Send OTP
+        console.log('\n📤 Step 1: Sending OTP...');
+        const sendResponse = await axios.post(`${BASE_URL}/api/auth/send-otp`, {
+            phone: TEST_PHONE
+        });
+        
+        if (sendResponse.data.success) {
+            console.log('✅ OTP sent successfully');
+            console.log('📱 Check console logs for WhatsApp message');
+            
+            // Wait for processing
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            
+            // Step 2: Try verification with wrong OTP first
+            console.log('\n❌ Step 2a: Testing with wrong OTP...');
+            try {
+                await axios.post(`${BASE_URL}/api/auth/verify-otp`, {
+                    phone: TEST_PHONE,
+                    token: '000000'
+                });
+            } catch (error) {
+                if (error.response?.status === 400) {
+                    console.log('✅ Correctly rejected wrong OTP');
+                }
+            }
+            
+            // Step 3: Try with correct OTP (you need to get this from console)
+            console.log('\n✅ Step 2b: Testing with correct OTP...');
+            console.log('💡 Replace "123456" with the actual OTP from console logs');
+            
+            const verifyResponse = await axios.post(`${BASE_URL}/api/auth/verify-otp`, {
+                phone: TEST_PHONE,
+                token: '123456', // Replace with actual OTP
+                userData: {
+                    email: 'test@example.com',
+                    role: 'influencer'
+                }
+            });
+            
+            if (verifyResponse.data.success) {
+                console.log('✅ OTP verification successful');
+                console.log('🎫 JWT Token received');
+                
+                // Test authenticated request
+                const token = verifyResponse.data.token;
+                const authResponse = await axios.get(`${BASE_URL}/api/auth/profile`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                console.log('✅ Authenticated request successful');
+                console.log('👤 User profile:', authResponse.data);
+            }
+        }
+        
+    } catch (error) {
+        console.error('❌ OTP flow test failed:', error.response?.data || error.message);
+    }
+}
+
 async function runTests() {
     console.log('🚀 Starting WhatsApp Authentication Tests\n');
 
@@ -90,7 +165,9 @@ async function runTests() {
     }
 
     console.log('\n' + '='.repeat(50));
-    await testWhatsAppAuth();
+    await testWhatsAppService();
+    console.log('\n' + '='.repeat(50));
+    await testOTPFlow();
     console.log('\n' + '='.repeat(50));
 }
 
@@ -99,4 +176,4 @@ if (require.main === module) {
     runTests().catch(console.error);
 }
 
-module.exports = { testWhatsAppAuth, testHealthCheck }; 
+module.exports = { testWhatsAppAuth, testHealthCheck, testOTPFlow }; 

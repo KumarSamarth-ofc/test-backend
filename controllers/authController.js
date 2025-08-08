@@ -4,7 +4,7 @@ const { body, validationResult } = require('express-validator');
 
 class AuthController {
     /**
-     * Send OTP to phone number via WhatsApp
+     * Send OTP to phone number via WhatsApp (for existing users)
      */
     async sendOTP(req, res) {
         try {
@@ -25,7 +25,42 @@ class AuthController {
             } else {
                 res.status(400).json({
                     success: false,
+                    message: result.message,
+                    code: result.code
+                });
+            }
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: 'Internal server error'
+            });
+        }
+    }
+
+    /**
+     * Send OTP for registration (new users)
+     */
+    async sendRegistrationOTP(req, res) {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({ errors: errors.array() });
+            }
+
+            const { phone } = req.body;
+
+            const result = await authService.sendRegistrationOTP(phone);
+            
+            if (result.success) {
+                res.json({
+                    success: true,
                     message: result.message
+                });
+            } else {
+                res.status(400).json({
+                    success: false,
+                    message: result.message,
+                    code: result.code
                 });
             }
         } catch (error) {
@@ -48,45 +83,12 @@ class AuthController {
 
             const { phone, token, userData } = req.body;
 
-            const result = await authService.verifyOTP(phone, token);
+            const result = await authService.verifyOTP(phone, token, userData);
             
             if (result.success) {
-                let user = result.user;
-
-                // If userData is provided, update user profile
-                if (userData && user) {
-                    const updateData = {
-                        email: userData.email,
-                        role: userData.role || user.role,
-                        languages: userData.languages,
-                        categories: userData.categories,
-                        min_range: userData.min_range,
-                        max_range: userData.max_range
-                    };
-
-                    // Remove undefined values
-                    Object.keys(updateData).forEach(key => 
-                        updateData[key] === undefined && delete updateData[key]
-                    );
-
-                    if (Object.keys(updateData).length > 0) {
-                        const { data: updatedUser, error: updateError } = await supabaseAdmin
-                            .from('users')
-                            .update(updateData)
-                            .eq('id', user.id)
-                            .select()
-                            .single();
-
-                        if (!updateError) {
-                            user = updatedUser;
-                        }
-                    }
-                }
-
-                // Return custom JWT token
                 res.json({
                     success: true,
-                    user: user,
+                    user: result.user,
                     token: result.token,
                     message: 'Authentication successful'
                 });
@@ -282,6 +284,10 @@ const validateVerifyOTP = [
 ];
 
 const validateUpdateProfile = [
+    body('name')
+        .optional()
+        .isLength({ min: 2, max: 100 })
+        .withMessage('Name must be between 2 and 100 characters'),
     body('email')
         .optional()
         .isEmail()
@@ -290,6 +296,10 @@ const validateUpdateProfile = [
         .optional()
         .isIn(['brand_owner', 'influencer', 'admin'])
         .withMessage('Invalid role'),
+    body('gender')
+        .optional()
+        .isIn(['male', 'female', 'other'])
+        .withMessage('Gender must be male, female, or other'),
     body('min_range')
         .optional()
         .isInt({ min: 0 })
