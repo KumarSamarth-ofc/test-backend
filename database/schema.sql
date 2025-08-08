@@ -13,8 +13,10 @@ CREATE TYPE transaction_status AS ENUM ('pending', 'completed', 'failed');
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     phone TEXT UNIQUE NOT NULL,
+    name TEXT,
     email TEXT,
     role user_role DEFAULT 'influencer',
+    gender TEXT CHECK (gender IN ('male', 'female', 'other')),
     languages TEXT[],
     categories TEXT[],
     min_range INTEGER,

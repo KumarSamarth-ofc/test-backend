@@ -39,22 +39,26 @@ class AuthService {
         try {
             const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
 
-            const { error } = await supabaseAdmin
+            const { data, error } = await supabaseAdmin
                 .from('otp_codes')
                 .upsert({
                     phone: phone,
                     otp: otp,
                     expires_at: expiresAt,
                     created_at: new Date()
-                });
+                })
+                .select();
 
             if (error) {
-                throw new Error('Failed to store OTP');
+                throw new Error(`Failed to store OTP: ${error.message}`);
             }
 
             return { success: true };
         } catch (error) {
-            return { success: false, message: error.message };
+            return { 
+                success: false, 
+                message: error.message
+            };
         }
     }
 
@@ -63,19 +67,30 @@ class AuthService {
      */
     async verifyStoredOTP(phone, otp) {
         try {
+            console.log('🔍 Debug: OTP Verification');
+            console.log('   Phone:', phone);
+            console.log('   OTP:', otp);
+            console.log('   Current Time:', new Date());
+            
             const { data, error } = await supabaseAdmin
                 .from('otp_codes')
                 .select('*')
                 .eq('phone', phone)
                 .eq('otp', otp)
-                .gt('expires_at', new Date())
+                .gt('expires_at', new Date().toISOString())
                 .order('created_at', { ascending: false })
                 .limit(1)
                 .single();
 
+            console.log('   Database Result:', data);
+            console.log('   Database Error:', error);
+
             if (error || !data) {
+                console.log('   ❌ OTP verification failed');
                 return { success: false, message: 'Invalid or expired OTP' };
             }
+
+            console.log('   ✅ OTP verification successful');
 
             // Delete the used OTP
             await supabaseAdmin
@@ -85,15 +100,100 @@ class AuthService {
 
             return { success: true };
         } catch (error) {
+            console.log('   💥 OTP verification error:', error);
             return { success: false, message: 'OTP verification failed' };
         }
     }
 
     /**
-     * Send OTP to phone number via WhatsApp
+     * Check if user exists
+     */
+    async checkUserExists(phone) {
+        try {
+            const { data: existingUser, error } = await supabaseAdmin
+                .from('users')
+                .select('id, phone, name, email, role')
+                .eq('phone', phone)
+                .eq('is_deleted', false)
+                .single();
+
+            if (error && error.code !== 'PGRST116') {
+                return {
+                    success: false,
+                    message: 'Database error'
+                };
+            }
+
+            return {
+                success: true,
+                exists: !!existingUser,
+                user: existingUser || null
+            };
+        } catch (error) {
+            return {
+                success: false,
+                message: 'Failed to check user existence'
+            };
+        }
+    }
+
+    /**
+     * Send OTP to phone number via WhatsApp (for existing users only)
      */
     async sendOTP(phone) {
         try {
+            // First check if user exists
+            const userCheck = await this.checkUserExists(phone);
+            if (!userCheck.success) {
+                return userCheck;
+            }
+
+            if (!userCheck.exists) {
+                return {
+                    success: false,
+                    message: 'Account not found. Please register first.',
+                    code: 'USER_NOT_FOUND'
+                };
+            }
+
+            const otp = this.generateOTP();
+            
+            // Store OTP in database
+            const storeResult = await this.storeOTP(phone, otp);
+            if (!storeResult.success) {
+                return storeResult;
+            }
+
+            // Send via WhatsApp
+            const whatsappResult = await this.sendWhatsAppOTP(phone, otp);
+            return whatsappResult;
+        } catch (error) {
+            return {
+                success: false,
+                message: error.message
+            };
+        }
+    }
+
+    /**
+     * Send OTP for registration (new users)
+     */
+    async sendRegistrationOTP(phone) {
+        try {
+            // Check if user already exists
+            const userCheck = await this.checkUserExists(phone);
+            if (!userCheck.success) {
+                return userCheck;
+            }
+
+            if (userCheck.exists) {
+                return {
+                    success: false,
+                    message: 'Account already exists. Please login instead.',
+                    code: 'USER_ALREADY_EXISTS'
+                };
+            }
+
             const otp = this.generateOTP();
             
             // Store OTP in database
@@ -116,7 +216,7 @@ class AuthService {
     /**
      * Verify OTP and create custom JWT session
      */
-    async verifyOTP(phone, token) {
+    async verifyOTP(phone, token, userData) {
         try {
             // Verify OTP from database
             const verifyResult = await this.verifyStoredOTP(phone, token);
@@ -144,13 +244,29 @@ class AuthService {
             // If user doesn't exist, create new user with custom UUID
             if (!existingUser) {
                 const userId = crypto.randomUUID();
+                
+                // Prepare user data for creation
+                const userCreateData = {
+                    id: userId,
+                    phone: phone,
+                    role: 'influencer' // Default role
+                };
+                
+                // Add userData fields if provided
+                if (userData) {
+                    if (userData.name) userCreateData.name = userData.name;
+                    if (userData.email) userCreateData.email = userData.email;
+                    if (userData.role) userCreateData.role = userData.role;
+                    if (userData.gender) userCreateData.gender = userData.gender;
+                    if (userData.languages) userCreateData.languages = userData.languages;
+                    if (userData.categories) userCreateData.categories = userData.categories;
+                    if (userData.min_range) userCreateData.min_range = userData.min_range;
+                    if (userData.max_range) userCreateData.max_range = userData.max_range;
+                }
+                
                 const { data: newUser, error: createError } = await supabaseAdmin
                     .from('users')
-                    .insert({
-                        id: userId,
-                        phone: phone,
-                        role: 'influencer' // Default role
-                    })
+                    .insert(userCreateData)
                     .select()
                     .single();
 
@@ -165,14 +281,46 @@ class AuthService {
 
                 // Send welcome message
                 try {
-                    await whatsappService.sendWelcome(phone, 'User');
+                    await whatsappService.sendWelcome(phone, userData?.name || 'User');
                 } catch (error) {
                     console.error('Failed to send welcome message:', error);
+                }
+            } else {
+                // If user exists, update with userData if provided
+                if (userData && user) {
+                    const updateData = {
+                        name: userData.name,
+                        email: userData.email,
+                        role: userData.role || user.role,
+                        gender: userData.gender,
+                        languages: userData.languages,
+                        categories: userData.categories,
+                        min_range: userData.min_range,
+                        max_range: userData.max_range
+                    };
+
+                    // Remove undefined values
+                    Object.keys(updateData).forEach(key => 
+                        updateData[key] === undefined && delete updateData[key]
+                    );
+
+                    if (Object.keys(updateData).length > 0) {
+                        const { data: updatedUser, error: updateError } = await supabaseAdmin
+                            .from('users')
+                            .update(updateData)
+                            .eq('id', user.id)
+                            .select()
+                            .single();
+
+                        if (!updateError) {
+                            user = updatedUser;
+                        }
+                    }
                 }
             }
 
             // Generate custom JWT token
-            const token = jwt.sign(
+            const jwtToken = jwt.sign(
                 {
                     id: user.id,
                     phone: user.phone,
@@ -185,7 +333,7 @@ class AuthService {
             return {
                 success: true,
                 user: user,
-                token: token,
+                token: jwtToken,
                 message: 'Authentication successful'
             };
         } catch (error) {
