@@ -125,7 +125,10 @@ class RequestController {
                 .insert(requestData)
                 .select(`
                     *,
-                    campaigns (*),
+                    campaigns (
+                        *,
+                        type:campaign_type
+                    ),
                     bids (*),
                     influencer:users!requests_influencer_id_fkey (*)
                 `)
@@ -195,7 +198,7 @@ class RequestController {
                     campaigns (
                         id,
                         title,
-                        type,
+                        type:campaign_type,
                         budget,
                         status,
                         created_by_user:users!campaigns_created_by_fkey (
@@ -237,7 +240,7 @@ class RequestController {
                         campaigns!inner (
                             id,
                             title,
-                            type,
+                            type:campaign_type,
                             budget,
                             status,
                             created_by_user:users!campaigns_created_by_fkey (
@@ -306,7 +309,7 @@ class RequestController {
                     campaigns (
                         id,
                         title,
-                        type,
+                        type:campaign_type,
                         budget,
                         status,
                         created_by,
