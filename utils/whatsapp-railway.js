@@ -136,8 +136,23 @@ class WhatsAppRailwayService {
             console.log('✅ Facebook Graph API response:', {
                 status: response.status,
                 statusText: response.statusText,
-                hasData: !!response.data
+                hasData: !!response.data,
+                data: response.data
             });
+            
+            // Log detailed error information for debugging
+            if (response.status !== 200) {
+                console.error('❌ Facebook API Error Details:', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    error: response.data?.error,
+                    errorType: response.data?.error?.type,
+                    errorCode: response.data?.error?.code,
+                    errorSubcode: response.data?.error?.error_subcode,
+                    errorMessage: response.data?.error?.message,
+                    errorDetails: response.data?.error?.error_user_msg
+                });
+            }
 
             return {
                 success: true,
