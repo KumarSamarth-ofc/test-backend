@@ -9,13 +9,11 @@ class WhatsAppRailwayService {
         this.templateName = process.env.WHATSAPP_TEMPLATE_NAME || 'otp_verification';
         this.isRailway = process.env.RAILWAY_ENVIRONMENT === 'production';
         
-        // Use IP address for Railway to bypass DNS issues
-        if (this.isRailway && this.customEndpoint) {
-            this.customEndpoint = this.customEndpoint.replace(
-                'graph.facebook.com',
-                '157.240.192.35' // Facebook Graph API IP
-            );
-            console.log('🚂 Using IP address for Railway:', this.customEndpoint);
+        // Configure DNS for Railway
+        if (this.isRailway) {
+            const dns = require('dns');
+            dns.setServers(['8.8.8.8', '8.8.4.4']); // Use Google DNS
+            console.log('🚂 Using Google DNS for Railway');
         }
         
         this.setupService();
@@ -131,46 +129,12 @@ class WhatsAppRailwayService {
                     keepAlive: true,
                     timeout: 30000,
                     rejectUnauthorized: true,
-                    // Railway-specific settings
-                    family: 4, // Force IPv4
-                    lookup: (hostname, options, callback) => {
-                        // Use Google DNS for Railway
-                        const dns = require('dns');
-                        dns.setServers(['8.8.8.8', '8.8.4.4']); // Google DNS
-                        dns.lookup(hostname, { family: 4 }, callback);
-                    }
+                    family: 4 // Force IPv4
                 })
             };
 
             console.log('🌐 Making request to Facebook Graph API...');
-            
-            // Try with Google DNS first
-            let response;
-            try {
-                response = await axios.post(this.customEndpoint, payload, axiosConfig);
-            } catch (dnsError) {
-                if (dnsError.code === 'ETIMEDOUT' || dnsError.code === 'ENOTFOUND') {
-                    console.log('🔄 DNS timeout, trying with Cloudflare DNS...');
-                    
-                    // Fallback to Cloudflare DNS
-                    const dns = require('dns');
-                    dns.setServers(['1.1.1.1', '1.0.0.1']); // Cloudflare DNS
-                    
-                    const fallbackConfig = {
-                        ...axiosConfig,
-                        httpsAgent: new https.Agent({
-                            keepAlive: true,
-                            timeout: 30000,
-                            rejectUnauthorized: true,
-                            family: 4
-                        })
-                    };
-                    
-                    response = await axios.post(this.customEndpoint, payload, fallbackConfig);
-                } else {
-                    throw dnsError;
-                }
-            }
+            const response = await axios.post(this.customEndpoint, payload, axiosConfig);
 
             console.log('✅ Facebook Graph API response:', {
                 status: response.status,
