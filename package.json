@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "test:whatsapp": "node test_whatsapp_railway.js",
+    "fix:railway": "node fix_railway_issues.js"
   },
   "keywords": ["stoory", "backend", "nodejs", "supabase", "influencers", "brands", "whatsapp", "otp"],
   "author": "Your Name",
