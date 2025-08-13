@@ -274,7 +274,7 @@ class AuthController {
             res.json({
                 success: true,
                 mockLogin: {
-                    phone: '+919876543210',
+                    phone: '9876543210',
                     otp: '123456',
                     description: 'Use these credentials for testing. This mock login bypasses WhatsApp OTP verification.',
                     instructions: [
@@ -292,6 +292,8 @@ class AuthController {
             });
         }
     }
+
+
 }
 
 // Validation middleware
