@@ -334,9 +334,7 @@ WHATSAPP_RETRY_DELAY=2000
 RAZORPAY_KEY_ID=your_razorpay_key_id
 RAZORPAY_KEY_SECRET=your_razorpay_key_secret
 
-# Rate Limiting
-RATE_LIMIT_WINDOW_MS=900000
-RATE_LIMIT_MAX_REQUESTS=100
+
 
 # Database Configuration
 DB_POOL_SIZE=10

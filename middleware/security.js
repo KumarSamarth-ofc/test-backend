@@ -1,51 +1,6 @@
-const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const cors = require('cors');
 const express = require('express');
-
-// Rate limiting configuration
-const createRateLimiter = (windowMs, max, message = 'Too many requests') => {
-    return rateLimit({
-        windowMs: windowMs,
-        max: max,
-        message: {
-            success: false,
-            message: message
-        },
-        standardHeaders: true,
-        legacyHeaders: false,
-        // Fix for Railway proxy issue
-        skip: (req) => {
-            // Skip rate limiting for health checks
-            return req.path === '/health';
-        },
-        // Use X-Forwarded-For header for Railway
-        keyGenerator: (req) => {
-            return req.headers['x-forwarded-for'] || req.ip || req.connection.remoteAddress;
-        }
-    });
-};
-
-// General rate limiter
-const generalLimiter = createRateLimiter(
-    parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-    parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
-    'Too many requests from this IP'
-);
-
-// Auth rate limiter (more strict)
-const authLimiter = createRateLimiter(
-    15 * 60 * 1000, // 15 minutes
-    5, // 5 attempts
-    'Too many authentication attempts'
-);
-
-// Payment rate limiter
-const paymentLimiter = createRateLimiter(
-    60 * 1000, // 1 minute
-    10, // 10 attempts
-    'Too many payment attempts'
-);
 
 // CORS configuration
 const corsOptions = {
@@ -87,15 +42,6 @@ const setupSecurityMiddleware = (app) => {
     app.use(express.json({ limit: '10mb' }));
     app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-    // General rate limiting
-    app.use(generalLimiter);
-
-    // Specific rate limiting for auth routes
-    app.use('/api/auth', authLimiter);
-
-    // Specific rate limiting for payment routes
-    app.use('/api/payments', paymentLimiter);
-
     // Request logging
     app.use((req, res, next) => {
         console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
@@ -113,8 +59,5 @@ const setupSecurityMiddleware = (app) => {
 };
 
 module.exports = {
-    setupSecurityMiddleware,
-    generalLimiter,
-    authLimiter,
-    paymentLimiter
+    setupSecurityMiddleware
 }; 

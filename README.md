@@ -68,9 +68,7 @@ SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key_here
 MAX_FILE_SIZE=5242880
 ALLOWED_FILE_TYPES=image/jpeg,image/png,image/gif,video/mp4,video/avi
 
-# Rate Limiting
-RATE_LIMIT_WINDOW_MS=900000
-RATE_LIMIT_MAX_REQUESTS=100
+
 
 # CORS Configuration
 CORS_ORIGIN=http://localhost:3000,http://localhost:3001
