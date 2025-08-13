@@ -9,7 +9,7 @@ class AuthService {
         this.jwtExpiry = '7d'; // 7 days
         
         // Mock login configuration
-        this.mockPhone = '9876543210'; // Mock phone number for testing
+        this.mockPhone = '9876543210'; // Mock phone number for testing (without country code)
         this.mockOTP = '123456'; // Mock OTP that always works
     }
 

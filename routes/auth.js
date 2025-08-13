@@ -27,6 +27,8 @@ router.get('/whatsapp-status', (req, res) => {
 // Mock login info (for testing)
 router.get('/mock-login-info', AuthController.getMockLoginInfo);
 
+
+
 // Protected routes
 router.get('/profile', authService.authenticateToken, AuthController.getProfile);
 router.put('/profile', authService.authenticateToken, validateUpdateProfile, AuthController.updateProfile);
