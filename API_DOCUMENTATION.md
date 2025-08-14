@@ -165,9 +165,127 @@ Content-Type: application/json
 
 ---
 
+## 📸 Image Upload Feature
+
+The API now supports image uploads for bids and campaigns. Images are stored in Supabase Storage and URLs are saved in the database.
+
+### **Image Upload Requirements**
+- **File Size:** Maximum 5MB
+- **File Types:** Only image files (JPEG, PNG, GIF, etc.)
+- **Field Name:** `image`
+- **Content-Type:** `multipart/form-data`
+
+### **Image Upload Endpoints**
+
+#### Create Bid with Image
+**POST** `/api/bids`
+```bash
+curl -X POST http://localhost:3000/api/bids \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "title=Product Promotion" \
+  -F "min_budget=100" \
+  -F "max_budget=500" \
+  -F "image=@/path/to/image.jpg"
+```
+
+#### Update Bid with Image
+**PUT** `/api/bids/:id`
+```bash
+curl -X PUT http://localhost:3000/api/bids/UUID \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "title=Updated Title" \
+  -F "image=@/path/to/new-image.jpg"
+```
+
+#### Create Campaign with Image
+**POST** `/api/campaigns`
+```bash
+curl -X POST http://localhost:3000/api/campaigns \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "name=Campaign Name" \
+  -F "budget=1000" \
+  -F "image=@/path/to/image.jpg"
+```
+
+#### Update Campaign with Image
+**PUT** `/api/campaigns/:id`
+```bash
+curl -X PUT http://localhost:3000/api/campaigns/UUID \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "name=Updated Name" \
+  -F "image=@/path/to/new-image.jpg"
+```
+
+### **Image Upload Response**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "uuid",
+    "title": "Bid Title",
+    "image_url": "https://your-project.supabase.co/storage/v1/object/public/images/bids/1234567890_abc123.jpg",
+    // ... other fields
+  },
+  "message": "Bid created successfully"
+}
+```
+
 ## 🔧 Frontend Implementation Examples
 
-### **Bid Edit Form (React/JavaScript)**
+### **Bid Creation with Image Upload (React/JavaScript)**
+
+```javascript
+// BidCreateForm.js
+const handleSubmit = async (formData) => {
+  try {
+    setLoading(true);
+    setError(null);
+
+    const formDataToSend = new FormData();
+    formDataToSend.append('title', formData.name);
+    formDataToSend.append('description', formData.description || '');
+    formDataToSend.append('min_budget', formData.minBudget);
+    formDataToSend.append('max_budget', formData.maxBudget);
+    formDataToSend.append('requirements', formData.targetAudience || '');
+    formDataToSend.append('language', formData.language || '');
+    formDataToSend.append('platform', formData.platform || '');
+    formDataToSend.append('content_type', formData.contentType || '');
+    formDataToSend.append('category', formData.category || '');
+    formDataToSend.append('expiry_date', formData.expiryDate || '');
+
+    // Add image if selected
+    if (formData.image && formData.image[0]) {
+      formDataToSend.append('image', formData.image[0]);
+    }
+
+    const response = await fetch('/api/bids', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${getAuthToken()}`
+      },
+      body: formDataToSend
+    });
+
+    const result = await response.json();
+
+    if (result.success) {
+      showSuccessMessage('Bid created successfully!');
+      // Navigate back or refresh data
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+      }
+    } else {
+      setError(result.message || 'Failed to create bid');
+    }
+  } catch (error) {
+    setError('Network error occurred');
+  } finally {
+    setLoading(false);
+  }
+};
+```
+
+### **Bid Edit Form with Image Upload (React/JavaScript)**
 
 ```javascript
 // BidEditForm.js
@@ -176,28 +294,29 @@ const handleSubmit = async (formData) => {
     setLoading(true);
     setError(null);
 
-    const updatePayload = {
-      title: formData.name,
-      description: formData.description || '',
-      min_budget: parseFloat(formData.minBudget),
-      max_budget: parseFloat(formData.maxBudget),
-      requirements: formData.targetAudience || null,
-      language: formData.language || null,
-      platform: formData.platform || null,
-      content_type: formData.contentType || null,
-      category: formData.category || null,
-      expiry_date: formData.expiryDate || null
-    };
+    const formDataToSend = new FormData();
+    formDataToSend.append('title', formData.name);
+    formDataToSend.append('description', formData.description || '');
+    formDataToSend.append('min_budget', formData.minBudget);
+    formDataToSend.append('max_budget', formData.maxBudget);
+    formDataToSend.append('requirements', formData.targetAudience || '');
+    formDataToSend.append('language', formData.language || '');
+    formDataToSend.append('platform', formData.platform || '');
+    formDataToSend.append('content_type', formData.contentType || '');
+    formDataToSend.append('category', formData.category || '');
+    formDataToSend.append('expiry_date', formData.expiryDate || '');
 
-    console.log('Sending bid update:', updatePayload);
+    // Add image if selected
+    if (formData.image && formData.image[0]) {
+      formDataToSend.append('image', formData.image[0]);
+    }
 
     const response = await fetch(`/api/bids/${bidId}`, {
       method: 'PUT',
       headers: {
-        'Content-Type': 'application/json',
         'Authorization': `Bearer ${getAuthToken()}`
       },
-      body: JSON.stringify(updatePayload)
+      body: formDataToSend
     });
 
     const result = await response.json();

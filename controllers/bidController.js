@@ -1,5 +1,6 @@
 const { supabaseAdmin } = require('../supabase/client');
 const { body, validationResult, query } = require('express-validator');
+const { uploadImageToStorage, deleteImageFromStorage } = require('../utils/imageUpload');
 
 class BidController {
     /**
@@ -26,6 +27,26 @@ class BidController {
                 expiry_date
             } = req.body;
 
+            // Handle image upload if present
+            let imageUrl = null;
+            if (req.file) {
+                const { url, error } = await uploadImageToStorage(
+                    req.file.buffer,
+                    req.file.originalname,
+                    'bids'
+                );
+                
+                if (error) {
+                    return res.status(500).json({
+                        success: false,
+                        message: 'Failed to upload image',
+                        error: error
+                    });
+                }
+                
+                imageUrl = url;
+            }
+
             const bidData = {
                 title,
                 description: description || '',
@@ -36,7 +57,8 @@ class BidController {
                 platform: platform || null,
                 content_type: content_type || null,
                 category: category || null,
-                expiry_date: expiry_date ? new Date(expiry_date).toISOString() : null
+                expiry_date: expiry_date ? new Date(expiry_date).toISOString() : null,
+                image_url: imageUrl
             };
 
             // Ensure only brand owners can create bids
@@ -264,6 +286,26 @@ class BidController {
                 expiry_date
             } = req.body;
 
+            // Handle image upload if present
+            let imageUrl = null;
+            if (req.file) {
+                const { url, error } = await uploadImageToStorage(
+                    req.file.buffer,
+                    req.file.originalname,
+                    'bids'
+                );
+                
+                if (error) {
+                    return res.status(500).json({
+                        success: false,
+                        message: 'Failed to upload image',
+                        error: error
+                    });
+                }
+                
+                imageUrl = url;
+            }
+
             // Build update data object with only provided fields
             const updateData = {};
             if (title !== undefined) updateData.title = title;
@@ -276,6 +318,7 @@ class BidController {
             if (content_type !== undefined) updateData.content_type = content_type;
             if (category !== undefined) updateData.category = category;
             if (expiry_date !== undefined) updateData.expiry_date = expiry_date ? new Date(expiry_date).toISOString() : null;
+            if (imageUrl !== null) updateData.image_url = imageUrl;
 
             console.log('Update bid request:', {
                 bidId: id,
@@ -346,7 +389,7 @@ class BidController {
             // Check if bid exists and user has permission
             const { data: existingBid, error: checkError } = await supabaseAdmin
                 .from('bids')
-                .select('created_by')
+                .select('created_by, image_url')
                 .eq('id', id)
                 .single();
 
@@ -362,6 +405,11 @@ class BidController {
                     success: false,
                     message: 'Access denied'
                 });
+            }
+
+            // Delete associated image if it exists
+            if (existingBid.image_url) {
+                await deleteImageFromStorage(existingBid.image_url);
             }
 
             const { error } = await supabaseAdmin
@@ -497,6 +545,10 @@ const validateCreateBid = [
         .optional()
         .isISO8601()
         .withMessage('Expiry date must be a valid ISO date'),
+    body('image_url')
+        .optional()
+        .isURL()
+        .withMessage('Image URL must be a valid URL'),
     // Custom validation to ensure max_budget >= min_budget
     body()
         .custom((value) => {
@@ -548,6 +600,10 @@ const validateUpdateBid = [
         .optional()
         .isISO8601()
         .withMessage('Expiry date must be a valid ISO date'),
+    body('image_url')
+        .optional()
+        .isURL()
+        .withMessage('Image URL must be a valid URL'),
     // Custom validation to ensure max_budget >= min_budget
     body()
         .custom((value) => {
