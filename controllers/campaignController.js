@@ -1,5 +1,6 @@
 const { supabaseAdmin } = require('../supabase/client');
 const { body, validationResult, query } = require('express-validator');
+const { uploadImageToStorage, deleteImageFromStorage } = require('../utils/imageUpload');
 
 class CampaignController {
     /**
@@ -15,6 +16,26 @@ class CampaignController {
             const userId = req.user.id;
             const formData = req.body;
 
+            // Handle image upload if present
+            let imageUrl = formData.image_url || formData.image || null;
+            if (req.file) {
+                const { url, error } = await uploadImageToStorage(
+                    req.file.buffer,
+                    req.file.originalname,
+                    'campaigns'
+                );
+                
+                if (error) {
+                    return res.status(500).json({
+                        success: false,
+                        message: 'Failed to upload image',
+                        error: error
+                    });
+                }
+                
+                imageUrl = url;
+            }
+
             // Handle both old format (database columns) and new format (form fields)
             const campaignData = {
                 title: formData.name || formData.title,
@@ -27,7 +48,7 @@ class CampaignController {
                 requirements: formData.requirements || formData.targetAudience || '',
                 deliverables: formData.deliverables || (formData.contentType ? [formData.contentType] : []),
                 // New fields from form
-                image_url: formData.image_url || formData.image,
+                image_url: imageUrl,
                 language: formData.language || '',
                 platform: formData.platform || '',
                 content_type: formData.content_type || formData.contentType || '',
@@ -42,6 +63,21 @@ class CampaignController {
                     success: false,
                     message: 'Only brand owners can create campaigns'
                 });
+            }
+
+            // Check subscription status for brand owners
+            if (req.user.role === 'brand_owner') {
+                const { data: hasPremiumAccess } = await supabaseAdmin.rpc('has_active_premium_subscription', {
+                    user_uuid: userId
+                });
+
+                if (!hasPremiumAccess) {
+                    return res.status(403).json({
+                        success: false,
+                        message: 'Premium subscription required to create campaigns',
+                        requires_subscription: true
+                    });
+                }
             }
 
             console.log('Creating campaign with data:', {
@@ -265,6 +301,26 @@ class CampaignController {
             const userId = req.user.id;
             const formData = req.body;
 
+            // Handle image upload if present
+            let imageUrl = null;
+            if (req.file) {
+                const { url, error } = await uploadImageToStorage(
+                    req.file.buffer,
+                    req.file.originalname,
+                    'campaigns'
+                );
+                
+                if (error) {
+                    return res.status(500).json({
+                        success: false,
+                        message: 'Failed to upload image',
+                        error: error
+                    });
+                }
+                
+                imageUrl = url;
+            }
+
             // Map frontend form fields to database columns
             const updateData = {};
             
@@ -280,7 +336,8 @@ class CampaignController {
             if (formData.category !== undefined) updateData.campaign_type = formData.category === 'product' ? 'product' : 'service';
             if (formData.targetAudience !== undefined) updateData.requirements = formData.targetAudience;
             if (formData.contentType !== undefined) updateData.deliverables = [formData.contentType];
-            if (formData.image !== undefined) updateData.image_url = formData.image;
+            if (imageUrl !== null) updateData.image_url = imageUrl;
+            else if (formData.image !== undefined) updateData.image_url = formData.image;
             if (formData.language !== undefined) updateData.language = formData.language;
             if (formData.platform !== undefined) updateData.platform = formData.platform;
             if (formData.contentType !== undefined) updateData.content_type = formData.contentType;
@@ -356,7 +413,7 @@ class CampaignController {
             // Check if campaign exists and user has permission
             const { data: existingCampaign, error: checkError } = await supabaseAdmin
                 .from('campaigns')
-                .select('created_by')
+                .select('created_by, image_url')
                 .eq('id', id)
                 .single();
 
@@ -372,6 +429,11 @@ class CampaignController {
                     success: false,
                     message: 'Access denied'
                 });
+            }
+
+            // Delete associated image if it exists
+            if (existingCampaign.image_url) {
+                await deleteImageFromStorage(existingCampaign.image_url);
             }
 
             const { error } = await supabaseAdmin
