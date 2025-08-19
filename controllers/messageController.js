@@ -85,9 +85,11 @@ class MessageController {
           .single();
 
       if (existingConversation) {
-        return res.status(400).json({
+        return res.status(409).json({
           success: false,
+          code: "CONVERSATION_EXISTS",
           message: "Conversation already exists",
+          data: { conversation_id: existingConversation.id },
         });
       }
 
