@@ -28,6 +28,60 @@ class AutomatedFlowService {
         throw new Error("Influencer not found");
       }
 
+      // Check if conversation already exists for this specific bid context
+      const { data: existingConversations, error: checkError } =
+        await supabaseAdmin
+          .from("conversations")
+          .select("*, messages(*)")
+          .eq("bid_id", bidId)
+          .eq("brand_owner_id", bid.created_by)
+          .eq("influencer_id", influencerId);
+
+      // If conversations exist for this bid context, use the most recent one
+      if (existingConversations && existingConversations.length > 0) {
+        // Sort by creation date and get the most recent
+        const sortedConversations = existingConversations.sort(
+          (a, b) => new Date(b.created_at) - new Date(a.created_at)
+        );
+        const existingConversation = sortedConversations[0];
+
+        console.log(
+          "✅ Conversation already exists for this bid:",
+          existingConversation.id
+        );
+
+        // Get the latest message to show current state
+        const { data: latestMessage, error: msgError } = await supabaseAdmin
+          .from("messages")
+          .select("*")
+          .eq("conversation_id", existingConversation.id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .single();
+
+        if (msgError) {
+          console.log("⚠️  Could not fetch latest message:", msgError.message);
+        }
+
+        return {
+          success: true,
+          conversation: existingConversation,
+          message: latestMessage || null,
+          flow_state: existingConversation.flow_state || "initial",
+          awaiting_role: existingConversation.awaiting_role || "brand_owner",
+          is_existing: true,
+          message:
+            "Conversation already exists for this bid - redirecting to chat",
+        };
+      }
+
+      if (checkError) {
+        console.error("❌ Error checking existing conversations:", checkError);
+        throw new Error(
+          `Failed to check existing conversations: ${checkError.message}`
+        );
+      }
+
       // Create conversation with automated flow
       const conversationData = {
         bid_id: bidId,
@@ -46,6 +100,11 @@ class AutomatedFlowService {
         automation_enabled: true,
       };
 
+      console.log(
+        "🔍 Attempting to create conversation with data:",
+        JSON.stringify(conversationData, null, 2)
+      );
+
       const { data: conversation, error: conversationError } =
         await supabaseAdmin
           .from("conversations")
@@ -54,13 +113,85 @@ class AutomatedFlowService {
           .single();
 
       if (conversationError) {
-        throw new Error("Failed to create conversation");
+        console.error("❌ Conversation creation failed:", conversationError);
+
+        // Check if it's a constraint violation (conversation already exists)
+        if (
+          conversationError.code === "23505" &&
+          conversationError.message.includes(
+            "duplicate key value violates unique constraint"
+          )
+        ) {
+          console.log(
+            "🔄 Constraint violation detected - conversation already exists, fetching existing..."
+          );
+
+          // Fetch the existing conversations
+          const { data: existingConvs, error: fetchError } = await supabaseAdmin
+            .from("conversations")
+            .select("*, messages(*)")
+            .eq("bid_id", bidId)
+            .eq("brand_owner_id", bid.created_by)
+            .eq("influencer_id", influencerId);
+
+          if (fetchError) {
+            console.error(
+              "❌ Failed to fetch existing conversation:",
+              fetchError
+            );
+            throw new Error(
+              `Failed to create or fetch conversation: ${conversationError.message}`
+            );
+          }
+
+          if (existingConvs && existingConvs.length > 0) {
+            // Sort by creation date and get the most recent
+            const sortedConvs = existingConvs.sort(
+              (a, b) => new Date(b.created_at) - new Date(a.created_at)
+            );
+            const existingConv = sortedConvs[0];
+
+            console.log("✅ Found existing conversation:", existingConv.id);
+
+            // Get the latest message
+            const { data: latestMessage, error: msgError } = await supabaseAdmin
+              .from("messages")
+              .select("*")
+              .eq("conversation_id", existingConv.id)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .single();
+
+            if (msgError) {
+              console.log(
+                "⚠️  Could not fetch latest message:",
+                msgError.message
+              );
+            }
+
+            return {
+              success: true,
+              conversation: existingConv,
+              message: latestMessage || null,
+              flow_state: existingConv.flow_state || "initial",
+              awaiting_role: existingConv.awaiting_role || "brand_owner",
+              is_existing: true,
+              message: "Conversation already exists - redirecting to chat",
+            };
+          }
+        }
+
+        throw new Error(
+          `Failed to create conversation: ${conversationError.message}`
+        );
       }
+
+      console.log("✅ Conversation created successfully:", conversation.id);
 
       // Create initial automated message
       const messageData = {
         conversation_id: conversation.id,
-        sender_id: null, // System message
+        sender_id: bid.created_by, // Use brand owner as sender for system message
         receiver_id: bid.created_by,
         message: this.generateInitialMessage(bid, influencer, proposedAmount),
         message_type: "automated",
@@ -69,6 +200,11 @@ class AutomatedFlowService {
         created_at: new Date().toISOString(),
       };
 
+      console.log(
+        "🔍 Attempting to create message with data:",
+        JSON.stringify(messageData, null, 2)
+      );
+
       const { data: message, error: messageError } = await supabaseAdmin
         .from("messages")
         .insert(messageData)
@@ -76,8 +212,13 @@ class AutomatedFlowService {
         .single();
 
       if (messageError) {
-        throw new Error("Failed to create initial message");
+        console.error("❌ Message creation failed:", messageError);
+        throw new Error(
+          `Failed to create initial message: ${messageError.message}`
+        );
       }
+
+      console.log("✅ Message created successfully:", message.id);
 
       return {
         success: true,
@@ -85,6 +226,8 @@ class AutomatedFlowService {
         message,
         flow_state: "initial",
         awaiting_role: "brand_owner",
+        is_existing: false,
+        message: "New conversation created successfully",
       };
     } catch (error) {
       console.error("Error initializing bid conversation:", error);
@@ -202,7 +345,7 @@ Thanks for your interest! I can help you:`;
       // Create response message
       const messageInsertData = {
         conversation_id: conversationId,
-        sender_id: null, // System message
+        sender_id: conversation.brand_owner_id, // Use brand owner as sender for system message
         receiver_id: conversation.influencer_id,
         message: messageData,
         message_type: "automated",
@@ -403,7 +546,7 @@ Please type your question below:`;
       // Create response message
       const messageInsertData = {
         conversation_id: conversationId,
-        sender_id: null, // System message
+        sender_id: conversation.influencer_id, // Use influencer as sender for system message
         receiver_id: conversation.brand_owner_id,
         message: messageData,
         message_type: "automated",
@@ -516,8 +659,8 @@ The conversation is now closed.`;
         // Create payment initiation message
         const messageData = {
           conversation_id: conversationId,
-          sender_id: null,
-          receiver_id: null, // Both parties
+          sender_id: conversation.brand_owner_id, // Use brand owner as sender for system message
+          receiver_id: conversation.influencer_id, // Send to influencer
           message:
             "Both parties have confirmed the collaboration! Payment will be initiated now.",
           message_type: "automated",

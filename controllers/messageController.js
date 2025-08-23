@@ -36,7 +36,7 @@ class MessageController {
       let queryDescription;
 
       if (currentUser.role === "brand_owner") {
-        // Brand owners see conversations related to THEIR campaigns and bids
+        // Brand owners see ALL conversations where they are the brand owner
         conversationsQuery = supabaseAdmin
           .from("conversations")
           .select(
@@ -47,12 +47,12 @@ class MessageController {
             bids(id, title, description, min_budget, max_budget, status)
           `
           )
-          .eq("brand_owner_id", userId) // Only conversations where they are the brand owner
-          .or("campaign_id.not.is.null,bid_id.not.is.null"); // Must have either campaign OR bid
+          .eq("brand_owner_id", userId); // All conversations where they are the brand owner
 
-        queryDescription = "Brand owner campaigns and bids";
+        queryDescription =
+          "Brand owner conversations (campaigns, bids, and direct)";
       } else if (currentUser.role === "influencer") {
-        // Influencers see conversations related to campaigns/bids they applied to
+        // Influencers see ALL conversations where they are the influencer
         conversationsQuery = supabaseAdmin
           .from("conversations")
           .select(
@@ -63,10 +63,10 @@ class MessageController {
             bids(id, title, description, min_budget, max_budget, status)
           `
           )
-          .eq("influencer_id", userId) // Only conversations where they are the influencer
-          .or("campaign_id.not.is.null,bid_id.not.is.null"); // Must have either campaign OR bid
+          .eq("influencer_id", userId); // All conversations where they are the influencer
 
-        queryDescription = "Influencer applications to campaigns/bids";
+        queryDescription =
+          "Influencer conversations (campaigns, bids, and direct)";
       } else {
         // General users see direct conversations only (no campaigns/bids)
         conversationsQuery = supabaseAdmin
@@ -677,8 +677,15 @@ class MessageController {
    */
   async initiateDirectConnect(req, res) {
     try {
-      const { target_user_id } = req.body;
+      const { target_user_id, initial_message } = req.body;
       const userId = req.user.id;
+
+      if (!target_user_id) {
+        return res.status(400).json({
+          success: false,
+          message: "target_user_id is required",
+        });
+      }
 
       if (target_user_id === userId) {
         return res.status(400).json({
@@ -687,13 +694,54 @@ class MessageController {
         });
       }
 
+      // Get user roles to determine conversation structure
+      const { data: currentUser, error: currentUserError } = await supabaseAdmin
+        .from("users")
+        .select("id, role")
+        .eq("id", userId)
+        .single();
+
+      const { data: targetUser, error: targetUserError } = await supabaseAdmin
+        .from("users")
+        .select("id, role")
+        .eq("id", target_user_id)
+        .single();
+
+      if (currentUserError || targetUserError || !currentUser || !targetUser) {
+        return res.status(404).json({
+          success: false,
+          message: "User not found",
+        });
+      }
+
+      // Determine brand_owner_id and influencer_id based on roles
+      let brandOwnerId, influencerId;
+
+      if (
+        currentUser.role === "brand_owner" &&
+        targetUser.role === "influencer"
+      ) {
+        brandOwnerId = userId;
+        influencerId = target_user_id;
+      } else if (
+        currentUser.role === "influencer" &&
+        targetUser.role === "brand_owner"
+      ) {
+        brandOwnerId = target_user_id;
+        influencerId = userId;
+      } else {
+        // If both users have the same role or other combinations, use current user as brand_owner
+        brandOwnerId = userId;
+        influencerId = target_user_id;
+      }
+
       // Check if direct connection already exists
       const { data: existingConnection, error: existingError } =
         await supabaseAdmin
           .from("conversations")
           .select("id")
           .or(
-            `and(brand_owner_id.eq.${userId},influencer_id.eq.${target_user_id}),and(brand_owner_id.eq.${target_user_id},influencer_id.eq.${userId})`
+            `and(brand_owner_id.eq.${brandOwnerId},influencer_id.eq.${influencerId}),and(brand_owner_id.eq.${influencerId},influencer_id.eq.${brandOwnerId})`
           )
           .is("campaign_id", null)
           .is("bid_id", null)
@@ -708,31 +756,52 @@ class MessageController {
       }
 
       // Create direct connection conversation
-      const { data: conversation, error } = await supabaseAdmin
-        .from("conversations")
-        .insert({
-          brand_owner_id: userId,
-          influencer_id: target_user_id,
-          chat_status: "realtime",
-          payment_required: false,
-          payment_completed: false,
-        })
-        .select()
-        .single();
+      const { data: conversation, error: conversationError } =
+        await supabaseAdmin
+          .from("conversations")
+          .insert({
+            brand_owner_id: brandOwnerId,
+            influencer_id: influencerId,
+            chat_status: "realtime",
+            payment_required: false,
+            payment_completed: false,
+          })
+          .select()
+          .single();
 
-      if (error) {
+      if (conversationError) {
+        console.error("Failed to create conversation:", conversationError);
         return res.status(500).json({
           success: false,
           message: "Failed to create direct connection",
         });
       }
 
+      // Create initial message if provided
+      if (initial_message && conversation) {
+        const { error: messageError } = await supabaseAdmin
+          .from("messages")
+          .insert({
+            conversation_id: conversation.id,
+            sender_id: userId,
+            receiver_id: target_user_id,
+            message: initial_message,
+          });
+
+        if (messageError) {
+          console.error("Failed to create initial message:", messageError);
+          // Don't fail the conversation creation, just log the error
+        }
+      }
+
       res.status(201).json({
         success: true,
         conversation: conversation,
+        conversation_id: conversation.id,
         message: "Direct connection created successfully",
       });
     } catch (error) {
+      console.error("Direct connect error:", error);
       res.status(500).json({
         success: false,
         message: "Internal server error",

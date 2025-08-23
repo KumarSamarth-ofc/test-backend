@@ -38,6 +38,7 @@ router.post(
 
 // Handle the specific URL pattern the frontend is using
 // This allows URLs like /api/messages/sample-campaign-1-sample-influencer-1
+// ⚠️ WILDCARD ROUTE MUST BE LAST (after all specific routes)
 router.get("/:conversation_identifier", async (req, res) => {
   try {
     const { conversation_identifier } = req.params;
