@@ -61,4 +61,16 @@ router.get(
   BidController.getConversationFlowContext
 );
 
+// Work submission and review routes
+router.post(
+  "/:conversation_id/submit-work",
+  authService.requireRole(["influencer"]),
+  BidController.handleWorkSubmission
+);
+router.post(
+  "/:conversation_id/review-work",
+  authService.requireRole(["brand_owner", "admin"]),
+  BidController.handleWorkReview
+);
+
 module.exports = router;
