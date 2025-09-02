@@ -4,6 +4,7 @@ const {
   uploadImageToStorage,
   deleteImageFromStorage,
 } = require("../utils/imageUpload");
+const automatedFlowService = require("../utils/automatedFlowService");
 
 class CampaignController {
   /**
@@ -705,6 +706,369 @@ class CampaignController {
         stats: stats,
       });
     } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Initialize automated conversation for campaign connection
+   */
+  async initializeCampaignConversation(req, res) {
+    try {
+      const { campaign_id, influencer_id } = req.body;
+
+      if (!campaign_id || !influencer_id) {
+        return res.status(400).json({
+          success: false,
+          message: "campaign_id and influencer_id are required",
+        });
+      }
+
+      // Verify user is the brand owner of this campaign
+      const { data: campaign, error: campaignError } = await supabaseAdmin
+        .from("campaigns")
+        .select("created_by")
+        .eq("id", campaign_id)
+        .single();
+
+      if (campaignError || !campaign) {
+        return res.status(404).json({
+          success: false,
+          message: "Campaign not found",
+        });
+      }
+
+      if (campaign.created_by !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: "Only the campaign creator can initialize conversations",
+        });
+      }
+
+      const result = await automatedFlowService.initializeCampaignConversation(
+        campaign_id,
+        influencer_id
+      );
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to initialize campaign conversation",
+          error: result.error,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Campaign conversation initialized successfully",
+        conversation: result.conversation,
+        flow_state: result.flow_state,
+        awaiting_role: result.awaiting_role,
+      });
+    } catch (error) {
+      console.error("Error initializing campaign conversation:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Handle automated flow action from campaign influencer
+   */
+  async handleCampaignInfluencerAction(req, res) {
+    try {
+      const { conversation_id, action, data } = req.body;
+
+      if (!conversation_id || !action) {
+        return res.status(400).json({
+          success: false,
+          message: "conversation_id and action are required",
+        });
+      }
+
+      // Verify user is the influencer of this conversation
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("influencer_id, flow_state, awaiting_role")
+        .eq("id", conversation_id)
+        .single();
+
+      if (convError || !conversation) {
+        return res.status(404).json({
+          success: false,
+          message: "Conversation not found",
+        });
+      }
+
+      if (conversation.influencer_id !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: "Only the influencer can perform this action",
+        });
+      }
+
+      if (conversation.awaiting_role !== "influencer") {
+        return res.status(400).json({
+          success: false,
+          message: "It's not your turn to act",
+        });
+      }
+
+      const result =
+        await automatedFlowService.handleCampaignInfluencerResponse(
+          conversation_id,
+          action,
+          data
+        );
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to handle action",
+          error: result.error,
+        });
+      }
+
+      // ✅ Return the complete result structure for automated flow
+      res.json({
+        success: true,
+        conversation: result.conversation,
+        message: result.message,
+        audit_message: result.audit_message, // Include audit message for sender
+        flow_state: result.flow_state,
+        awaiting_role: result.awaiting_role,
+      });
+    } catch (error) {
+      console.error("Error handling campaign influencer action:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Handle automated flow action from campaign brand owner
+   */
+  async handleCampaignBrandOwnerAction(req, res) {
+    try {
+      const { conversation_id, action, data } = req.body;
+
+      if (!conversation_id || !action) {
+        return res.status(400).json({
+          success: false,
+          message: "conversation_id and action are required",
+        });
+      }
+
+      // Verify user is the brand owner of this conversation
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("brand_owner_id, flow_state, awaiting_role")
+        .eq("id", conversation_id)
+        .single();
+
+      if (convError || !conversation) {
+        return res.status(404).json({
+          success: false,
+          message: "Conversation not found",
+        });
+      }
+
+      if (conversation.brand_owner_id !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: "Only the brand owner can perform this action",
+        });
+      }
+
+      if (conversation.awaiting_role !== "brand_owner") {
+        return res.status(400).json({
+          success: false,
+          message: "It's not your turn to act",
+        });
+      }
+
+      const result = await automatedFlowService.handleCampaignBrandOwnerAction(
+        conversation_id,
+        action,
+        data
+      );
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to handle action",
+          error: result.error,
+        });
+      }
+
+      // ✅ Return the complete result structure for automated flow
+      res.json({
+        success: true,
+        conversation: result.conversation,
+        message: result.message,
+        audit_message: result.audit_message, // Include audit message for sender
+        flow_state: result.flow_state,
+        awaiting_role: result.awaiting_role,
+      });
+    } catch (error) {
+      console.error("Error handling campaign brand owner action:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Handle work submission for campaign
+   */
+  async handleWorkSubmission(req, res) {
+    try {
+      const { conversation_id } = req.params;
+      const { deliverables, description, submission_notes } = req.body;
+
+      if (!deliverables || !description) {
+        return res.status(400).json({
+          success: false,
+          message: "deliverables and description are required",
+        });
+      }
+
+      // Verify user is the influencer of this conversation
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("influencer_id, flow_state")
+        .eq("id", conversation_id)
+        .single();
+
+      if (convError || !conversation) {
+        return res.status(404).json({
+          success: false,
+          message: "Conversation not found",
+        });
+      }
+
+      if (conversation.influencer_id !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: "Only the influencer can submit work",
+        });
+      }
+
+      if (conversation.flow_state !== "work_in_progress") {
+        return res.status(400).json({
+          success: false,
+          message: "Work cannot be submitted at this stage",
+        });
+      }
+
+      const submissionData = {
+        deliverables,
+        description,
+        submission_notes,
+        submitted_at: new Date().toISOString(),
+      };
+
+      const result = await automatedFlowService.handleWorkSubmission(
+        conversation_id,
+        submissionData
+      );
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to submit work",
+          error: result.error,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Work submitted successfully",
+        flow_state: result.flow_state,
+        awaiting_role: result.awaiting_role,
+      });
+    } catch (error) {
+      console.error("Error handling work submission:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Handle work review for campaign
+   */
+  async handleWorkReview(req, res) {
+    try {
+      const { conversation_id } = req.params;
+      const { action, feedback } = req.body;
+
+      if (!action) {
+        return res.status(400).json({
+          success: false,
+          message: "action is required",
+        });
+      }
+
+      // Verify user is the brand owner of this conversation
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("brand_owner_id, flow_state")
+        .eq("id", conversation_id)
+        .single();
+
+      if (convError || !conversation) {
+        return res.status(404).json({
+          success: false,
+          message: "Conversation not found",
+        });
+      }
+
+      if (conversation.brand_owner_id !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: "Only the brand owner can review work",
+        });
+      }
+
+      if (conversation.flow_state !== "work_submitted") {
+        return res.status(400).json({
+          success: false,
+          message: "Work cannot be reviewed at this stage",
+        });
+      }
+
+      const result = await automatedFlowService.handleWorkReview(
+        conversation_id,
+        action,
+        feedback
+      );
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to review work",
+          error: result.error,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Work reviewed successfully",
+        flow_state: result.flow_state,
+        awaiting_role: result.awaiting_role,
+      });
+    } catch (error) {
+      console.error("Error handling work review:", error);
       res.status(500).json({
         success: false,
         message: "Internal server error",

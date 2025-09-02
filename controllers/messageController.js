@@ -358,6 +358,8 @@ class MessageController {
         campaign_id,
         bid_id,
         receiver_id,
+        action_required,
+        action_data,
       } = req.body;
       const senderId = req.user.id;
 
@@ -482,6 +484,8 @@ class MessageController {
           message,
           media_url,
           message_type: "user_input", // Ensure message_type is always set
+          action_required: action_required || false,
+          action_data: action_data || null,
         })
         .select()
         .single();
