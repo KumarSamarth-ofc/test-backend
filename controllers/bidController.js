@@ -874,24 +874,60 @@ class BidController {
         });
       }
 
-      // Create payment order
-      const orderData = {
-        conversation_id: conversation_id,
+      // Get or create wallet for the influencer
+      let { data: wallet, error: walletError } = await supabaseAdmin
+        .from("wallets")
+        .select("*")
+        .eq("user_id", conversation.influencer_id)
+        .single();
+
+      if (walletError && walletError.code === "PGRST116") {
+        // Wallet doesn't exist, create one
+        const { data: newWallet, error: createWalletError } =
+          await supabaseAdmin
+            .from("wallets")
+            .insert({
+              user_id: conversation.influencer_id,
+              balance: 0.0,
+            })
+            .select()
+            .single();
+
+        if (createWalletError) {
+          throw new Error(
+            `Failed to create wallet: ${createWalletError.message}`
+          );
+        }
+        wallet = newWallet;
+      } else if (walletError) {
+        throw new Error(`Failed to get wallet: ${walletError.message}`);
+      }
+
+      // Create transaction record
+      const transactionData = {
+        wallet_id: wallet.id,
         amount: conversation.flow_data?.agreed_amount || 0,
-        currency: "INR",
+        payment_amount: conversation.flow_data?.agreed_amount || 0,
+        type: "credit",
         status: "pending",
-        payment_type: "bid_collaboration",
       };
 
-      const { data: order, error: orderError } = await supabaseAdmin
-        .from("payment_orders")
-        .insert(orderData)
+      // Set the appropriate source ID
+      if (conversation.bid_id) {
+        transactionData.bid_id = conversation.bid_id;
+      } else if (conversation.campaign_id) {
+        transactionData.campaign_id = conversation.campaign_id;
+      }
+
+      const { data: transaction, error: transactionError } = await supabaseAdmin
+        .from("transactions")
+        .insert(transactionData)
         .select()
         .single();
 
-      if (orderError) {
+      if (transactionError) {
         throw new Error(
-          `Failed to create payment order: ${orderError.message}`
+          `Failed to create transaction: ${transactionError.message}`
         );
       }
 
@@ -912,8 +948,8 @@ class BidController {
 
       res.json({
         success: true,
-        message: "Payment order created successfully",
-        order: order,
+        message: "Transaction created successfully",
+        transaction: transaction,
         conversation: {
           id: conversation_id,
           flow_state: "payment_pending",
@@ -924,7 +960,7 @@ class BidController {
       console.error("❌ Error handling final confirmation:", error);
       res.status(500).json({
         success: false,
-        message: "Failed to create payment order",
+        message: "Failed to create transaction",
         error: error.message,
       });
     }

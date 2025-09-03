@@ -118,7 +118,9 @@ class PaymentController {
       const orderOptions = {
         amount: Math.round(Number(payable) * 100),
         currency: currency || "INR",
-        receipt: `req_${request_id}_${Date.now()}`,
+        receipt: `rec_${Date.now().toString().slice(-8)}_${Math.random()
+          .toString(36)
+          .substr(2, 3)}`,
         notes: {
           ...notes,
           request_id,
@@ -1009,23 +1011,35 @@ class PaymentController {
         });
       }
 
-      // Get payment order
-      const { data: paymentOrder, error: orderError } = await supabaseAdmin
-        .from("payment_orders")
+      // Get transaction
+      const { data: transaction, error: transactionError } = await supabaseAdmin
+        .from("transactions")
         .select("*")
         .eq("razorpay_order_id", razorpay_order_id)
-        .eq("conversation_id", conversation_id)
         .single();
 
-      if (orderError || !paymentOrder) {
+      if (transactionError || !transaction) {
         return res.status(404).json({
           success: false,
-          message: "Payment order not found",
+          message: "Transaction not found",
         });
       }
 
-      // Verify user is the brand owner
-      if (paymentOrder.brand_owner_id !== userId) {
+      // Get conversation to verify user is the brand owner
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("brand_owner_id")
+        .eq("id", conversation_id)
+        .single();
+
+      if (convError || !conversation) {
+        return res.status(404).json({
+          success: false,
+          message: "Conversation not found",
+        });
+      }
+
+      if (conversation.brand_owner_id !== userId) {
         return res.status(403).json({
           success: false,
           message: "Access denied",
@@ -1047,19 +1061,18 @@ class PaymentController {
         });
       }
 
-      // Update payment order status
-      const { error: updateOrderError } = await supabaseAdmin
-        .from("payment_orders")
+      // Update transaction status
+      const { error: updateTransactionError } = await supabaseAdmin
+        .from("transactions")
         .update({
-          status: "paid",
+          status: "completed",
           razorpay_payment_id: razorpay_payment_id,
-          updated_at: new Date().toISOString(),
         })
-        .eq("id", paymentOrder.id);
+        .eq("id", transaction.id);
 
-      if (updateOrderError) {
+      if (updateTransactionError) {
         throw new Error(
-          `Failed to update payment order: ${updateOrderError.message}`
+          `Failed to update transaction: ${updateTransactionError.message}`
         );
       }
 
@@ -1080,22 +1093,22 @@ class PaymentController {
       }
 
       // Update bid/campaign status to 'closed' (payment completed)
-      if (paymentOrder.bid_id) {
+      if (transaction.bid_id) {
         const { error: bidUpdateError } = await supabaseAdmin
           .from("bids")
           .update({ status: "closed" })
-          .eq("id", paymentOrder.bid_id);
+          .eq("id", transaction.bid_id);
 
         if (bidUpdateError) {
           console.warn(
             `Failed to update bid status: ${bidUpdateError.message}`
           );
         }
-      } else if (paymentOrder.campaign_id) {
+      } else if (transaction.campaign_id) {
         const { error: campaignUpdateError } = await supabaseAdmin
           .from("campaigns")
           .update({ status: "closed" })
-          .eq("id", paymentOrder.campaign_id);
+          .eq("id", transaction.campaign_id);
 
         if (campaignUpdateError) {
           console.warn(
@@ -1104,14 +1117,25 @@ class PaymentController {
         }
       }
 
+      // Get influencer ID from conversation
+      const { data: convData, error: convDataError } = await supabaseAdmin
+        .from("conversations")
+        .select("influencer_id")
+        .eq("id", conversation_id)
+        .single();
+
+      if (convDataError || !convData) {
+        console.warn("Failed to get conversation data for message creation");
+      }
+
       // Create success message
       const { data: successMessage, error: messageError } = await supabaseAdmin
         .from("messages")
         .insert({
           conversation_id: conversation_id,
           sender_id: "00000000-0000-0000-0000-000000000000", // System user
-          receiver_id: paymentOrder.influencer_id,
-          message: `🎉 **Payment Completed Successfully!**\n\nPayment of **₹${paymentOrder.amount}** has been processed successfully.\n\nPayment ID: \`${razorpay_payment_id}\`\n\nYour collaboration is now active! You can start working on the project.`,
+          receiver_id: convData?.influencer_id,
+          message: `🎉 **Payment Completed Successfully!**\n\nPayment of **₹${transaction.amount}** has been processed successfully.\n\nPayment ID: \`${razorpay_payment_id}\`\n\nYour collaboration is now active! You can start working on the project.`,
           message_type: "automated",
           action_required: false,
         })
@@ -1127,10 +1151,10 @@ class PaymentController {
       res.json({
         success: true,
         message: "Payment verified and processed successfully",
-        payment_order: {
-          id: paymentOrder.id,
-          amount: paymentOrder.amount,
-          status: "paid",
+        transaction: {
+          id: transaction.id,
+          amount: transaction.amount,
+          status: "completed",
           razorpay_payment_id: razorpay_payment_id,
         },
         conversation: {

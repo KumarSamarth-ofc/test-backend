@@ -26,7 +26,6 @@ class PaymentService {
         razorpay_signature,
         request_id,
         amount,
-        payment_stage, // 'initial' (30%) or 'final' (70%)
       } = paymentData;
 
       // Get request details
@@ -69,12 +68,12 @@ class PaymentService {
       const transactionData = {
         wallet_id: request.influencer.wallets.id,
         amount: amount,
+        payment_amount: amount,
         type: "credit",
         status: "completed",
         request_id: request_id,
         razorpay_order_id: razorpay_order_id,
         razorpay_payment_id: razorpay_payment_id,
-        payment_stage: payment_type,
       };
 
       if (sourceType === "campaign") {
