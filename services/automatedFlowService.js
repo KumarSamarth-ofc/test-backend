@@ -4,6 +4,47 @@ const paymentService = require('./paymentService');
 const escrowService = require('./escrowService');
 
 class AutomatedFlowService {
+  constructor() {
+    this.io = null;
+  }
+
+  setSocket(io) {
+    this.io = io;
+  }
+
+  /**
+   * Emit socket events for automated messages
+   */
+  emitMessageEvents(conversation, message, receiverId) {
+    if (this.io) {
+      // Emit to conversation room
+      this.io.to(`conversation_${conversation.id}`).emit('new_message', {
+        conversation_id: conversation.id,
+        message: message,
+      });
+
+      // Emit notification to receiver
+      this.io.to(`user_${receiverId}`).emit('notification', {
+        type: 'message',
+        data: {
+          id: message.id,
+          title: 'New message',
+          body: message.message,
+          created_at: message.created_at,
+          payload: { 
+            conversation_id: conversation.id, 
+            message_id: message.id, 
+            sender_id: message.sender_id 
+          },
+          conversation_id: conversation.id,
+          message: message,
+          sender_id: message.sender_id,
+          receiver_id: receiverId,
+        },
+      });
+    }
+  }
+
   /**
    * Initialize automated conversation for a bid application
    */
@@ -106,6 +147,9 @@ class AutomatedFlowService {
 
       if (msgError) {
         console.error('Failed to create initial message:', msgError);
+      } else {
+        // Emit socket events for the automated message
+        this.emitMessageEvents(conversation, message, influencerId);
       }
 
       return {
@@ -411,6 +455,12 @@ class AutomatedFlowService {
       if (messageError) {
         throw new Error(`Failed to create message: ${messageError.message}`);
       }
+
+      // Emit socket events for the automated message
+      const receiverId = conversation.brand_owner_id === newMessage.sender_id 
+        ? conversation.influencer_id 
+        : conversation.brand_owner_id;
+      this.emitMessageEvents(conversation, createdMessage, receiverId);
 
       return {
         success: true,
@@ -733,6 +783,12 @@ class AutomatedFlowService {
         throw new Error(`Failed to create message: ${messageError.message}`);
       }
 
+      // Emit socket events for the automated message
+      const receiverId = conversation.brand_owner_id === newMessage.sender_id 
+        ? conversation.influencer_id 
+        : conversation.brand_owner_id;
+      this.emitMessageEvents(conversation, createdMessage, receiverId);
+
       return {
         success: true,
         conversation: {
@@ -868,6 +924,9 @@ class AutomatedFlowService {
       if (messageError) {
         throw new Error(`Failed to create message: ${messageError.message}`);
       }
+
+      // Emit socket events for the automated message
+      this.emitMessageEvents(conversation, message, conversation.brand_owner_id);
 
       return {
         success: true,

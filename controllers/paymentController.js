@@ -319,7 +319,7 @@ class PaymentController {
       // Get influencer's wallet
       const { data: wallet, error: walletError } = await supabaseAdmin
         .from("wallets")
-        .select("id, frozen_balance")
+        .select("id, frozen_balance_paise")
         .eq("user_id", request.influencer_id)
         .single();
 
@@ -334,7 +334,7 @@ class PaymentController {
       const { error: freezeError } = await supabaseAdmin
         .from("wallets")
         .update({
-          frozen_balance: wallet.frozen_balance + amount,
+          frozen_balance_paise: (wallet.frozen_balance_paise || 0) + Math.round(amount * 100),
         })
         .eq("id", wallet.id);
 
@@ -458,7 +458,7 @@ class PaymentController {
       // Get influencer's wallet
       const { data: wallet, error: walletError } = await supabaseAdmin
         .from("wallets")
-        .select("id, frozen_balance, balance")
+        .select("id, frozen_balance_paise, balance_paise")
         .eq("user_id", request.influencer_id)
         .single();
 
@@ -470,7 +470,7 @@ class PaymentController {
       }
 
       // Check if enough frozen balance
-      if (wallet.frozen_balance < request.final_agreed_amount) {
+      if ((wallet.frozen_balance_paise || 0) < Math.round(request.final_agreed_amount * 100)) {
         return res.status(400).json({
           success: false,
           message: "Insufficient frozen balance",
@@ -481,7 +481,7 @@ class PaymentController {
       const { error: unfreezeError } = await supabaseAdmin
         .from("wallets")
         .update({
-          frozen_balance: wallet.frozen_balance - request.final_agreed_amount,
+          frozen_balance_paise: (wallet.frozen_balance_paise || 0) - Math.round(request.final_agreed_amount * 100),
           balance: wallet.balance + request.final_agreed_amount,
         })
         .eq("id", wallet.id);
@@ -567,7 +567,7 @@ class PaymentController {
       // Get or create influencer's wallet
       let { data: wallet, error: walletError } = await supabaseAdmin
         .from("wallets")
-        .select("id, balance, frozen_balance")
+        .select("id, balance_paise, frozen_balance_paise")
         .eq("user_id", request.influencer_id)
         .single();
 
@@ -578,7 +578,7 @@ class PaymentController {
           .insert({
             user_id: request.influencer_id,
             balance: 0,
-            frozen_balance: 0,
+            frozen_balance_paise: 0,
           })
           .select()
           .single();
@@ -596,7 +596,7 @@ class PaymentController {
       const { error: freezeError } = await supabaseAdmin
         .from("wallets")
         .update({
-          frozen_balance: wallet.frozen_balance + parseFloat(amount),
+          frozen_balance_paise: (wallet.frozen_balance_paise || 0) + Math.round(parseFloat(amount) * 100),
         })
         .eq("id", wallet.id);
 
@@ -659,7 +659,7 @@ class PaymentController {
         data: {
           request_id: request_id,
           amount: amount,
-          frozen_balance: wallet.frozen_balance + parseFloat(amount),
+          frozen_balance_paise: (wallet.frozen_balance_paise || 0) + Math.round(parseFloat(amount) * 100),
         },
       });
     } catch (error) {
@@ -677,57 +677,27 @@ class PaymentController {
   async getWalletBalance(req, res) {
     try {
       const userId = req.user.id;
-      console.log("[Wallet] getWalletBalance called", {
-        userId,
-        hasAuth: !!req.user,
-        role: req.user?.role,
-      });
 
       // Get wallet details
       const { data: wallet, error: walletError } = await supabaseAdmin
         .from("wallets")
-        .select("balance, frozen_balance")
+        .select("balance, balance_paise, frozen_balance_paise")
         .eq("user_id", userId)
         .single();
 
       if (walletError) {
-        console.warn("[Wallet] Supabase error fetching wallet", walletError);
         return res.status(404).json({
           success: false,
           message: "Wallet not found",
-          details: walletError.message || walletError,
-        });
-      }
-
-      if (!wallet) {
-        console.warn("[Wallet] No wallet row for user", { userId });
-
-        // Extra diagnostics: does the user exist?
-        const { data: userExists, error: userErr } = await supabaseAdmin
-          .from("users")
-          .select("id")
-          .eq("id", userId)
-          .single();
-        console.log("[Wallet] User existence check", {
-          exists: !!userExists,
-          userErr: userErr?.message,
-        });
-
-        return res.status(404).json({
-          success: false,
-          message: "Wallet not found",
-          diagnostics: {
-            user_exists: !!userExists,
-            hint:
-              "If user exists but wallet does not, run one-time backfill to create wallets for legacy users.",
-          },
         });
       }
 
       const balanceInfo = {
-        available_balance: wallet.balance,
-        frozen_balance: wallet.frozen_balance,
-        total_balance: wallet.balance + wallet.frozen_balance,
+        available_balance: wallet.balance || 0,
+        frozen_balance: (wallet.frozen_balance_paise || 0) / 100,
+        total_balance: (wallet.balance || 0) + ((wallet.frozen_balance_paise || 0) / 100),
+        balance_paise: wallet.balance_paise || 0,
+        frozen_balance_paise: wallet.frozen_balance_paise || 0,
       };
 
       res.json({
@@ -736,7 +706,6 @@ class PaymentController {
         data: balanceInfo,
       });
     } catch (error) {
-      console.error("[Wallet] Unexpected error in getWalletBalance", error);
       console.error("Get wallet balance error:", error);
       res.status(500).json({
         success: false,
@@ -1005,179 +974,6 @@ class PaymentController {
       res.status(500).json({
         success: false,
         message: "Internal server error",
-      });
-    }
-  }
-
-  /**
-   * Verify and process payment for automated flow
-   */
-  async verifyAutomatedFlowPayment(req, res) {
-    try {
-      const {
-        razorpay_order_id,
-        razorpay_payment_id,
-        razorpay_signature,
-        conversation_id,
-      } = req.body;
-
-      const userId = req.user.id;
-
-      if (
-        !razorpay_order_id ||
-        !razorpay_payment_id ||
-        !razorpay_signature ||
-        !conversation_id
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: "Missing required payment information",
-        });
-      }
-
-      if (!razorpay || !process.env.RAZORPAY_KEY_SECRET) {
-        return res.status(503).json({
-          success: false,
-          message: "Payment service is not configured",
-        });
-      }
-
-      // Get payment order
-      const { data: paymentOrder, error: orderError } = await supabaseAdmin
-        .from("payment_orders")
-        .select("*")
-        .eq("razorpay_order_id", razorpay_order_id)
-        .eq("conversation_id", conversation_id)
-        .single();
-
-      if (orderError || !paymentOrder) {
-        return res.status(404).json({
-          success: false,
-          message: "Payment order not found",
-        });
-      }
-
-      // Verify user is the brand owner
-      if (paymentOrder.brand_owner_id !== userId) {
-        return res.status(403).json({
-          success: false,
-          message: "Access denied",
-        });
-      }
-
-      // Verify payment signature
-      const text = `${razorpay_order_id}|${razorpay_payment_id}`;
-      const crypto = require("crypto");
-      const signature = crypto
-        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-        .update(text)
-        .digest("hex");
-
-      if (signature !== razorpay_signature) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid payment signature",
-        });
-      }
-
-      // Update payment order status
-      const { error: updateOrderError } = await supabaseAdmin
-        .from("payment_orders")
-        .update({
-          status: "paid",
-          razorpay_payment_id: razorpay_payment_id,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", paymentOrder.id);
-
-      if (updateOrderError) {
-        throw new Error(
-          `Failed to update payment order: ${updateOrderError.message}`
-        );
-      }
-
-      // Update conversation flow state
-      const { error: updateConvError } = await supabaseAdmin
-        .from("conversations")
-        .update({
-          flow_state: "payment_completed",
-          awaiting_role: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", conversation_id);
-
-      if (updateConvError) {
-        console.warn(
-          `Failed to update conversation: ${updateConvError.message}`
-        );
-      }
-
-      // Update bid/campaign status to 'closed' (payment completed)
-      if (paymentOrder.bid_id) {
-        const { error: bidUpdateError } = await supabaseAdmin
-          .from("bids")
-          .update({ status: "closed" })
-          .eq("id", paymentOrder.bid_id);
-
-        if (bidUpdateError) {
-          console.warn(
-            `Failed to update bid status: ${bidUpdateError.message}`
-          );
-        }
-      } else if (paymentOrder.campaign_id) {
-        const { error: campaignUpdateError } = await supabaseAdmin
-          .from("campaigns")
-          .update({ status: "closed" })
-          .eq("id", paymentOrder.campaign_id);
-
-        if (campaignUpdateError) {
-          console.warn(
-            `Failed to update campaign status: ${campaignUpdateError.message}`
-          );
-        }
-      }
-
-      // Create success message
-      const { data: successMessage, error: messageError } = await supabaseAdmin
-        .from("messages")
-        .insert({
-          conversation_id: conversation_id,
-          sender_id: "00000000-0000-0000-0000-000000000000", // System user
-          receiver_id: paymentOrder.influencer_id,
-          message: `🎉 **Payment Completed Successfully!**\n\nPayment of **₹${paymentOrder.amount}** has been processed successfully.\n\nPayment ID: \`${razorpay_payment_id}\`\n\nYour collaboration is now active! You can start working on the project.`,
-          message_type: "automated",
-          action_required: false,
-        })
-        .select()
-        .single();
-
-      if (messageError) {
-        console.warn(
-          `Failed to create success message: ${messageError.message}`
-        );
-      }
-
-      res.json({
-        success: true,
-        message: "Payment verified and processed successfully",
-        payment_order: {
-          id: paymentOrder.id,
-          amount: paymentOrder.amount,
-          status: "paid",
-          razorpay_payment_id: razorpay_payment_id,
-        },
-        conversation: {
-          id: conversation_id,
-          flow_state: "payment_completed",
-        },
-        success_message: successMessage,
-      });
-    } catch (error) {
-      console.error("Error verifying automated flow payment:", error);
-      res.status(500).json({
-        success: false,
-        message: "Internal server error",
-        error: error.message,
       });
     }
   }

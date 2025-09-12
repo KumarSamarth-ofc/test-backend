@@ -17,6 +17,10 @@ ADD COLUMN IF NOT EXISTS conversation_type VARCHAR(20) DEFAULT 'bid' CHECK (conv
 ALTER TABLE conversations 
 ADD COLUMN IF NOT EXISTS last_state_transition_id UUID;
 
+-- 4.1. Add escrow_hold_id column if it doesn't exist
+ALTER TABLE conversations 
+ADD COLUMN IF NOT EXISTS escrow_hold_id UUID REFERENCES escrow_holds(id) ON DELETE SET NULL;
+
 -- 5. Add updated_at column if it doesn't exist
 ALTER TABLE conversations 
 ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
