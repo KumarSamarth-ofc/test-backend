@@ -122,12 +122,20 @@ class EscrowService {
         throw new Error('Influencer wallet not found');
       }
 
-      // Release frozen amount
-      const newFrozenBalance = Math.max(0, (wallet.frozen_balance_paise || 0) - escrowHold.amount_paise);
+      // Release frozen amount to available balance
+      const currentFrozenBalance = wallet.frozen_balance_paise || 0;
+      const currentAvailableBalance = wallet.balance_paise || 0;
+      const releaseAmount = escrowHold.amount_paise;
+      
+      const newFrozenBalance = Math.max(0, currentFrozenBalance - releaseAmount);
+      const newAvailableBalance = currentAvailableBalance + releaseAmount;
+      
       const { error: updateError } = await supabaseAdmin
         .from('wallets')
         .update({
           frozen_balance_paise: newFrozenBalance,
+          balance_paise: newAvailableBalance,
+          balance: newAvailableBalance / 100, // Keep old balance field for compatibility
           updated_at: new Date().toISOString()
         })
         .eq('id', wallet.id);
@@ -150,12 +158,32 @@ class EscrowService {
         throw new Error(`Failed to update escrow hold: ${escrowUpdateError.message}`);
       }
 
+      // Create transaction record for escrow release
+      const { error: transactionError } = await supabaseAdmin
+        .from('transactions')
+        .insert({
+          wallet_id: wallet.id,
+          user_id: conversation.influencer_id,
+          amount: releaseAmount / 100, // compatibility
+          amount_paise: releaseAmount,
+          type: 'credit',
+          direction: 'credit',
+          status: 'completed',
+          stage: 'escrow_release',
+          notes: `Escrow funds released: ${reason}`
+        });
+
+      if (transactionError) {
+        console.error('Transaction creation error for escrow release:', transactionError);
+        // Don't fail the release, just log the error
+      }
+
       return {
         success: true,
         released_amount: escrowHold.amount_paise,
         wallet: {
           id: wallet.id,
-          balance_paise: wallet.balance_paise,
+          balance_paise: newAvailableBalance,
           frozen_balance_paise: newFrozenBalance
         }
       };

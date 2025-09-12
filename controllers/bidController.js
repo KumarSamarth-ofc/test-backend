@@ -1128,23 +1128,6 @@ class BidController {
         });
       }
 
-      // Freeze the payment amount in escrow (if request exists)
-      if (request) {
-        const { error: escrowError } = await supabaseAdmin.rpc(
-          "freeze_payment",
-          {
-            request_uuid: request.id,
-            influencer_uuid: conversation.influencer_id,
-            amount: paymentAmount
-          }
-        );
-
-        if (escrowError) {
-          console.error("Escrow freeze error:", escrowError);
-          // Continue anyway as the payment is processed
-        }
-      }
-
       // Upsert payment order: update if order already exists
       const { data: existingOrder } = await supabaseAdmin
         .from("payment_orders")
@@ -1205,6 +1188,30 @@ class BidController {
         paymentOrder = insertedOrder;
       }
 
+      // Create escrow hold record after payment order is created
+      let escrowHold = null;
+      if (request) {
+        const { data: newEscrowHold, error: escrowError } = await supabaseAdmin
+          .from('escrow_holds')
+          .insert({
+            conversation_id: conversation_id,
+            payment_order_id: paymentOrder.id,
+            amount_paise: paymentAmount,
+            status: 'held',
+            release_reason: 'Payment held in escrow until work completion',
+            created_at: new Date().toISOString()
+          })
+          .select()
+          .single();
+
+        if (escrowError) {
+          console.error("Escrow hold creation error:", escrowError);
+          // Continue anyway as the payment is processed
+        } else {
+          escrowHold = newEscrowHold;
+        }
+      }
+
       // Ensure wallet exists (create if needed)
       let walletId = wallet?.id;
       if (!walletId) {
@@ -1220,7 +1227,7 @@ class BidController {
         walletId = newWallet.id;
       }
 
-      // Refresh wallet to get current balances, then increment
+      // Refresh wallet to get current balances, then add to frozen balance (escrow)
       const { data: curWallet, error: curWalletErr } = await supabaseAdmin
         .from("wallets")
         .select("id, balance, balance_paise, frozen_balance_paise")
@@ -1229,18 +1236,32 @@ class BidController {
       if (curWalletErr) {
         console.error("Wallet read error:", curWalletErr);
       }
-      const currentPaise = Number(curWallet?.balance_paise || Math.round((curWallet?.balance || 0) * 100) || 0);
-      const newPaise = currentPaise + paymentAmount;
+      
+      // Add payment to available balance first, then move to escrow
+      const currentBalancePaise = Number(curWallet?.balance_paise || 0);
+      const currentFrozenPaise = Number(curWallet?.frozen_balance_paise || 0);
+      
+      // First add to available balance
+      const newBalancePaise = currentBalancePaise + paymentAmount;
+      // Then move to frozen balance (escrow)
+      const newFrozenPaise = currentFrozenPaise + paymentAmount;
+      const newAvailableBalance = newBalancePaise - paymentAmount; // Remove from available
+      
       const { error: walletUpdateErr } = await supabaseAdmin
         .from("wallets")
-        .update({ balance_paise: newPaise, balance: newPaise / 100 })
+        .update({ 
+          balance_paise: newAvailableBalance,
+          frozen_balance_paise: newFrozenPaise,
+          balance: newAvailableBalance / 100, // Keep old balance field for compatibility
+          updated_at: new Date().toISOString()
+        })
         .eq("id", walletId);
       if (walletUpdateErr) {
-        console.error("Wallet update error (credit):", walletUpdateErr);
+        console.error("Wallet update error (frozen balance):", walletUpdateErr);
         // Do not fail the flow; continue
       }
 
-      // Create transaction record
+      // Create transaction record for escrow hold
       const transactionData = {
         wallet_id: walletId,
         user_id: conversation.influencer_id,
@@ -1249,11 +1270,11 @@ class BidController {
         type: "credit",
         direction: "credit",
         status: "completed",
+        stage: "escrow_hold", // This is an escrow hold transaction
         razorpay_order_id: razorpay_order_id,
         razorpay_payment_id: razorpay_payment_id,
         related_payment_order_id: paymentOrder.id,
-        // Avoid non-existent columns like payment_stage on older schema
-        notes: "Payment for collaboration"
+        notes: `Payment held in escrow for collaboration${escrowHold ? ` (Escrow ID: ${escrowHold.id})` : ''}`
       };
 
       // Add source reference (campaign or bid)
@@ -1310,24 +1331,7 @@ class BidController {
           .eq("id", conversation.bid_id);
       }
 
-      // Create escrow hold
-      const { data: escrowHold, error: escrowError } = await supabaseAdmin
-        .from("escrow_holds")
-        .insert({
-          conversation_id: conversation_id,
-          payment_order_id: paymentOrder.id,
-          amount_paise: paymentAmount,
-          status: "held"
-        })
-        .select()
-        .single();
-
-      if (escrowError) {
-        console.error("Escrow hold creation error:", escrowError);
-        // Continue anyway as the payment is processed
-      }
-
-      // Update conversation to work_in_progress (enable chat)
+      // Update conversation to work_in_progress (enable chat) and store escrow hold ID
       const { data: updatedConversation, error: updateError } = await supabaseAdmin
         .from("conversations")
         .update({
@@ -1335,6 +1339,7 @@ class BidController {
           awaiting_role: "influencer", // Influencer's turn to work
           chat_status: "real_time",
           conversation_type: conversation.campaign_id ? "campaign" : "bid",
+          escrow_hold_id: escrowHold?.id, // Store escrow hold ID for later reference
           flow_data: {
             agreed_amount: paymentAmount / 100,
             agreement_timestamp: new Date().toISOString(),
