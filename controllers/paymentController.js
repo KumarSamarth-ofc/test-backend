@@ -118,9 +118,7 @@ class PaymentController {
       const orderOptions = {
         amount: Math.round(Number(payable) * 100),
         currency: currency || "INR",
-        receipt: `rec_${Date.now().toString().slice(-8)}_${Math.random()
-          .toString(36)
-          .substr(2, 3)}`,
+        receipt: `req_${request_id}_${Date.now()}`,
         notes: {
           ...notes,
           request_id,
