@@ -1,10 +1,13 @@
 const { supabaseAdmin } = require('../supabase/client');
+const NotificationController = require('../controllers/notificationController');
 
 class MessageHandler {
     constructor(io) {
         this.io = io;
         this.typingUsers = new Map(); // Map to track typing users
         this.onlineUsers = new Map(); // Map to track online users
+        this.notificationController = NotificationController;
+        this.notificationController.setSocket(io);
     }
 
     /**
@@ -16,8 +19,12 @@ class MessageHandler {
         // Join user to their personal room
         socket.on('join', (userId) => {
             socket.join(`user_${userId}`);
+            socket.userId = userId; // Store userId on socket for easy access
             this.onlineUsers.set(socket.id, userId);
             console.log(`User ${userId} joined room: user_${userId}`);
+
+            // Send pending notifications to user
+            this.sendPendingNotifications(userId);
         });
 
         // Handle joining conversation room
@@ -66,7 +73,8 @@ class MessageHandler {
                         sender_id: senderId,
                         receiver_id: receiverId,
                         message: message,
-                        media_url: mediaUrl
+                        media_url: mediaUrl,
+                        status: 'sent'
                     })
                     .select()
                     .single();
@@ -82,25 +90,24 @@ class MessageHandler {
                     conversationId
                 });
 
-                // Emit notification to receiver
-                this.io.to(`user_${receiverId}`).emit('notification', {
+                // Create and send notification
+                await this.notificationController.createNotification({
+                    user_id: receiverId,
                     type: 'message',
+                    title: 'New message',
+                    message: message.length > 50 ? message.substring(0, 50) + '...' : message,
                     data: {
-                        id: savedMessage.id,
-                        title: 'New message',
-                        body: savedMessage.message,
-                        created_at: savedMessage.created_at,
-                        payload: { 
-                            conversation_id: conversationId, 
-                            message_id: savedMessage.id, 
-                            sender_id: senderId 
-                        },
                         conversation_id: conversationId,
-                        message: savedMessage,
-                        sender_id: senderId,
-                        receiver_id: receiverId
-                    }
+                        message_id: savedMessage.id,
+                        sender_id: senderId
+                    },
+                    priority: 'high'
                 });
+
+                // Update message status to delivered if user is online
+                if (this.isUserOnline(receiverId)) {
+                    await this.updateMessageStatus(savedMessage.id, 'delivered');
+                }
 
                 // Stop typing indicator
                 this.typingUsers.delete(`${conversationId}_${senderId}`);
@@ -163,6 +170,32 @@ class MessageHandler {
             }
         });
 
+        // Handle message status updates
+        socket.on('message_status', async (data) => {
+            try {
+                const { messageId, status } = data;
+                await this.updateMessageStatus(messageId, status);
+            } catch (error) {
+                console.error('Error updating message status:', error);
+            }
+        });
+
+        // Handle mark as read
+        socket.on('mark_read', async (data) => {
+            try {
+                const { messageId, userId, conversationId } = data;
+                await this.updateMessageStatus(messageId, 'read');
+                
+                // Emit read status to conversation
+                socket.to(`conversation_${conversationId}`).emit('message_read', {
+                    messageId,
+                    userId
+                });
+            } catch (error) {
+                console.error('Error marking message as read:', error);
+            }
+        });
+
         // Handle user status
         socket.on('user_status', (data) => {
             const { userId, status } = data;
@@ -184,19 +217,91 @@ class MessageHandler {
     }
 
     /**
+     * Send pending notifications to user when they come online
+     */
+    async sendPendingNotifications(userId) {
+        try {
+            const { data: notifications, error } = await supabaseAdmin
+                .from('notifications')
+                .select('*')
+                .eq('user_id', userId)
+                .eq('status', 'pending')
+                .order('created_at', { ascending: true })
+                .limit(10);
+
+            if (error || !notifications || notifications.length === 0) {
+                return;
+            }
+
+            // Send notifications to user
+            for (const notification of notifications) {
+                this.io.to(`user_${userId}`).emit('notification', {
+                    id: notification.id,
+                    type: notification.type,
+                    title: notification.title,
+                    message: notification.message,
+                    data: notification.data,
+                    action_url: notification.action_url,
+                    created_at: notification.created_at,
+                    priority: notification.priority
+                });
+
+                // Mark as delivered
+                await this.notificationController.markNotificationAsDelivered(notification.id);
+            }
+        } catch (error) {
+            console.error('Error sending pending notifications:', error);
+        }
+    }
+
+    /**
+     * Update message status
+     */
+    async updateMessageStatus(messageId, status) {
+        try {
+            const { error } = await supabaseAdmin
+                .from('messages')
+                .update({ 
+                    status: status,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', messageId);
+
+            if (error) {
+                console.error('Error updating message status:', error);
+            }
+        } catch (error) {
+            console.error('Error updating message status:', error);
+        }
+    }
+
+    /**
+     * Check if user is online
+     */
+    isUserOnline(userId) {
+        return Array.from(this.onlineUsers.values()).includes(userId);
+    }
+
+    /**
      * Send notification to user
      */
-    sendNotification(userId, notification) {
-        this.io.to(`user_${userId}`).emit('notification', notification);
+    async sendNotification(userId, notification) {
+        return await this.notificationController.createNotification({
+            user_id: userId,
+            ...notification
+        });
     }
 
     /**
      * Send notification to multiple users
      */
-    sendNotificationToUsers(userIds, notification) {
-        userIds.forEach(userId => {
-            this.sendNotification(userId, notification);
-        });
+    async sendNotificationToUsers(userIds, notification) {
+        const results = [];
+        for (const userId of userIds) {
+            const result = await this.sendNotification(userId, notification);
+            results.push(result);
+        }
+        return results;
     }
 
     /**

@@ -19,6 +19,7 @@ const messageRoutes = require("./routes/messages");
 const paymentRoutes = require("./routes/payments");
 const subscriptionRoutes = require("./routes/subscriptions");
 const socialPlatformRoutes = require("./routes/socialPlatforms");
+const notificationRoutes = require("./routes/notifications");
 
 const app = express();
 const server = http.createServer(app);
@@ -64,6 +65,10 @@ app.set("io", io);
 const automatedFlowService = require("./services/automatedFlowService");
 automatedFlowService.setSocket(io);
 
+// Set socket for background job service
+const backgroundJobService = require("./services/backgroundJobService");
+backgroundJobService.setSocket(io);
+
 // API routes
 app.use("/api/auth", authRoutes);
 app.use("/api/campaigns", campaignRoutes);
@@ -75,6 +80,7 @@ app.use("/api/payments", paymentRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/subscriptions", subscriptionRoutes);
 app.use("/api/social-platforms", socialPlatformRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 // 404 handler for API routes
 app.use("/api/*", (req, res) => {
@@ -99,6 +105,9 @@ io.on("connection", (socket) => {
   console.log("New client connected:", socket.id);
   messageHandler.handleConnection(socket);
 });
+
+// Start background jobs
+backgroundJobService.start();
 
 // Graceful shutdown
 process.on("SIGTERM", () => {
