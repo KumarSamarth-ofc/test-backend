@@ -25,6 +25,9 @@ class MessageHandler {
 
             // Send pending notifications to user
             this.sendPendingNotifications(userId);
+            
+            // Update message statuses to delivered for this user (REAL-TIME)
+            this.updateUserMessageStatuses(userId);
         });
 
         // Handle joining conversation room
@@ -104,9 +107,16 @@ class MessageHandler {
                     priority: 'high'
                 });
 
-                // Update message status to delivered if user is online
+                // Update message status to delivered if user is online (REAL-TIME)
                 if (this.isUserOnline(receiverId)) {
                     await this.updateMessageStatus(savedMessage.id, 'delivered');
+                    
+                    // Emit delivery status to conversation (REAL-TIME)
+                    this.io.to(`conversation_${conversationId}`).emit('message_status', {
+                        messageId: savedMessage.id,
+                        status: 'delivered',
+                        timestamp: new Date().toISOString()
+                    });
                 }
 
                 // Stop typing indicator
@@ -119,6 +129,74 @@ class MessageHandler {
 
             } catch (error) {
                 socket.emit('message_error', { error: error.message });
+            }
+        });
+
+        // Handle message status updates
+        socket.on('message_status', async (data) => {
+            try {
+                const { messageId, status } = data;
+                await this.updateMessageStatus(messageId, status);
+                
+                // Emit status update to conversation (REAL-TIME)
+                const { data: message } = await supabaseAdmin
+                    .from('messages')
+                    .select('conversation_id')
+                    .eq('id', messageId)
+                    .single();
+                
+                if (message) {
+                    this.io.to(`conversation_${message.conversation_id}`).emit('message_status', {
+                        messageId,
+                        status,
+                        timestamp: new Date().toISOString()
+                    });
+                }
+            } catch (error) {
+                console.error('Error updating message status:', error);
+            }
+        });
+
+        // Handle mark as read
+        socket.on('mark_read', async (data) => {
+            try {
+                const { messageId, userId, conversationId } = data;
+                await this.updateMessageStatus(messageId, 'read');
+                
+                // Emit read status to conversation (REAL-TIME)
+                socket.to(`conversation_${conversationId}`).emit('message_read', {
+                    messageId,
+                    userId,
+                    timestamp: new Date().toISOString()
+                });
+            } catch (error) {
+                console.error('Error marking message as read:', error);
+            }
+        });
+
+        // Handle mark multiple messages as read
+        socket.on('mark_messages_read', async (data) => {
+            try {
+                const { messageIds, userId, conversationId } = data;
+                
+                // Update all messages to read status
+                await supabaseAdmin
+                    .from('messages')
+                    .update({ 
+                        status: 'read',
+                        updated_at: new Date().toISOString()
+                    })
+                    .in('id', messageIds)
+                    .eq('receiver_id', userId);
+
+                // Emit batch read status to conversation (REAL-TIME)
+                socket.to(`conversation_${conversationId}`).emit('messages_read', {
+                    messageIds,
+                    userId,
+                    timestamp: new Date().toISOString()
+                });
+            } catch (error) {
+                console.error('Error marking messages as read:', error);
             }
         });
 
@@ -159,40 +237,23 @@ class MessageHandler {
                     return;
                 }
 
-                // Emit seen status to conversation
-                socket.to(`conversation_${data.conversationId}`).emit('message_seen', {
-                    messageId,
-                    userId
-                });
+                // Emit seen status to conversation (REAL-TIME)
+                const { data: message } = await supabaseAdmin
+                    .from('messages')
+                    .select('conversation_id')
+                    .eq('id', messageId)
+                    .single();
+
+                if (message) {
+                    socket.to(`conversation_${message.conversation_id}`).emit('message_seen', {
+                        messageId,
+                        userId,
+                        timestamp: new Date().toISOString()
+                    });
+                }
 
             } catch (error) {
                 socket.emit('seen_error', { error: error.message });
-            }
-        });
-
-        // Handle message status updates
-        socket.on('message_status', async (data) => {
-            try {
-                const { messageId, status } = data;
-                await this.updateMessageStatus(messageId, status);
-            } catch (error) {
-                console.error('Error updating message status:', error);
-            }
-        });
-
-        // Handle mark as read
-        socket.on('mark_read', async (data) => {
-            try {
-                const { messageId, userId, conversationId } = data;
-                await this.updateMessageStatus(messageId, 'read');
-                
-                // Emit read status to conversation
-                socket.to(`conversation_${conversationId}`).emit('message_read', {
-                    messageId,
-                    userId
-                });
-            } catch (error) {
-                console.error('Error marking message as read:', error);
             }
         });
 
@@ -214,6 +275,51 @@ class MessageHandler {
             }
             console.log(`User disconnected: ${socket.id}`);
         });
+    }
+
+    /**
+     * Update message statuses to delivered when user comes online (REAL-TIME)
+     */
+    async updateUserMessageStatuses(userId) {
+        try {
+            // Get all sent messages for this user
+            const { data: messages, error } = await supabaseAdmin
+                .from('messages')
+                .select('id, conversation_id, status')
+                .eq('receiver_id', userId)
+                .eq('status', 'sent');
+
+            if (error || !messages || messages.length === 0) {
+                return;
+            }
+
+            // Update all sent messages to delivered
+            const messageIds = messages.map(msg => msg.id);
+            await supabaseAdmin
+                .from('messages')
+                .update({ 
+                    status: 'delivered',
+                    updated_at: new Date().toISOString()
+                })
+                .in('id', messageIds);
+
+            // Emit status updates to all affected conversations (REAL-TIME)
+            const conversationIds = [...new Set(messages.map(msg => msg.conversation_id))];
+            
+            for (const conversationId of conversationIds) {
+                const conversationMessages = messages.filter(msg => msg.conversation_id === conversationId);
+                
+                this.io.to(`conversation_${conversationId}`).emit('messages_delivered', {
+                    messageIds: conversationMessages.map(msg => msg.id),
+                    userId,
+                    timestamp: new Date().toISOString()
+                });
+            }
+
+            console.log(`Updated ${messages.length} messages to delivered for user ${userId}`);
+        } catch (error) {
+            console.error('Error updating user message statuses:', error);
+        }
     }
 
     /**
@@ -330,13 +436,6 @@ class MessageHandler {
     getOnlineUsersCount() {
         return this.onlineUsers.size;
     }
-
-    /**
-     * Check if user is online
-     */
-    isUserOnline(userId) {
-        return Array.from(this.onlineUsers.values()).includes(userId);
-    }
 }
 
-module.exports = MessageHandler; 
+module.exports = MessageHandler;

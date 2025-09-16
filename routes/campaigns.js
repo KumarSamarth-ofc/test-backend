@@ -62,4 +62,11 @@ router.post(
   CampaignController.handleWorkReview
 );
 
+// Payment verification route
+router.post(
+  "/verify-payment",
+  authService.requireRole(["brand_owner", "influencer"]),
+  CampaignController.verifyCampaignPayment
+);
+
 module.exports = router;

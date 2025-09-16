@@ -69,6 +69,10 @@ automatedFlowService.setSocket(io);
 const backgroundJobService = require("./services/backgroundJobService");
 backgroundJobService.setSocket(io);
 
+// Set socket for notification controller
+const NotificationController = require("./controllers/notificationController");
+NotificationController.setSocket(io);
+
 // API routes
 app.use("/api/auth", authRoutes);
 app.use("/api/campaigns", campaignRoutes);

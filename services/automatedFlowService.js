@@ -66,16 +66,35 @@ class AutomatedFlowService {
       const brandOwnerId = bid.created_by;
 
       // Check if conversation already exists
-      const { data: existingConv } = await supabaseAdmin
+      const { data: existingConv, error: existingConvError } = await supabaseAdmin
         .from('conversations')
-        .select('id')
+        .select('*')
         .eq('bid_id', bidId)
         .eq('influencer_id', influencerId)
         .eq('brand_owner_id', brandOwnerId)
         .single();
 
       if (existingConv) {
-        throw new Error('Conversation already exists');
+        console.log('✅ Conversation already exists, returning existing conversation:', existingConv.id);
+        
+        // Get the latest message for context
+        const { data: latestMessage } = await supabaseAdmin
+          .from('messages')
+          .select('*')
+          .eq('conversation_id', existingConv.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        return {
+          success: true,
+          conversation: existingConv,
+          message: latestMessage || null,
+          flow_state: existingConv.flow_state || 'influencer_responding',
+          awaiting_role: existingConv.awaiting_role || 'influencer',
+          is_existing: true,
+          status_message: 'Conversation already exists - returning existing conversation'
+        };
       }
 
       // Create request record first to track the collaboration
@@ -85,9 +104,8 @@ class AutomatedFlowService {
           bid_id: bidId,
           influencer_id: influencerId,
           status: 'connected',
-          final_agreed_amount: parseFloat(proposedAmount),
-          initial_payment: Math.round(parseFloat(proposedAmount) * 0.3 * 100) / 100, // 30% in paise
-          final_payment: Math.round(parseFloat(proposedAmount) * 0.7 * 100) / 100   // 70% in paise
+          proposed_amount: parseFloat(proposedAmount),
+          final_agreed_amount: parseFloat(proposedAmount)
         })
         .select()
         .single();
@@ -117,6 +135,43 @@ class AutomatedFlowService {
         .single();
 
       if (convError) {
+        // Check if it's a duplicate key violation (conversation already exists)
+        if (convError.message.includes('duplicate key') || convError.message.includes('unique constraint')) {
+          console.log('✅ Conversation already exists (constraint violation), fetching existing conversation...');
+          
+          // Fetch the existing conversation
+          const { data: existingConv, error: fetchError } = await supabaseAdmin
+            .from('conversations')
+            .select('*')
+            .eq('bid_id', bidId)
+            .eq('influencer_id', influencerId)
+            .eq('brand_owner_id', brandOwnerId)
+            .single();
+
+          if (fetchError || !existingConv) {
+            throw new Error(`Failed to fetch existing conversation: ${fetchError?.message || 'Not found'}`);
+          }
+
+          // Get the latest message for context
+          const { data: latestMessage } = await supabaseAdmin
+            .from('messages')
+            .select('*')
+            .eq('conversation_id', existingConv.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single();
+
+          return {
+            success: true,
+            conversation: existingConv,
+            message: latestMessage || null,
+            flow_state: existingConv.flow_state || 'influencer_responding',
+            awaiting_role: existingConv.awaiting_role || 'influencer',
+            is_existing: true,
+            status_message: 'Conversation already exists - returning existing conversation'
+          };
+        }
+        
         throw new Error(`Failed to create conversation: ${convError.message}`);
       }
 
@@ -128,7 +183,7 @@ class AutomatedFlowService {
           sender_id: brandOwnerId,
           receiver_id: influencerId,
           message: `🤝 **Interest in Collaboration**\n\nHi! I'm interested in your bid "${bid.title}". Proposed amount: **₹${proposedAmount}**.`,
-          message_type: 'system',
+          message_type: 'automated',
           action_required: true,
           action_data: {
             title: 'Connection Response',
@@ -193,7 +248,7 @@ class AutomatedFlowService {
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
             message: `Here are the project details: ${data.details}`,
-            message_type: 'system',
+            message_type: 'automated',
             is_automated: true,
             action_required: true,
             action_data: {
@@ -268,7 +323,7 @@ class AutomatedFlowService {
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
             message: `I'm offering ₹${data.price} for this project. What do you think?`,
-            message_type: 'system',
+            message_type: 'automated',
             is_automated: true,
             action_required: true,
             action_data: {
@@ -346,7 +401,7 @@ class AutomatedFlowService {
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
             message: `Great! Let's proceed with the payment of ₹${agreedAmount}. Please complete the payment to start the collaboration.`,
-            message_type: 'system',
+            message_type: 'automated',
             is_automated: true,
             action_required: true,
             action_data: {
@@ -379,7 +434,7 @@ class AutomatedFlowService {
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
             message: 'Excellent work! I approve the submission.',
-            message_type: 'system',
+            message_type: 'automated',
             is_automated: true,
             action_required: false
           };
@@ -403,7 +458,7 @@ class AutomatedFlowService {
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
             message: `I'd like some revisions: ${data.feedback || 'Please make the requested changes.'}`,
-            message_type: 'system',
+            message_type: 'automated',
             is_automated: true,
             action_required: true,
             action_data: {
@@ -497,7 +552,8 @@ class AutomatedFlowService {
 
       switch (action) {
         case 'accept':
-          newFlowState = 'brand_owner_details';
+        case 'accept_connection':
+          newFlowState = 'real_time';
           newAwaitingRole = 'brand_owner';
           
           newMessage = {
@@ -505,14 +561,15 @@ class AutomatedFlowService {
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
             message: 'Great! I\'m interested in this project. Please share the details.',
-            message_type: 'system',
+            message_type: 'automated',
             is_automated: true,
             action_required: false
           };
           break;
 
         case 'reject':
-          newFlowState = 'collaboration_cancelled';
+        case 'reject_connection':
+          newFlowState = 'chat_closed';
           newAwaitingRole = null;
           
           newMessage = {
@@ -520,7 +577,7 @@ class AutomatedFlowService {
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
             message: 'Thank you for considering me, but I\'m not available for this project.',
-            message_type: 'system',
+            message_type: 'automated',
             is_automated: true,
             action_required: false
           };
@@ -535,7 +592,7 @@ class AutomatedFlowService {
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
             message: 'The project details look good! What\'s your budget for this?',
-            message_type: 'system',
+            message_type: 'automated',
             is_automated: true,
             action_required: false
           };
@@ -597,7 +654,7 @@ class AutomatedFlowService {
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
             message: `Perfect! I accept the price of ₹${currentAmount}. Let's proceed with payment.`,
-            message_type: 'system',
+            message_type: 'automated',
             is_automated: true,
             action_required: true,
             action_data: {
@@ -652,7 +709,7 @@ class AutomatedFlowService {
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
             message: `I'd like to negotiate the price. How about ₹${counterAmount}?`,
-            message_type: 'system',
+            message_type: 'automated',
             is_automated: true,
             action_required: true,
             action_data: {
@@ -685,7 +742,7 @@ class AutomatedFlowService {
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
             message: 'I\'ve submitted the work for your review.',
-            message_type: 'system',
+            message_type: 'automated',
             is_automated: true,
             action_required: true,
             action_data: {
@@ -719,7 +776,7 @@ class AutomatedFlowService {
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
             message: 'I\'ve made the requested changes and resubmitted the work.',
-            message_type: 'system',
+            message_type: 'automated',
             is_automated: true,
             action_required: true,
             action_data: {
@@ -894,7 +951,7 @@ class AutomatedFlowService {
           sender_id: conversation.influencer_id,
           receiver_id: conversation.brand_owner_id,
           message: 'I\'ve submitted the work for your review.',
-          message_type: 'system',
+          message_type: 'automated',
           is_automated: true,
           action_required: true,
           action_data: {
@@ -995,7 +1052,7 @@ class AutomatedFlowService {
           sender_id: conversation.brand_owner_id,
           receiver_id: conversation.influencer_id,
           message: 'Excellent work! I approve the submission. Payment has been released.',
-          message_type: 'system',
+          message_type: 'automated',
           is_automated: true,
           action_required: false
         };
@@ -1008,7 +1065,7 @@ class AutomatedFlowService {
           sender_id: conversation.brand_owner_id,
           receiver_id: conversation.influencer_id,
           message: `I'd like some revisions: ${feedback || 'Please make the requested changes.'}`,
-          message_type: 'system',
+          message_type: 'automated',
           is_automated: true,
           action_required: true,
           action_data: {
@@ -1061,6 +1118,183 @@ class AutomatedFlowService {
       };
     } catch (error) {
       console.error('Error handling work review:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Initialize automated conversation for a campaign application
+   */
+  async initializeCampaignConversation(campaignId, influencerId, proposedAmount) {
+    try {
+      // Get campaign details
+      const { data: campaign, error: campaignError } = await supabaseAdmin
+        .from('campaigns')
+        .select(`
+          *,
+          users!campaigns_created_by_fkey(id, name, email, phone)
+        `)
+        .eq('id', campaignId)
+        .single();
+
+      if (campaignError || !campaign) {
+        throw new Error('Campaign not found');
+      }
+
+      const brandOwnerId = campaign.created_by;
+
+      // Check if conversation already exists
+      const { data: existingConv, error: existingConvError } = await supabaseAdmin
+        .from('conversations')
+        .select('*')
+        .eq('campaign_id', campaignId)
+        .eq('influencer_id', influencerId)
+        .eq('brand_owner_id', brandOwnerId)
+        .single();
+
+      if (existingConv) {
+        console.log('✅ Campaign conversation already exists, returning existing conversation:', existingConv.id);
+        
+        // Get the latest message for context
+        const { data: latestMessage } = await supabaseAdmin
+          .from('messages')
+          .select('*')
+          .eq('conversation_id', existingConv.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        return {
+          success: true,
+          conversation: existingConv,
+          message: latestMessage || null,
+          flow_state: existingConv.flow_state || 'influencer_responding',
+          awaiting_role: existingConv.awaiting_role || 'influencer',
+          is_existing: true,
+          status_message: 'Campaign conversation already exists - returning existing conversation'
+        };
+      }
+
+      // Create request record first to track the collaboration
+      const { data: request, error: requestError } = await supabaseAdmin
+        .from('requests')
+        .insert({
+          campaign_id: campaignId,
+          influencer_id: influencerId,
+          status: 'connected',
+          proposed_amount: parseFloat(proposedAmount),
+          final_agreed_amount: parseFloat(proposedAmount)
+        })
+        .select()
+        .single();
+
+      if (requestError) {
+        throw new Error(`Failed to create request: ${requestError.message}`);
+      }
+
+      // Create conversation linked to the request
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from('conversations')
+        .insert({
+          campaign_id: campaignId,
+          brand_owner_id: brandOwnerId,
+          influencer_id: influencerId,
+          request_id: request.id,
+          flow_state: 'influencer_responding',
+          awaiting_role: 'influencer',
+          chat_status: 'automated',
+          flow_data: {
+            proposed_amount: parseFloat(proposedAmount),
+            current_amount: parseFloat(proposedAmount),
+            negotiation_history: []
+          }
+        })
+        .select()
+        .single();
+
+      if (convError) {
+        // Check if it's a duplicate key violation (conversation already exists)
+        if (convError.message.includes('duplicate key') || convError.message.includes('unique constraint')) {
+          console.log('✅ Campaign conversation already exists (constraint violation), fetching existing conversation...');
+          
+          // Fetch the existing conversation
+          const { data: existingConv, error: fetchError } = await supabaseAdmin
+            .from('conversations')
+            .select('*')
+            .eq('campaign_id', campaignId)
+            .eq('influencer_id', influencerId)
+            .eq('brand_owner_id', brandOwnerId)
+            .single();
+
+          if (fetchError || !existingConv) {
+            throw new Error(`Failed to fetch existing conversation: ${fetchError?.message || 'Not found'}`);
+          }
+
+          // Get the latest message for context
+          const { data: latestMessage } = await supabaseAdmin
+            .from('messages')
+            .select('*')
+            .eq('conversation_id', existingConv.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single();
+
+          return {
+            success: true,
+            conversation: existingConv,
+            message: latestMessage || null,
+            flow_state: existingConv.flow_state || 'influencer_responding',
+            awaiting_role: existingConv.awaiting_role || 'influencer',
+            is_existing: true,
+            status_message: 'Campaign conversation already exists - returning existing conversation'
+          };
+        }
+        
+        throw new Error(`Failed to create conversation: ${convError.message}`);
+      }
+
+      // Create initial message
+      const { data: message, error: msgError } = await supabaseAdmin
+        .from('messages')
+        .insert({
+          conversation_id: conversation.id,
+          sender_id: brandOwnerId,
+          receiver_id: influencerId,
+          message: `🤝 **Interest in Collaboration**\n\nHi! I'm interested in your campaign "${campaign.title}". Proposed amount: **₹${proposedAmount}**.`,
+          message_type: 'automated',
+          action_required: true,
+          action_data: {
+            title: 'Connection Response',
+            subtitle: 'Choose your response to connect on this campaign',
+            buttons: [
+              { id: 'accept_connection', text: 'Accept Connection', style: 'success', action: 'accept_connection' },
+              { id: 'reject_connection', text: 'Reject Connection', style: 'danger', action: 'reject_connection' }
+            ],
+            flow_state: 'influencer_responding',
+            visible_to: 'influencer'
+          }
+        })
+        .select()
+        .single();
+
+      if (msgError) {
+        console.error('Failed to create initial message:', msgError);
+      } else {
+        // Emit socket events for the automated message
+        this.emitMessageEvents(conversation, message, influencerId);
+      }
+
+      return {
+        success: true,
+        conversation,
+        request,
+        message
+      };
+    } catch (error) {
+      console.error('Error initializing campaign conversation:', error);
       return {
         success: false,
         error: error.message
