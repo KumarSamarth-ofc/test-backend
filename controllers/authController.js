@@ -1,6 +1,7 @@
 const authService = require("../utils/auth");
 const { supabaseAdmin } = require("../supabase/client");
 const { body, validationResult } = require("express-validator");
+const { uploadImageToStorage, deleteImageFromStorage } = require("../utils/imageUpload");
 
 class AuthController {
   /**
@@ -183,6 +184,153 @@ class AuthController {
         message: "Profile updated successfully",
       });
     } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Upload profile image
+   */
+  async uploadProfileImage(req, res) {
+    try {
+      const userId = req.user.id;
+
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "No image file provided",
+        });
+      }
+
+      // Get current user to check for existing profile image
+      const { data: currentUser, error: userError } = await supabaseAdmin
+        .from("users")
+        .select("profile_image_url")
+        .eq("id", userId)
+        .single();
+
+      if (userError) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch user data",
+        });
+      }
+
+      // Upload new image to Supabase Storage
+      const { url, error: uploadError } = await uploadImageToStorage(
+        req.file.buffer,
+        req.file.originalname,
+        "profiles"
+      );
+
+      if (uploadError) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to upload image",
+          error: uploadError,
+        });
+      }
+
+      // Update user profile with new image URL
+      const { data: updatedUser, error: updateError } = await supabaseAdmin
+        .from("users")
+        .update({ profile_image_url: url })
+        .eq("id", userId)
+        .select()
+        .single();
+
+      if (updateError) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to update profile image",
+        });
+      }
+
+      // Delete old image if it exists
+      if (currentUser.profile_image_url) {
+        try {
+          await deleteImageFromStorage(currentUser.profile_image_url);
+        } catch (deleteError) {
+          console.error("Failed to delete old profile image:", deleteError);
+          // Don't fail the request if old image deletion fails
+        }
+      }
+
+      res.json({
+        success: true,
+        user: updatedUser,
+        message: "Profile image uploaded successfully",
+      });
+    } catch (error) {
+      console.error("Error uploading profile image:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Delete profile image
+   */
+  async deleteProfileImage(req, res) {
+    try {
+      const userId = req.user.id;
+
+      // Get current user to check for existing profile image
+      const { data: currentUser, error: userError } = await supabaseAdmin
+        .from("users")
+        .select("profile_image_url")
+        .eq("id", userId)
+        .single();
+
+      if (userError) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch user data",
+        });
+      }
+
+      if (!currentUser.profile_image_url) {
+        return res.status(400).json({
+          success: false,
+          message: "No profile image to delete",
+        });
+      }
+
+      // Delete image from Supabase Storage
+      try {
+        await deleteImageFromStorage(currentUser.profile_image_url);
+      } catch (deleteError) {
+        console.error("Failed to delete profile image from storage:", deleteError);
+        // Continue with database update even if storage deletion fails
+      }
+
+      // Update user profile to remove image URL
+      const { data: updatedUser, error: updateError } = await supabaseAdmin
+        .from("users")
+        .update({ profile_image_url: null })
+        .eq("id", userId)
+        .select()
+        .single();
+
+      if (updateError) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to remove profile image",
+        });
+      }
+
+      res.json({
+        success: true,
+        user: updatedUser,
+        message: "Profile image deleted successfully",
+      });
+    } catch (error) {
+      console.error("Error deleting profile image:", error);
       res.status(500).json({
         success: false,
         message: "Internal server error",

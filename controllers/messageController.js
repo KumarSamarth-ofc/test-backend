@@ -43,8 +43,8 @@ class MessageController {
             `
             id, brand_owner_id, influencer_id, chat_status, campaign_id, bid_id, 
             created_at, updated_at, flow_state, awaiting_role,
-            campaigns(id, title, description, budget, status),
-            bids(id, title, description, min_budget, max_budget, status)
+            campaigns(id, title, description, budget, requirements, status),
+            bids(id, title, description, min_budget, max_budget, requirements, status)
           `
           )
           .eq("brand_owner_id", userId); // All conversations where they are the brand owner
@@ -59,8 +59,8 @@ class MessageController {
             `
             id, brand_owner_id, influencer_id, chat_status, campaign_id, bid_id, 
             created_at, updated_at, flow_state, awaiting_role,
-            campaigns(id, title, description, budget, status),
-            bids(id, title, description, min_budget, max_budget, status)
+            campaigns(id, title, description, budget, requirements, status),
+            bids(id, title, description, min_budget, max_budget, requirements, status)
           `
           )
           .eq("influencer_id", userId); // All conversations where they are the influencer
