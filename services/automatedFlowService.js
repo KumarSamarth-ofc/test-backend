@@ -72,6 +72,42 @@ class AutomatedFlowService {
         },
       });
     }
+
+    // Send FCM push notification for automated messages
+    const fcmService = require('./fcmService');
+    fcmService.sendMessageNotification(
+      conversation.id,
+      message,
+      message.sender_id,
+      receiverId
+    ).then(result => {
+      if (result.success) {
+        console.log(`✅ FCM automated message notification sent: ${result.sent} successful, ${result.failed} failed`);
+      } else {
+        console.error(`❌ FCM automated message notification failed:`, result.error);
+      }
+    }).catch(error => {
+      console.error(`❌ FCM automated message notification error:`, error);
+    });
+
+    // Emit conversation list update to receiver
+    if (this.io) {
+      console.log(`📡 [DEBUG] Socket emitting conversation_list_updated for automated message`);
+      this.io.to(`user_${receiverId}`).emit('conversation_list_updated', {
+        conversation_id: conversation.id,
+        message: message,
+        conversation_context: conversationContext,
+        action: 'message_received'
+      });
+
+      // Emit unread count update to receiver
+      console.log(`📡 [DEBUG] Socket emitting unread_count_updated for automated message`);
+      this.io.to(`user_${receiverId}`).emit('unread_count_updated', {
+        conversation_id: conversation.id,
+        unread_count: 1, // Increment by 1
+        action: 'increment'
+      });
+    }
   }
 
   /**

@@ -513,8 +513,9 @@ class MessageController {
         senderId
       });
       
+      // Get conversation context for emit (moved outside if block for broader scope)
+      let conversationContext = null;
       if (io) {
-        // Get conversation context for emit
         const { data: conversation, error: convError } = await supabaseAdmin
           .from("conversations")
           .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data")
@@ -526,7 +527,7 @@ class MessageController {
         }
 
         // Prepare conversation context
-        const conversationContext = conversation ? {
+        conversationContext = conversation ? {
           id: conversation.id,
           chat_status: conversation.chat_status,
           flow_state: conversation.flow_state,
@@ -557,8 +558,59 @@ class MessageController {
             receiver_id: receiverId,
           },
         });
+
+        // Also emit to sender's personal room for confirmation
+        console.log(`📡 [DEBUG] Emitting message_sent to user_${senderId}`);
+        io.to(`user_${senderId}`).emit("message_sent", {
+          conversation_id: conversationId,
+          message: newMessage,
+          conversation_context: conversationContext,
+        });
       } else {
         console.error("❌ [DEBUG] Socket.IO not available for realtime emit");
+      }
+
+      // Send FCM push notification for REST API messages
+      const fcmService = require('../services/fcmService');
+      fcmService.sendMessageNotification(
+        conversationId,
+        newMessage,
+        senderId,
+        receiverId
+      ).then(result => {
+        if (result.success) {
+          console.log(`✅ FCM notification sent: ${result.sent} successful, ${result.failed} failed`);
+        } else {
+          console.error(`❌ FCM notification failed:`, result.error);
+        }
+      }).catch(error => {
+        console.error(`❌ FCM notification error:`, error);
+      });
+
+      // Emit conversation list update to both users
+      if (io) {
+        console.log(`📡 [DEBUG] Socket emitting conversation_list_updated to both users`);
+        io.to(`user_${senderId}`).emit('conversation_list_updated', {
+          conversation_id: conversationId,
+          message: newMessage,
+          conversation_context: conversationContext,
+          action: 'message_sent'
+        });
+        
+        io.to(`user_${receiverId}`).emit('conversation_list_updated', {
+          conversation_id: conversationId,
+          message: newMessage,
+          conversation_context: conversationContext,
+          action: 'message_received'
+        });
+
+        // Emit unread count update to receiver
+        console.log(`📡 [DEBUG] Socket emitting unread_count_updated to user_${receiverId}`);
+        io.to(`user_${receiverId}`).emit('unread_count_updated', {
+          conversation_id: conversationId,
+          unread_count: 1, // Increment by 1
+          action: 'increment'
+        });
       }
 
       console.log(

@@ -84,6 +84,173 @@ app.set("io", io);
 const automatedFlowService = require("./services/automatedFlowService");
 automatedFlowService.setSocket(io);
 
+// Test endpoint for FCM status (no auth required)
+app.get("/test-fcm", (req, res) => {
+  try {
+    const fcmService = require('./services/fcmService');
+    res.json({
+      success: true,
+      fcmInitialized: fcmService.initialized,
+      message: fcmService.initialized ? 'FCM service is initialized' : 'FCM service is not initialized'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Test endpoint for realtime messaging (after security middleware)
+app.post("/test-message", async (req, res) => {
+  try {
+    const { conversationId, senderId, receiverId, message } = req.body;
+    
+    if (!conversationId || !senderId || !receiverId || !message) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required fields: conversationId, senderId, receiverId, message"
+      });
+    }
+
+    const io = app.get("io");
+    if (!io) {
+      return res.status(500).json({
+        success: false,
+        error: "Socket.IO not available"
+      });
+    }
+
+    // Get conversation context
+    const { supabaseAdmin } = require('./supabase/client');
+    const { data: conversation, error: convError } = await supabaseAdmin
+      .from("conversations")
+      .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data")
+      .eq("id", conversationId)
+      .single();
+
+    if (convError) {
+      console.error("❌ [DEBUG] Failed to fetch conversation context:", convError);
+    }
+
+    // Prepare conversation context
+    const conversationContext = conversation ? {
+      id: conversation.id,
+      chat_status: conversation.chat_status,
+      flow_state: conversation.flow_state,
+      awaiting_role: conversation.awaiting_role,
+      conversation_type: conversation.campaign_id ? 'campaign' : 
+                        conversation.bid_id ? 'bid' : 'direct',
+      automation_enabled: conversation.automation_enabled || false,
+      current_action_data: conversation.current_action_data
+    } : null;
+
+    // Create test message object
+    const testMessage = {
+      id: `test_${Date.now()}`,
+      conversation_id: conversationId,
+      sender_id: senderId,
+      receiver_id: receiverId,
+      message: message,
+      created_at: new Date().toISOString(),
+      seen: false
+    };
+
+    // Emit to conversation room
+    console.log(`📡 [TEST] Emitting new_message to conversation_${conversationId}`);
+    io.to(`conversation_${conversationId}`).emit("new_message", {
+      conversation_id: conversationId,
+      message: testMessage,
+      conversation_context: conversationContext,
+    });
+
+    // Emit notification to receiver
+    console.log(`📡 [TEST] Emitting notification to user_${receiverId}`);
+    io.to(`user_${receiverId}`).emit("notification", {
+      type: "message",
+      data: {
+        conversation_id: conversationId,
+        message: testMessage,
+        conversation_context: conversationContext,
+        sender_id: senderId,
+        receiver_id: receiverId,
+      },
+    });
+
+    // Emit to sender for confirmation
+    console.log(`📡 [TEST] Emitting message_sent to user_${senderId}`);
+    io.to(`user_${senderId}`).emit("message_sent", {
+      conversation_id: conversationId,
+      message: testMessage,
+      conversation_context: conversationContext,
+    });
+
+    // Emit conversation list updates
+    console.log(`📡 [TEST] Emitting conversation_list_updated to both users`);
+    io.to(`user_${senderId}`).emit('conversation_list_updated', {
+      conversation_id: conversationId,
+      message: testMessage,
+      conversation_context: conversationContext,
+      action: 'message_sent'
+    });
+    
+    io.to(`user_${receiverId}`).emit('conversation_list_updated', {
+      conversation_id: conversationId,
+      message: testMessage,
+      conversation_context: conversationContext,
+      action: 'message_received'
+    });
+
+    // Emit unread count update
+    console.log(`📡 [TEST] Emitting unread_count_updated to user_${receiverId}`);
+    io.to(`user_${receiverId}`).emit('unread_count_updated', {
+      conversation_id: conversationId,
+      unread_count: 1,
+      action: 'increment'
+    });
+
+    // Send FCM push notification
+    console.log(`📱 [TEST] Sending FCM notification to user_${receiverId}`);
+    const fcmService = require('./services/fcmService');
+    fcmService.sendMessageNotification(
+      conversationId,
+      testMessage,
+      senderId,
+      receiverId
+    ).then(result => {
+      if (result.success) {
+        console.log(`✅ [TEST] FCM notification sent: ${result.sent} successful, ${result.failed} failed`);
+      } else {
+        console.error(`❌ [TEST] FCM notification failed:`, result.error);
+      }
+    }).catch(error => {
+      console.error(`❌ [TEST] FCM notification error:`, error);
+    });
+
+    res.json({
+      success: true,
+      message: "Test message events emitted successfully",
+      testMessage,
+      conversationContext,
+      events: [
+        'new_message',
+        'notification', 
+        'message_sent',
+        'conversation_list_updated',
+        'unread_count_updated',
+        'fcm_notification'
+      ]
+    });
+
+  } catch (error) {
+    console.error("❌ [TEST] Error in test-message endpoint:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // API routes
 app.use("/api/auth", authRoutes);
 app.use("/api/campaigns", campaignRoutes);

@@ -152,6 +152,30 @@ class MessageHandler {
                     console.error(`❌ FCM notification error:`, error);
                 });
 
+                // Emit conversation list update to both users
+                console.log(`📡 [DEBUG] Socket emitting conversation_list_updated to both users`);
+                this.io.to(`user_${senderId}`).emit('conversation_list_updated', {
+                    conversation_id: conversationId,
+                    message: savedMessage,
+                    conversation_context: conversationContext,
+                    action: 'message_sent'
+                });
+                
+                this.io.to(`user_${receiverId}`).emit('conversation_list_updated', {
+                    conversation_id: conversationId,
+                    message: savedMessage,
+                    conversation_context: conversationContext,
+                    action: 'message_received'
+                });
+
+                // Emit unread count update to receiver
+                console.log(`📡 [DEBUG] Socket emitting unread_count_updated to user_${receiverId}`);
+                this.io.to(`user_${receiverId}`).emit('unread_count_updated', {
+                    conversation_id: conversationId,
+                    unread_count: 1, // Increment by 1
+                    action: 'increment'
+                });
+
                 // Stop typing indicator
                 this.typingUsers.delete(`${conversationId}_${senderId}`);
                 socket.to(`conversation_${conversationId}`).emit('user_typing', {
