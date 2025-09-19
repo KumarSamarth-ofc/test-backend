@@ -45,7 +45,7 @@ class RequestController {
         // Check if campaign exists and is open
         const { data: campaign, error: campaignError } = await supabaseAdmin
           .from("campaigns")
-          .select("status, created_by, end_date")
+          .select("status, created_by")
           .eq("id", campaign_id)
           .single();
 
@@ -63,17 +63,6 @@ class RequestController {
           });
         }
 
-        // Check if campaign has expired
-        if (campaign.end_date) {
-          const currentDate = new Date().toISOString().split('T')[0]; // Get YYYY-MM-DD format
-          if (campaign.end_date < currentDate) {
-            return res.status(400).json({
-              success: false,
-              message: "Campaign has expired",
-            });
-          }
-        }
-
         source = campaign;
         sourceType = "campaign";
         sourceId = campaign_id;
@@ -81,7 +70,7 @@ class RequestController {
         // Check if bid exists and is open
         const { data: bid, error: bidError } = await supabaseAdmin
           .from("bids")
-          .select("status, created_by, expiry_date")
+          .select("status, created_by")
           .eq("id", bid_id)
           .single();
 
@@ -97,17 +86,6 @@ class RequestController {
             success: false,
             message: "Bid is not accepting applications",
           });
-        }
-
-        // Check if bid has expired
-        if (bid.expiry_date) {
-          const currentTimestamp = new Date().toISOString();
-          if (bid.expiry_date < currentTimestamp) {
-            return res.status(400).json({
-              success: false,
-              message: "Bid has expired",
-            });
-          }
         }
 
         source = bid;
@@ -137,27 +115,24 @@ class RequestController {
         status: "connected",
       };
 
-      console.log("Creating request with data:", requestData);
-      console.log("Source type:", sourceType, "Source ID:", sourceId);
-
       if (sourceType === "campaign") {
         requestData.campaign_id = sourceId;
+        // Store proposed amount for campaign applications if provided
+        if (req.body.proposed_amount) {
+          requestData.proposed_amount = req.body.proposed_amount;
+        }
       } else {
         requestData.bid_id = sourceId;
+        // Store proposed amount for bid applications
+        if (req.body.proposed_amount) {
+          requestData.proposed_amount = req.body.proposed_amount;
+        }
       }
 
-      // Store proposal amount and message in the request
-      if (req.body.proposed_amount) {
-        requestData.proposed_amount = parseFloat(req.body.proposed_amount);
-        requestData.final_agreed_amount = parseFloat(req.body.proposed_amount);
-      }
-      
+      // Store message if provided
       if (req.body.message) {
         requestData.message = req.body.message;
       }
-
-      console.log("Final request data before insertion:", requestData);
-      console.log("Request body:", req.body);
 
       const { data: request, error } = await supabaseAdmin
         .from("requests")
@@ -176,16 +151,11 @@ class RequestController {
         .single();
 
       if (error) {
-        console.error("Database error creating request:", error);
         return res.status(500).json({
           success: false,
           message: "Failed to create request",
-          error: error.message,
         });
       }
-
-      // Note: Conversation will be created when brand owner explicitly connects
-      // This is just the request/application phase
 
       // Emit real-time update to bid/campaign room
       const io = req.app.get("io");
@@ -324,6 +294,8 @@ class RequestController {
         amount:
           r.final_agreed_amount !== null && r.final_agreed_amount !== undefined
             ? r.final_agreed_amount
+            : r.proposed_amount !== undefined
+            ? r.proposed_amount
             : null,
       }));
 
@@ -363,7 +335,6 @@ class RequestController {
                         title,
                         type:campaign_type,
                         budget,
-                        requirements,
                         status,
                         created_by,
                         created_by_user:users!campaigns_created_by_fkey (
@@ -886,6 +857,8 @@ class RequestController {
           `
                     id,
                     status,
+                    proposed_amount,
+                    message,
                     final_agreed_amount,
                     payment_status,
                     payment_frozen_at,
@@ -974,6 +947,8 @@ class RequestController {
           `
                     id,
                     status,
+                    proposed_amount,
+                    message,
                     final_agreed_amount,
                     payment_status,
                     payment_frozen_at,
@@ -1587,7 +1562,7 @@ class RequestController {
         work_description: request.work_description,
         work_submission_link: request.work_submission_link,
         work_files: request.work_files || [],
-        chat_status: conversation?.chat_status || "realtime",
+        chat_status: conversation?.chat_status || "real_time", // FIXED: Use 'real_time' to match database constraint
         payment_completed: conversation?.payment_completed || false,
       };
 
@@ -1673,11 +1648,15 @@ const validateCreateRequest = [
 
   body("bid_id").optional().isUUID().withMessage("Invalid bid ID format"),
 
-  // Note: proposed_amount field doesn't exist in requests table
-  // This validation is kept for backward compatibility but won't be used
+  body("proposed_amount")
+    .optional()
+    .isFloat({ min: 0 })
+    .withMessage("Proposed amount must be a positive number"),
 
-  // Note: message field doesn't exist in requests table
-  // This validation is kept for backward compatibility but won't be used
+  body("message")
+    .optional()
+    .isLength({ min: 1, max: 1000 })
+    .withMessage("Message must be between 1 and 1000 characters"),
 ];
 
 const validateUpdateRequestStatus = [

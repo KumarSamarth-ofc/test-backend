@@ -17,7 +17,6 @@ ALTER TABLE messages
 ADD CONSTRAINT check_message_type 
 CHECK (message_type IN (
   'user_input', 
-  'system',
   'automated', 
   'audit', 
   'brand_owner_initial',

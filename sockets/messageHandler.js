@@ -1,13 +1,11 @@
 const { supabaseAdmin } = require('../supabase/client');
-const NotificationController = require('../controllers/notificationController');
+const fcmService = require('../services/fcmService');
 
 class MessageHandler {
     constructor(io) {
         this.io = io;
         this.typingUsers = new Map(); // Map to track typing users
         this.onlineUsers = new Map(); // Map to track online users
-        this.notificationController = NotificationController;
-        this.notificationController.setSocket(io);
     }
 
     /**
@@ -19,15 +17,8 @@ class MessageHandler {
         // Join user to their personal room
         socket.on('join', (userId) => {
             socket.join(`user_${userId}`);
-            socket.userId = userId; // Store userId on socket for easy access
             this.onlineUsers.set(socket.id, userId);
             console.log(`User ${userId} joined room: user_${userId}`);
-
-            // Send pending notifications to user
-            this.sendPendingNotifications(userId);
-            
-            // Update message statuses to delivered for this user (REAL-TIME)
-            this.updateUserMessageStatuses(userId);
         });
 
         // Handle joining conversation room
@@ -67,6 +58,20 @@ class MessageHandler {
         socket.on('send_message', async (data) => {
             try {
                 const { conversationId, senderId, receiverId, message, mediaUrl } = data;
+                console.log("🔍 [DEBUG] Socket send_message received:", { conversationId, senderId, receiverId });
+
+                // Get conversation context first
+                const { data: conversation, error: convError } = await supabaseAdmin
+                    .from('conversations')
+                    .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data')
+                    .eq('id', conversationId)
+                    .single();
+
+                if (convError) {
+                    console.error("❌ [DEBUG] Failed to fetch conversation context:", convError);
+                    socket.emit('message_error', { error: 'Failed to fetch conversation context' });
+                    return;
+                }
 
                 // Save message to database
                 const { data: savedMessage, error } = await supabaseAdmin
@@ -76,48 +81,100 @@ class MessageHandler {
                         sender_id: senderId,
                         receiver_id: receiverId,
                         message: message,
-                        media_url: mediaUrl,
-                        status: 'sent'
+                        media_url: mediaUrl
                     })
                     .select()
                     .single();
 
                 if (error) {
+                    console.error("❌ [DEBUG] Failed to save message via socket:", error);
                     socket.emit('message_error', { error: 'Failed to save message' });
                     return;
                 }
 
-                // Emit message to conversation room
+                console.log("✅ [DEBUG] Message saved via socket, emitting events");
+
+                // Prepare conversation context
+                const conversationContext = {
+                    id: conversation.id,
+                    chat_status: conversation.chat_status,
+                    flow_state: conversation.flow_state,
+                    awaiting_role: conversation.awaiting_role,
+                    conversation_type: conversation.campaign_id ? 'campaign' : 
+                                      conversation.bid_id ? 'bid' : 'direct',
+                    automation_enabled: conversation.automation_enabled || false,
+                    current_action_data: conversation.current_action_data
+                };
+
+                // Emit message to conversation room with context
+                console.log(`📡 [DEBUG] Socket emitting new_message to conversation_${conversationId}`);
                 this.io.to(`conversation_${conversationId}`).emit('new_message', {
+                    conversation_id: conversationId,
                     message: savedMessage,
-                    conversationId
+                    conversation_context: conversationContext
                 });
 
-                // Create and send notification
-                await this.notificationController.createNotification({
-                    user_id: receiverId,
+                // Emit notification to receiver with context
+                console.log(`📡 [DEBUG] Socket emitting notification to user_${receiverId}`);
+                this.io.to(`user_${receiverId}`).emit('notification', {
                     type: 'message',
-                    title: 'New message',
-                    message: message.length > 50 ? message.substring(0, 50) + '...' : message,
                     data: {
+                        id: savedMessage.id,
+                        title: 'New message',
+                        body: savedMessage.message,
+                        created_at: savedMessage.created_at,
+                        conversation_context: conversationContext,
+                        payload: { 
+                            conversation_id: conversationId, 
+                            message_id: savedMessage.id, 
+                            sender_id: senderId 
+                        },
                         conversation_id: conversationId,
-                        message_id: savedMessage.id,
-                        sender_id: senderId
-                    },
-                    priority: 'high'
+                        message: savedMessage,
+                        sender_id: senderId,
+                        receiver_id: receiverId
+                    }
                 });
 
-                // Update message status to delivered if user is online (REAL-TIME)
-                if (this.isUserOnline(receiverId)) {
-                    await this.updateMessageStatus(savedMessage.id, 'delivered');
-                    
-                    // Emit delivery status to conversation (REAL-TIME)
-                    this.io.to(`conversation_${conversationId}`).emit('message_status', {
-                        messageId: savedMessage.id,
-                        status: 'delivered',
-                        timestamp: new Date().toISOString()
-                    });
-                }
+                // Send FCM push notification
+                fcmService.sendMessageNotification(
+                    conversationId,
+                    savedMessage,
+                    senderId,
+                    receiverId
+                ).then(result => {
+                    if (result.success) {
+                        console.log(`✅ FCM notification sent: ${result.sent} successful, ${result.failed} failed`);
+                    } else {
+                        console.error(`❌ FCM notification failed:`, result.error);
+                    }
+                }).catch(error => {
+                    console.error(`❌ FCM notification error:`, error);
+                });
+
+                // Emit conversation list update to both users
+                console.log(`📡 [DEBUG] Socket emitting conversation_list_updated to both users`);
+                this.io.to(`user_${senderId}`).emit('conversation_list_updated', {
+                    conversation_id: conversationId,
+                    message: savedMessage,
+                    conversation_context: conversationContext,
+                    action: 'message_sent'
+                });
+                
+                this.io.to(`user_${receiverId}`).emit('conversation_list_updated', {
+                    conversation_id: conversationId,
+                    message: savedMessage,
+                    conversation_context: conversationContext,
+                    action: 'message_received'
+                });
+
+                // Emit unread count update to receiver
+                console.log(`📡 [DEBUG] Socket emitting unread_count_updated to user_${receiverId}`);
+                this.io.to(`user_${receiverId}`).emit('unread_count_updated', {
+                    conversation_id: conversationId,
+                    unread_count: 1, // Increment by 1
+                    action: 'increment'
+                });
 
                 // Stop typing indicator
                 this.typingUsers.delete(`${conversationId}_${senderId}`);
@@ -129,74 +186,6 @@ class MessageHandler {
 
             } catch (error) {
                 socket.emit('message_error', { error: error.message });
-            }
-        });
-
-        // Handle message status updates
-        socket.on('message_status', async (data) => {
-            try {
-                const { messageId, status } = data;
-                await this.updateMessageStatus(messageId, status);
-                
-                // Emit status update to conversation (REAL-TIME)
-                const { data: message } = await supabaseAdmin
-                    .from('messages')
-                    .select('conversation_id')
-                    .eq('id', messageId)
-                    .single();
-                
-                if (message) {
-                    this.io.to(`conversation_${message.conversation_id}`).emit('message_status', {
-                        messageId,
-                        status,
-                        timestamp: new Date().toISOString()
-                    });
-                }
-            } catch (error) {
-                console.error('Error updating message status:', error);
-            }
-        });
-
-        // Handle mark as read
-        socket.on('mark_read', async (data) => {
-            try {
-                const { messageId, userId, conversationId } = data;
-                await this.updateMessageStatus(messageId, 'read');
-                
-                // Emit read status to conversation (REAL-TIME)
-                socket.to(`conversation_${conversationId}`).emit('message_read', {
-                    messageId,
-                    userId,
-                    timestamp: new Date().toISOString()
-                });
-            } catch (error) {
-                console.error('Error marking message as read:', error);
-            }
-        });
-
-        // Handle mark multiple messages as read
-        socket.on('mark_messages_read', async (data) => {
-            try {
-                const { messageIds, userId, conversationId } = data;
-                
-                // Update all messages to read status
-                await supabaseAdmin
-                    .from('messages')
-                    .update({ 
-                        status: 'read',
-                        updated_at: new Date().toISOString()
-                    })
-                    .in('id', messageIds)
-                    .eq('receiver_id', userId);
-
-                // Emit batch read status to conversation (REAL-TIME)
-                socket.to(`conversation_${conversationId}`).emit('messages_read', {
-                    messageIds,
-                    userId,
-                    timestamp: new Date().toISOString()
-                });
-            } catch (error) {
-                console.error('Error marking messages as read:', error);
             }
         });
 
@@ -237,20 +226,11 @@ class MessageHandler {
                     return;
                 }
 
-                // Emit seen status to conversation (REAL-TIME)
-                const { data: message } = await supabaseAdmin
-                    .from('messages')
-                    .select('conversation_id')
-                    .eq('id', messageId)
-                    .single();
-
-                if (message) {
-                    socket.to(`conversation_${message.conversation_id}`).emit('message_seen', {
-                        messageId,
-                        userId,
-                        timestamp: new Date().toISOString()
-                    });
-                }
+                // Emit seen status to conversation
+                socket.to(`conversation_${data.conversationId}`).emit('message_seen', {
+                    messageId,
+                    userId
+                });
 
             } catch (error) {
                 socket.emit('seen_error', { error: error.message });
@@ -278,136 +258,19 @@ class MessageHandler {
     }
 
     /**
-     * Update message statuses to delivered when user comes online (REAL-TIME)
-     */
-    async updateUserMessageStatuses(userId) {
-        try {
-            // Get all sent messages for this user
-            const { data: messages, error } = await supabaseAdmin
-                .from('messages')
-                .select('id, conversation_id, status')
-                .eq('receiver_id', userId)
-                .eq('status', 'sent');
-
-            if (error || !messages || messages.length === 0) {
-                return;
-            }
-
-            // Update all sent messages to delivered
-            const messageIds = messages.map(msg => msg.id);
-            await supabaseAdmin
-                .from('messages')
-                .update({ 
-                    status: 'delivered',
-                    updated_at: new Date().toISOString()
-                })
-                .in('id', messageIds);
-
-            // Emit status updates to all affected conversations (REAL-TIME)
-            const conversationIds = [...new Set(messages.map(msg => msg.conversation_id))];
-            
-            for (const conversationId of conversationIds) {
-                const conversationMessages = messages.filter(msg => msg.conversation_id === conversationId);
-                
-                this.io.to(`conversation_${conversationId}`).emit('messages_delivered', {
-                    messageIds: conversationMessages.map(msg => msg.id),
-                    userId,
-                    timestamp: new Date().toISOString()
-                });
-            }
-
-            console.log(`Updated ${messages.length} messages to delivered for user ${userId}`);
-        } catch (error) {
-            console.error('Error updating user message statuses:', error);
-        }
-    }
-
-    /**
-     * Send pending notifications to user when they come online
-     */
-    async sendPendingNotifications(userId) {
-        try {
-            const { data: notifications, error } = await supabaseAdmin
-                .from('notifications')
-                .select('*')
-                .eq('user_id', userId)
-                .eq('status', 'pending')
-                .order('created_at', { ascending: true })
-                .limit(10);
-
-            if (error || !notifications || notifications.length === 0) {
-                return;
-            }
-
-            // Send notifications to user
-            for (const notification of notifications) {
-                this.io.to(`user_${userId}`).emit('notification', {
-                    id: notification.id,
-                    type: notification.type,
-                    title: notification.title,
-                    message: notification.message,
-                    data: notification.data,
-                    action_url: notification.action_url,
-                    created_at: notification.created_at,
-                    priority: notification.priority
-                });
-
-                // Mark as delivered
-                await this.notificationController.markNotificationAsDelivered(notification.id);
-            }
-        } catch (error) {
-            console.error('Error sending pending notifications:', error);
-        }
-    }
-
-    /**
-     * Update message status
-     */
-    async updateMessageStatus(messageId, status) {
-        try {
-            const { error } = await supabaseAdmin
-                .from('messages')
-                .update({ 
-                    status: status,
-                    updated_at: new Date().toISOString()
-                })
-                .eq('id', messageId);
-
-            if (error) {
-                console.error('Error updating message status:', error);
-            }
-        } catch (error) {
-            console.error('Error updating message status:', error);
-        }
-    }
-
-    /**
-     * Check if user is online
-     */
-    isUserOnline(userId) {
-        return Array.from(this.onlineUsers.values()).includes(userId);
-    }
-
-    /**
      * Send notification to user
      */
-    async sendNotification(userId, notification) {
-        return await this.notificationController.createNotification({
-            user_id: userId,
-            ...notification
-        });
+    sendNotification(userId, notification) {
+        this.io.to(`user_${userId}`).emit('notification', notification);
     }
 
     /**
      * Send notification to multiple users
      */
-    async sendNotificationToUsers(userIds, notification) {
-        const results = [];
-        for (const userId of userIds) {
-            const result = await this.sendNotification(userId, notification);
-            results.push(result);
-        }
-        return results;
+    sendNotificationToUsers(userIds, notification) {
+        userIds.forEach(userId => {
+            this.sendNotification(userId, notification);
+        });
     }
 
     /**
@@ -436,6 +299,58 @@ class MessageHandler {
     getOnlineUsersCount() {
         return this.onlineUsers.size;
     }
+
+    /**
+     * Check if user is online
+     */
+    isUserOnline(userId) {
+        return Array.from(this.onlineUsers.values()).includes(userId);
+    }
+
+    /**
+     * Emit conversation state change event
+     */
+    emitConversationStateChange(conversationId, stateChange) {
+        this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+            conversation_id: conversationId,
+            previous_state: stateChange.from,
+            new_state: stateChange.to,
+            reason: stateChange.reason,
+            timestamp: new Date().toISOString()
+        });
+    }
+
+    /**
+     * Get conversation context for emits
+     */
+    async getConversationContext(conversationId) {
+        try {
+            const { data: conversation, error } = await supabaseAdmin
+                .from('conversations')
+                .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data')
+                .eq('id', conversationId)
+                .single();
+
+            if (error || !conversation) {
+                console.error("❌ Failed to fetch conversation context:", error);
+                return null;
+            }
+
+            return {
+                id: conversation.id,
+                chat_status: conversation.chat_status,
+                flow_state: conversation.flow_state,
+                awaiting_role: conversation.awaiting_role,
+                conversation_type: conversation.campaign_id ? 'campaign' : 
+                                  conversation.bid_id ? 'bid' : 'direct',
+                automation_enabled: conversation.automation_enabled || false,
+                current_action_data: conversation.current_action_data
+            };
+        } catch (error) {
+            console.error("❌ Error getting conversation context:", error);
+            return null;
+        }
+    }
 }
 
-module.exports = MessageHandler;
+module.exports = MessageHandler; 

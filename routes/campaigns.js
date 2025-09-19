@@ -37,36 +37,35 @@ router.delete(
 
 // Automated conversation routes
 router.post(
-  "/initialize-conversation",
+  "/automated/initialize",
   authService.requireRole(["brand_owner"]),
   CampaignController.initializeCampaignConversation
 );
 router.post(
-  "/handle-influencer-action",
+  "/automated/influencer-action",
   authService.requireRole(["influencer"]),
   CampaignController.handleCampaignInfluencerAction
 );
 router.post(
-  "/handle-brand-owner-action",
+  "/automated/brand-owner-action",
   authService.requireRole(["brand_owner"]),
   CampaignController.handleCampaignBrandOwnerAction
 );
 router.post(
-  "/:conversation_id/submit-work",
+  "/:conversation_id/automated/submit-work",
   authService.requireRole(["influencer"]),
   CampaignController.handleWorkSubmission
 );
 router.post(
-  "/:conversation_id/review-work",
+  "/:conversation_id/automated/review-work",
   authService.requireRole(["brand_owner"]),
   CampaignController.handleWorkReview
 );
 
 // Payment verification route
 router.post(
-  "/verify-payment",
-  authService.requireRole(["brand_owner", "influencer"]),
-  CampaignController.verifyCampaignPayment
+  "/automated/verify-payment",
+  CampaignController.verifyAutomatedFlowPayment
 );
 
 module.exports = router;

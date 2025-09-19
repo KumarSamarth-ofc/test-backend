@@ -4,7 +4,7 @@ const {
   uploadImageToStorage,
   deleteImageFromStorage,
 } = require("../utils/imageUpload");
-const automatedFlowService = require("../services/automatedFlowService");
+const automatedFlowService = require("../utils/automatedFlowService");
 
 class BidController {
   /**
@@ -180,13 +180,8 @@ class BidController {
           .filter(Boolean);
 
         if (normalizedStatus === "open" || normalizedStatus === "new") {
-          // Open/new: show all open bids (including interacted) but filter out expired ones for influencers
+          // Open/new: show all open bids (including interacted)
           let query = baseSelect.eq("status", "open");
-          
-          // Filter out expired bids for influencers
-          const currentTimestamp = new Date().toISOString();
-          query = query.or(`expiry_date.is.null,expiry_date.gt.${currentTimestamp}`);
-          
           const {
             data: bids,
             error,
@@ -272,13 +267,8 @@ class BidController {
             },
           });
         } else {
-          // Default: treat as open but filter out expired bids for influencers
+          // Default: treat as open
           let query = baseSelect.eq("status", "open");
-          
-          // Filter out expired bids for influencers
-          const currentTimestamp = new Date().toISOString();
-          query = query.or(`expiry_date.is.null,expiry_date.gt.${currentTimestamp}`);
-          
           const { data: bids, error } = await query
             .order("created_at", { ascending: false })
             .range(offset, offset + limit - 1);
@@ -383,6 +373,8 @@ class BidController {
                     requests (
                         id,
                         status,
+                        proposed_amount,
+                        message,
                         created_at,
                         influencer:users!requests_influencer_id_fkey (
                             id,
@@ -740,29 +732,30 @@ class BidController {
         });
       }
 
-      // Emit realtime events and create notifications
+      // Emit realtime events
       const io = req.app.get("io");
       if (io) {
-        // Set socket in automated flow service
-        automatedFlowService.setSocket(io);
-        
-        // Note: emitConversationUpdate not available in reverted implementation
+        // Emit conversation_updated event
+        io.to(`conversation_${result.conversation.id}`).emit("conversation_updated", {
+          conversation_id: result.conversation.id,
+          flow_state: result.conversation.flow_state,
+          awaiting_role: result.conversation.awaiting_role,
+          chat_status: result.conversation.chat_status
+        });
 
         // Emit new_message events for each message created
         if (result.message) {
-          await automatedFlowService.emitMessageEvents(
-            result.conversation,
-            result.message,
-            result.conversation.influencer_id
-          );
+          io.to(`conversation_${result.conversation.id}`).emit("new_message", {
+            conversation_id: result.conversation.id,
+            message: result.message
+          });
         }
 
         if (result.audit_message) {
-          await automatedFlowService.emitMessageEvents(
-            result.conversation,
-            result.audit_message,
-            result.conversation.brand_owner_id
-          );
+          io.to(`conversation_${result.conversation.id}`).emit("new_message", {
+            conversation_id: result.conversation.id,
+            message: result.audit_message
+          });
         }
       }
 
@@ -1338,12 +1331,12 @@ class BidController {
           .eq("id", conversation.bid_id);
       }
 
-      // First update to payment_completed state
-      const { data: paymentCompletedConversation, error: paymentUpdateError } = await supabaseAdmin
+      // Update conversation to work_in_progress (enable chat) and store escrow hold ID
+      const { data: updatedConversation, error: updateError } = await supabaseAdmin
         .from("conversations")
         .update({
-          flow_state: "payment_completed",
-          awaiting_role: null,
+          flow_state: "work_in_progress",
+          awaiting_role: "influencer", // Influencer's turn to work
           chat_status: "real_time",
           conversation_type: conversation.campaign_id ? "campaign" : "bid",
           escrow_hold_id: escrowHold?.id, // Store escrow hold ID for later reference
@@ -1359,142 +1352,92 @@ class BidController {
         .select()
         .single();
 
-      if (paymentUpdateError) {
-        console.error("Payment completion update error:", paymentUpdateError);
+      if (updateError) {
+        console.error("Conversation update error:", updateError);
         return res.status(500).json({
           success: false,
-          message: "Failed to update conversation to payment completed state"
+          message: "Failed to update conversation state"
         });
       }
 
-      // Create payment completion message
-      const { data: paymentCompletionMessage, error: paymentMessageError } = await supabaseAdmin
+      // Create success message
+      const { data: successMessage, error: messageError } = await supabaseAdmin
         .from("messages")
         .insert({
           conversation_id: conversation_id,
-          sender_id: "00000000-0000-0000-0000-000000000000", // System user
-          receiver_id: conversation.brand_owner_id,
-          message: `✅ **Payment Completed Successfully!**\n\nPayment of ₹${paymentAmount / 100} has been processed and verified. The collaboration is now active and you can communicate in real-time.\n\n**Next Steps:**\n- You can now chat freely with the influencer\n- The influencer will begin working on your project\n- Payment is held in escrow until work completion`,
-          message_type: "automated",
+          sender_id: conversation.brand_owner_id,
+          receiver_id: conversation.influencer_id,
+          message: "🎉 **Payment Completed Successfully!**\n\nYour payment has been processed and the collaboration is now active. You can now communicate in real-time.",
+          message_type: "system",
           action_required: false
         })
         .select()
         .single();
 
-      if (paymentMessageError) {
-        console.error("Payment completion message error:", paymentMessageError);
-        // Continue anyway as payment is processed
-      }
-
-      // Emit payment completion events and create notifications
+      // Emit realtime events
       const io = req.app.get("io");
       if (io) {
-        // Set socket in automated flow service
-        automatedFlowService.setSocket(io);
-        
-        // Emit conversation update with notifications
-        // await automatedFlowService.emitConversationUpdate(
-        //   conversation_id,
-        //   "payment_completed",
-        //   null,
-        //   "real_time",
-        //   conversation.influencer_id,
-        //   "Payment completed successfully! You can now start working on the project."
-        // );
+        // Emit conversation_updated event with correct state
+        io.to(`conversation_${conversation_id}`).emit("conversation_updated", {
+          conversation_id: conversation_id,
+          flow_state: "work_in_progress",
+          awaiting_role: null,
+          chat_status: "real_time",
+          payment_completed: true
+        });
 
-        // Emit payment completion message with notification
-        if (paymentCompletionMessage) {
-          await automatedFlowService.emitMessageEvents(
-            conversation,
-            paymentCompletionMessage,
-            conversation.influencer_id
-          );
-        }
-      }
+        // Emit payment status update event
+        io.to(`conversation_${conversation_id}`).emit("payment_status_update", {
+          conversation_id: conversation_id,
+          status: "completed",
+          message: "Payment has been successfully processed",
+          flow_state: "work_in_progress",
+          chat_status: "real_time"
+        });
 
-      // Now transition to work_in_progress after a short delay
-      setTimeout(async () => {
-        const { data: updatedConversation, error: workUpdateError } = await supabaseAdmin
-          .from("conversations")
-          .update({
-            flow_state: "work_in_progress",
-            awaiting_role: "influencer", // Influencer's turn to work
-            chat_status: "real_time",
-            conversation_type: conversation.campaign_id ? "campaign" : "bid",
-            escrow_hold_id: escrowHold?.id,
-            flow_data: {
-              agreed_amount: paymentAmount / 100,
-              agreement_timestamp: new Date().toISOString(),
-              payment_completed: true,
-              payment_timestamp: new Date().toISOString(),
-              work_started: true,
-              work_started_timestamp: new Date().toISOString()
-            },
-            current_action_data: {}
-          })
-          .eq("id", conversation_id)
-          .select()
-          .single();
-
-        if (workUpdateError) {
-          console.error("Work in progress update error:", workUpdateError);
-          return;
-        }
-
-        // Create work started message
-        const { data: workStartedMessage, error: workMessageError } = await supabaseAdmin
-          .from("messages")
-          .insert({
+        // Emit new_message event
+        if (successMessage) {
+          io.to(`conversation_${conversation_id}`).emit("new_message", {
             conversation_id: conversation_id,
-            sender_id: "00000000-0000-0000-0000-000000000000", // System user
-            receiver_id: conversation.influencer_id,
-            message: `🚀 **Work Phase Started!**\n\nGreat! The payment has been completed and the work phase has begun. You can now communicate freely with the brand owner and start working on the project.\n\n**Project Details:**\n- Amount: ₹${paymentAmount / 100}\n- Status: Work in Progress\n- Communication: Real-time chat enabled`,
-            message_type: "automated",
-            action_required: false
-          })
-          .select()
-          .single();
-
-        // Emit work started events and create notifications
-        if (io) {
-          // Set socket in automated flow service
-          automatedFlowService.setSocket(io);
-          
-          // Emit conversation update with notifications
-          // await automatedFlowService.emitConversationUpdate(
-          //   conversation_id,
-          //   "work_in_progress",
-          //   "influencer",
-          //   "real_time",
-          //   conversation.influencer_id,
-          //   "Work phase started! You can now begin working on the project."
-          // );
-
-          // Emit work started message with notification
-          if (workStartedMessage) {
-            await automatedFlowService.emitMessageEvents(
-              conversation,
-              workStartedMessage,
-              conversation.influencer_id
-            );
-          }
+            message: successMessage
+          });
         }
-      }, 2000); // 2 second delay to show payment completion first
 
+        // Send individual notifications to both users
+        io.to(`user_${conversation.brand_owner_id}`).emit("notification", {
+          type: "payment_completed",
+          data: {
+            conversation_id: conversation_id,
+            message: "Payment completed successfully",
+            flow_state: "work_in_progress",
+            chat_status: "real_time"
+          }
+        });
+
+        io.to(`user_${conversation.influencer_id}`).emit("notification", {
+          type: "payment_completed", 
+          data: {
+            conversation_id: conversation_id,
+            message: "Payment completed successfully",
+            flow_state: "work_in_progress",
+            chat_status: "real_time"
+          }
+        });
+      }
 
       res.json({
         success: true,
         message: "Payment verified and processed successfully",
         conversation: {
-          id: paymentCompletedConversation.id,
-          conversation_type: paymentCompletedConversation.conversation_type,
-          flow_state: paymentCompletedConversation.flow_state,
-          awaiting_role: paymentCompletedConversation.awaiting_role,
-          chat_status: paymentCompletedConversation.chat_status,
-          flow_data: paymentCompletedConversation.flow_data,
-          current_action_data: paymentCompletedConversation.current_action_data,
-          created_at: paymentCompletedConversation.created_at,
-          updated_at: paymentCompletedConversation.updated_at
+          id: updatedConversation.id,
+          conversation_type: updatedConversation.conversation_type,
+          flow_state: updatedConversation.flow_state,
+          awaiting_role: updatedConversation.awaiting_role,
+          chat_status: updatedConversation.chat_status,
+          flow_data: updatedConversation.flow_data,
+          current_action_data: updatedConversation.current_action_data,
+          created_at: updatedConversation.created_at,
+          updated_at: updatedConversation.updated_at
         },
         payment_status: {
           status: "verified",
@@ -1734,7 +1677,7 @@ class BidController {
           conversation_id: conversation_id,
           flow_state: result.flow_state,
           awaiting_role: result.awaiting_role,
-          chat_status: result.flow_state === "work_approved" ? "completed" : "work_in_progress"
+          chat_status: result.flow_state === "work_approved" ? "real_time" : "real_time" // FIXED: Use 'real_time' to match database constraint
         });
 
         // Emit new_message event
@@ -1773,55 +1716,39 @@ class BidController {
 
 // Validation middleware
 const validateCreateBid = [
-  // Title (required)
   body("title")
-    .notEmpty()
     .isLength({ min: 3, max: 200 })
-    .withMessage("Title is required and must be between 3 and 200 characters"),
-  
-  // Description (required)
+    .withMessage("Title must be between 3 and 200 characters"),
   body("description")
-    .notEmpty()
-    .isLength({ min: 50, max: 2000 })
-    .withMessage("Description is required and must be between 50 and 2000 characters"),
-  
-  // Budget validation
+    .optional()
+    .isLength({ min: 0, max: 2000 })
+    .withMessage("Description must be less than 2000 characters"),
   body("min_budget")
-    .notEmpty()
     .isFloat({ min: 0 })
-    .withMessage("Minimum budget is required and must be a positive number"),
+    .withMessage("Min budget must be a positive number"),
   body("max_budget")
-    .notEmpty()
     .isFloat({ min: 0 })
-    .withMessage("Maximum budget is required and must be a positive number"),
-  
-  // Custom validation for budget relationship
-  body().custom((value) => {
-    if (value.min_budget && value.max_budget && parseFloat(value.min_budget) > parseFloat(value.max_budget)) {
-      throw new Error("Maximum budget must be greater than or equal to minimum budget");
-    }
-    return true;
-  }),
-  
-  // Requirements (optional)
+    .withMessage("Max budget must be a positive number"),
   body("requirements")
     .optional()
-    .isLength({ max: 1000 })
+    .isLength({ min: 0, max: 1000 })
     .withMessage("Requirements must be less than 1000 characters"),
-  
-  // Required fields
   body("language")
-    .notEmpty()
-    .withMessage("Language is required"),
+    .optional()
+    .isLength({ min: 0, max: 50 })
+    .withMessage("Language must be less than 50 characters"),
   body("platform")
-    .notEmpty()
-    .withMessage("Platform is required"),
+    .optional()
+    .isLength({ min: 0, max: 50 })
+    .withMessage("Platform must be less than 50 characters"),
   body("content_type")
-    .notEmpty()
-    .withMessage("Content type is required"),
+    .optional()
+    .isLength({ min: 0, max: 50 })
+    .withMessage("Content type must be less than 50 characters"),
   body("category")
-    .notEmpty()
-    .withMessage("Category is required"),
+    .optional()
+    .isLength({ min: 0, max: 50 })
+    .withMessage("Category must be less than 50 characters"),
   body("expiry_date")
     .optional()
     .isISO8601()
