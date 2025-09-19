@@ -1074,6 +1074,285 @@ class CampaignController {
       });
     }
   }
+
+  /**
+   * Verify automated flow payment and transition to real-time chat
+   */
+  async verifyAutomatedFlowPayment(req, res) {
+    try {
+      const { 
+        razorpay_order_id, 
+        razorpay_payment_id, 
+        razorpay_signature, 
+        conversation_id 
+      } = req.body;
+      const userId = req.user.id;
+
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !conversation_id) {
+        return res.status(400).json({
+          success: false,
+          message: "Missing required payment verification parameters"
+        });
+      }
+
+      // Verify user is part of this conversation
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("brand_owner_id, influencer_id, campaign_id")
+        .eq("id", conversation_id)
+        .single();
+
+      if (convError || !conversation) {
+        return res.status(404).json({
+          success: false,
+          message: "Conversation not found"
+        });
+      }
+
+      if (conversation.brand_owner_id !== userId && conversation.influencer_id !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied"
+        });
+      }
+
+      // Verify Razorpay signature
+      const crypto = require('crypto');
+      const text = `${razorpay_order_id}|${razorpay_payment_id}`;
+      const expectedSignature = crypto
+        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(text)
+        .digest('hex');
+
+      if (razorpay_signature !== expectedSignature) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid payment signature"
+        });
+      }
+
+      // Check for duplicate payment
+      const { data: existingTransaction } = await supabaseAdmin
+        .from("transactions")
+        .select("id")
+        .eq("razorpay_payment_id", razorpay_payment_id)
+        .single();
+
+      if (existingTransaction) {
+        return res.status(400).json({
+          success: false,
+          message: "Payment already processed"
+        });
+      }
+
+      // Get payment amount and request details
+      let paymentAmount = 1000; // Default amount in paise
+      let request = null;
+      
+      if (conversation.request_id) {
+        const { data: requestData } = await supabaseAdmin
+          .from("requests")
+          .select("id, final_agreed_amount, influencer_id, campaign_id, bid_id")
+          .eq("id", conversation.request_id)
+          .single();
+        
+        request = requestData;
+        paymentAmount = Math.round((request?.final_agreed_amount || 1000) * 100); // Convert to paise
+      }
+
+      // Get influencer's wallet
+      const { data: wallet, error: walletError } = await supabaseAdmin
+        .from("wallets")
+        .select("id, balance_paise")
+        .eq("user_id", conversation.influencer_id)
+        .single();
+
+      if (walletError || !wallet) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to get influencer wallet"
+        });
+      }
+
+      // Update wallet balance (add payment amount in paise)
+      const newBalance = (wallet.balance_paise || 0) + paymentAmount;
+      const { error: walletUpdateError } = await supabaseAdmin
+        .from("wallets")
+        .update({ 
+          balance_paise: newBalance,
+          balance: newBalance / 100 // Keep old balance field for compatibility
+        })
+        .eq("id", wallet.id);
+
+      if (walletUpdateError) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to update wallet balance"
+        });
+      }
+
+      // Upsert payment order: update if order already exists
+      const { data: existingOrder } = await supabaseAdmin
+        .from("payment_orders")
+        .select("id, status")
+        .eq("razorpay_order_id", razorpay_order_id)
+        .single();
+
+      let paymentOrder;
+      if (existingOrder) {
+        const { data: updatedOrder, error: updateOrderError } = await supabaseAdmin
+          .from("payment_orders")
+          .update({
+            conversation_id: conversation_id,
+            amount_paise: paymentAmount,
+            currency: "INR",
+            status: "verified",
+            razorpay_payment_id: razorpay_payment_id,
+            razorpay_signature: razorpay_signature,
+            metadata: {
+              conversation_type: conversation.campaign_id ? "campaign" : "bid",
+              brand_owner_id: conversation.brand_owner_id,
+              influencer_id: conversation.influencer_id
+            }
+          })
+          .eq("id", existingOrder.id)
+          .select()
+          .single();
+
+        if (updateOrderError) {
+          console.error("Payment order update error:", updateOrderError);
+          return res.status(500).json({ success: false, message: "Failed to update payment order" });
+        }
+        paymentOrder = updatedOrder;
+      } else {
+        const { data: insertedOrder, error: insertOrderError } = await supabaseAdmin
+          .from("payment_orders")
+          .insert({
+            conversation_id: conversation_id,
+            amount_paise: paymentAmount,
+            currency: "INR",
+            status: "verified",
+            razorpay_order_id: razorpay_order_id,
+            razorpay_payment_id: razorpay_payment_id,
+            razorpay_signature: razorpay_signature,
+            metadata: {
+              conversation_type: conversation.campaign_id ? "campaign" : "bid",
+              brand_owner_id: conversation.brand_owner_id,
+              influencer_id: conversation.influencer_id
+            }
+          })
+          .select()
+          .single();
+
+        if (insertOrderError) {
+          console.error("Payment order creation error:", insertOrderError);
+          return res.status(500).json({ success: false, message: "Failed to create payment order" });
+        }
+        paymentOrder = insertedOrder;
+      }
+
+      // Create escrow hold record after payment order is created
+      let escrowHold = null;
+      if (request) {
+        const { data: newEscrowHold, error: escrowError } = await supabaseAdmin
+          .from('escrow_holds')
+          .insert({
+            conversation_id: conversation_id,
+            payment_order_id: paymentOrder.id,
+            amount_paise: paymentAmount,
+            status: 'held',
+            release_reason: 'Payment held in escrow until work completion',
+            created_at: new Date().toISOString()
+          })
+          .select()
+          .single();
+
+        if (escrowError) {
+          console.error("Escrow hold creation error:", escrowError);
+          // Continue anyway as the payment is processed
+        } else {
+          escrowHold = newEscrowHold;
+        }
+      }
+
+      // Update conversation to payment completed and real-time chat
+      const { error: conversationUpdateError } = await supabaseAdmin
+        .from("conversations")
+        .update({
+          flow_state: "payment_completed",
+          awaiting_role: "influencer",
+          chat_status: "real_time"
+        })
+        .eq("id", conversation_id);
+
+      if (conversationUpdateError) {
+        console.error("Conversation update error:", conversationUpdateError);
+        return res.status(500).json({ success: false, message: "Failed to update conversation" });
+      }
+
+      // Create transaction record
+      const transactionData = {
+        wallet_id: wallet.id,
+        user_id: conversation.influencer_id,
+        amount: paymentAmount / 100, // compatibility
+        amount_paise: paymentAmount,
+        type: "credit",
+        direction: "credit",
+        description: `Payment for campaign collaboration - Order: ${razorpay_order_id}`,
+        status: "completed",
+        razorpay_order_id: razorpay_order_id,
+        razorpay_payment_id: razorpay_payment_id,
+        razorpay_signature: razorpay_signature,
+        metadata: {
+          conversation_id: conversation_id,
+          campaign_id: conversation.campaign_id,
+          payment_order_id: paymentOrder.id,
+          escrow_hold_id: escrowHold?.id
+        }
+      };
+
+      const { data: transaction, error: transactionError } = await supabaseAdmin
+        .from("transactions")
+        .insert(transactionData)
+        .select()
+        .single();
+
+      if (transactionError) {
+        console.error("Transaction creation error:", transactionError);
+        // Continue anyway as the payment is processed
+      }
+
+      // Send FCM notification for payment completion
+      const fcmService = require('../services/fcmService');
+      await fcmService.sendFlowStateNotification(
+        conversation_id, 
+        conversation.influencer_id, 
+        "payment_completed",
+        "Payment completed! You can now start working on the campaign."
+      );
+
+      res.json({
+        success: true,
+        message: "Payment verified successfully",
+        payment_order: paymentOrder,
+        transaction: transaction,
+        escrow_hold: escrowHold,
+        conversation: {
+          id: conversation_id,
+          flow_state: "payment_completed",
+          awaiting_role: "influencer",
+          chat_status: "real_time"
+        }
+      });
+    } catch (error) {
+      console.error("❌ Error verifying payment:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to verify payment",
+        error: error.message
+      });
+    }
+  }
 }
 
 // Validation middleware
