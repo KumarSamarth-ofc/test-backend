@@ -857,7 +857,8 @@ Please respond to confirm your interest and availability for this campaign.`,
                 conversation_id: conversationId,
                 conversation_type: conversation.campaign_id ? "campaign" : "bid",
                 brand_owner_id: conversation.brand_owner_id,
-                influencer_id: conversation.influencer_id
+                influencer_id: conversation.influencer_id,
+                payment_type: 'bid_campaign_collaboration'
               }
             });
           } catch (rpErr) {
@@ -866,6 +867,27 @@ Please respond to confirm your interest and availability for this campaign.`,
           }
 
           console.log("✅ [DEBUG] Razorpay order created:", razorpayOrder.id);
+
+          // Track brand owner payment (debit) before creating payment order
+          const enhancedBalanceService = require('./enhancedBalanceService');
+          const brandOwnerDebitResult = await enhancedBalanceService.trackBrandOwnerPayment(
+            conversation.brand_owner_id,
+            paymentAmountPaise,
+            conversationId,
+            {
+              razorpay_order_id: razorpayOrder.id,
+              conversation_type: conversation.campaign_id ? "campaign" : "bid",
+              influencer_id: conversation.influencer_id,
+              notes: `Payment initiated for ${conversation.campaign_id ? 'campaign' : 'bid'} collaboration`
+            }
+          );
+
+          if (!brandOwnerDebitResult.success) {
+            console.warn("⚠️ [DEBUG] Brand owner debit tracking failed:", brandOwnerDebitResult.error);
+            // Continue anyway as payment order creation is more critical
+          } else {
+            console.log("✅ [DEBUG] Brand owner debit tracked:", brandOwnerDebitResult.transaction.id);
+          }
 
           // Create payment order in database
           console.log("🗃️  [DEBUG] Inserting payment_order row...");
@@ -881,7 +903,8 @@ Please respond to confirm your interest and availability for this campaign.`,
                 conversation_type: conversation.campaign_id ? "campaign" : "bid",
                 brand_owner_id: conversation.brand_owner_id,
                 influencer_id: conversation.influencer_id,
-                razorpay_receipt: razorpayOrder.receipt
+                razorpay_receipt: razorpayOrder.receipt,
+                brand_owner_debit_transaction_id: brandOwnerDebitResult.success ? brandOwnerDebitResult.transaction.id : null
               }
             })
             .select()

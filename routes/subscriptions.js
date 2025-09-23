@@ -7,6 +7,7 @@ const { SubscriptionController } = require('../controllers/subscriptionControlle
 router.get('/plans', SubscriptionController.getPlans);
 router.get('/payment-config', SubscriptionController.getPaymentConfig);
 router.post('/webhook', SubscriptionController.handleWebhook);
+router.post('/check-unprocessed-payments', SubscriptionController.checkUnprocessedPayments);
 
 // Protected routes (require authentication)
 router.get('/status', authService.authenticateToken, SubscriptionController.getSubscriptionStatus);

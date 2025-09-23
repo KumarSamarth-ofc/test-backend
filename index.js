@@ -252,6 +252,10 @@ app.post("/test-message", async (req, res) => {
   }
 });
 
+// Webhook routes (no auth required)
+const { SubscriptionController } = require("./controllers/subscriptionController");
+app.post("/webhook/razorpay", SubscriptionController.handleWebhook);
+
 // API routes
 app.use("/api/auth", authRoutes);
 app.use("/api/campaigns", campaignRoutes);

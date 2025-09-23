@@ -931,7 +931,7 @@ class SubscriptionController {
     try {
       const { event, payload } = req.body;
 
-      console.log(`Received webhook event: ${event}`, payload);
+      console.log(`🔔 [WEBHOOK] Received event: ${event}`, payload);
 
       // Verify webhook signature (optional for development)
       const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
@@ -943,7 +943,7 @@ class SubscriptionController {
           .digest("hex");
 
         if (signature !== expectedSignature) {
-          console.error("Invalid webhook signature");
+          console.error("❌ [WEBHOOK] Invalid webhook signature");
           return res.status(400).json({
             success: false,
             message: "Invalid webhook signature",
@@ -954,36 +954,453 @@ class SubscriptionController {
       // Handle different webhook events
       switch (event) {
         case "payment.captured":
-          // Handle successful payment
-          console.log("Processing payment.captured event");
-          await SubscriptionController.handlePaymentSuccess(
-            payload.payment.entity
-          );
+          // Handle successful payment - check if it's subscription or bid/campaign
+          console.log("🔔 [WEBHOOK] Processing payment.captured event");
+          await this.handlePaymentCaptured(payload.payment.entity);
           break;
         case "subscription.activated":
           // Handle subscription activation
-          console.log("Processing subscription.activated event");
+          console.log("🔔 [WEBHOOK] Processing subscription.activated event");
           await SubscriptionController.handleSubscriptionActivation(
             payload.subscription.entity
           );
           break;
         case "subscription.cancelled":
           // Handle subscription cancellation
-          console.log("Processing subscription.cancelled event");
+          console.log("🔔 [WEBHOOK] Processing subscription.cancelled event");
           await SubscriptionController.handleSubscriptionCancellation(
             payload.subscription.entity
           );
           break;
         default:
-          console.log(`Unhandled webhook event: ${event}`);
+          console.log(`🔔 [WEBHOOK] Unhandled event: ${event}`);
       }
 
       return res.json({ success: true });
     } catch (error) {
-      console.error("Webhook error:", error);
+      console.error("❌ [WEBHOOK] Error:", error);
       return res.status(500).json({
         success: false,
         message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Handle payment.captured webhook - determine if it's subscription or bid/campaign payment
+   */
+  async handlePaymentCaptured(payment) {
+    try {
+      console.log("🔔 [WEBHOOK] Payment captured:", {
+        id: payment.id,
+        order_id: payment.order_id,
+        amount: payment.amount,
+        currency: payment.currency,
+        status: payment.status
+      });
+
+      // Check if this is a subscription payment by looking for subscription in notes
+      if (payment.notes && payment.notes.subscription_id) {
+        console.log("🔔 [WEBHOOK] Processing subscription payment");
+        await SubscriptionController.handlePaymentSuccess(payment);
+        return;
+      }
+
+      // Check if this is a bid/campaign payment by looking for conversation_id in notes
+      if (payment.notes && payment.notes.conversation_id) {
+        console.log("🔔 [WEBHOOK] Processing bid/campaign payment");
+        await this.handleBidCampaignPayment(payment);
+        return;
+      }
+
+      // Check if this is a bid/campaign payment by looking up the order
+      console.log("🔔 [WEBHOOK] Checking payment order for conversation...");
+      await this.handleBidCampaignPaymentByOrder(payment);
+
+    } catch (error) {
+      console.error("❌ [WEBHOOK] Error handling payment captured:", error);
+    }
+  }
+
+  /**
+   * Handle bid/campaign payment by conversation_id in notes
+   */
+  async handleBidCampaignPayment(payment) {
+    try {
+      const conversationId = payment.notes.conversation_id;
+      console.log("🔔 [WEBHOOK] Processing payment for conversation:", conversationId);
+
+      // Check if payment already processed
+      const { supabaseAdmin } = require('../supabase/client');
+      const { data: existingTransaction } = await supabaseAdmin
+        .from("transactions")
+        .select("id")
+        .eq("razorpay_payment_id", payment.id)
+        .single();
+
+      if (existingTransaction) {
+        console.log("🔔 [WEBHOOK] Payment already processed, skipping");
+        return;
+      }
+
+      // Get conversation details
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("*")
+        .eq("id", conversationId)
+        .single();
+
+      if (convError || !conversation) {
+        console.error("❌ [WEBHOOK] Conversation not found:", conversationId);
+        return;
+      }
+
+      // Process the payment using the same logic as verification endpoint
+      await this.processWebhookPayment(conversation, payment);
+
+    } catch (error) {
+      console.error("❌ [WEBHOOK] Error handling bid/campaign payment:", error);
+    }
+  }
+
+  /**
+   * Handle bid/campaign payment by looking up the order
+   */
+  async handleBidCampaignPaymentByOrder(payment) {
+    try {
+      const { supabaseAdmin } = require('../supabase/client');
+      
+      // Look up payment order by razorpay_order_id
+      const { data: paymentOrder, error: orderError } = await supabaseAdmin
+        .from("payment_orders")
+        .select("*")
+        .eq("razorpay_order_id", payment.order_id)
+        .single();
+
+      if (orderError || !paymentOrder) {
+        console.log("🔔 [WEBHOOK] No payment order found for order:", payment.order_id);
+        return;
+      }
+
+      // Check if payment already processed
+      const { data: existingTransaction } = await supabaseAdmin
+        .from("transactions")
+        .select("id")
+        .eq("razorpay_payment_id", payment.id)
+        .single();
+
+      if (existingTransaction) {
+        console.log("🔔 [WEBHOOK] Payment already processed, skipping");
+        return;
+      }
+
+      // Get conversation details
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("*")
+        .eq("id", paymentOrder.conversation_id)
+        .single();
+
+      if (convError || !conversation) {
+        console.error("❌ [WEBHOOK] Conversation not found:", paymentOrder.conversation_id);
+        return;
+      }
+
+      console.log("🔔 [WEBHOOK] Found conversation via payment order:", conversation.id);
+      
+      // Process the payment using the same logic as verification endpoint
+      await this.processWebhookPayment(conversation, payment, paymentOrder);
+
+    } catch (error) {
+      console.error("❌ [WEBHOOK] Error handling payment by order:", error);
+    }
+  }
+
+  /**
+   * Process webhook payment using the same logic as verification endpoint
+   */
+  async processWebhookPayment(conversation, payment, paymentOrder = null) {
+    try {
+      console.log("🔔 [WEBHOOK] Processing payment for conversation:", conversation.id);
+
+      const { supabaseAdmin } = require('../supabase/client');
+      const enhancedBalanceService = require('../utils/enhancedBalanceService');
+
+      // Get payment amount
+      const paymentAmount = payment.amount; // Razorpay amount is already in paise
+      console.log("🔔 [WEBHOOK] Payment amount (paise):", paymentAmount);
+
+      // Add funds to influencer's wallet
+      const addFundsResult = await enhancedBalanceService.addFunds(
+        conversation.influencer_id,
+        paymentAmount,
+        {
+          conversation_id: conversation.id,
+          razorpay_order_id: payment.order_id,
+          razorpay_payment_id: payment.id,
+          conversation_type: conversation.campaign_id ? "campaign" : "bid",
+          brand_owner_id: conversation.brand_owner_id,
+          notes: `Payment received via webhook for ${conversation.campaign_id ? 'campaign' : 'bid'} collaboration`,
+          source: 'webhook'
+        }
+      );
+
+      if (!addFundsResult.success) {
+        console.error("❌ [WEBHOOK] Failed to add funds:", addFundsResult.error);
+        return;
+      }
+
+      console.log("✅ [WEBHOOK] Funds added successfully");
+
+      // Update or create payment order
+      if (paymentOrder) {
+        const { error: updateOrderError } = await supabaseAdmin
+          .from("payment_orders")
+          .update({
+            status: "verified",
+            razorpay_payment_id: payment.id,
+            razorpay_signature: payment.notes?.signature || null,
+            verified_at: new Date().toISOString()
+          })
+          .eq("id", paymentOrder.id);
+
+        if (updateOrderError) {
+          console.error("❌ [WEBHOOK] Failed to update payment order:", updateOrderError);
+        }
+      } else {
+        // Create new payment order
+        const { data: newOrder, error: createOrderError } = await supabaseAdmin
+          .from("payment_orders")
+          .insert({
+            conversation_id: conversation.id,
+            amount_paise: paymentAmount,
+            currency: payment.currency,
+            status: "verified",
+            razorpay_order_id: payment.order_id,
+            razorpay_payment_id: payment.id,
+            verified_at: new Date().toISOString(),
+            metadata: {
+              conversation_type: conversation.campaign_id ? "campaign" : "bid",
+              brand_owner_id: conversation.brand_owner_id,
+              influencer_id: conversation.influencer_id,
+              source: 'webhook'
+            }
+          })
+          .select()
+          .single();
+
+        if (createOrderError) {
+          console.error("❌ [WEBHOOK] Failed to create payment order:", createOrderError);
+        } else {
+          paymentOrder = newOrder;
+        }
+      }
+
+      // Create escrow hold if needed
+      if (paymentOrder) {
+        const { data: escrowHold, error: escrowError } = await supabaseAdmin
+          .from('escrow_holds')
+          .insert({
+            conversation_id: conversation.id,
+            payment_order_id: paymentOrder.id,
+            amount_paise: paymentAmount,
+            status: 'held',
+            release_reason: 'Payment held in escrow until work completion',
+            created_at: new Date().toISOString()
+          })
+          .select()
+          .single();
+
+        if (escrowError) {
+          console.error("❌ [WEBHOOK] Escrow hold creation error:", escrowError);
+        } else {
+          console.log("✅ [WEBHOOK] Escrow hold created:", escrowHold.id);
+        }
+      }
+
+      // Update conversation state
+      const { error: conversationUpdateError } = await supabaseAdmin
+        .from("conversations")
+        .update({
+          flow_state: "payment_completed",
+          awaiting_role: "influencer",
+          chat_status: "real_time",
+          payment_completed: true,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", conversation.id);
+
+      if (conversationUpdateError) {
+        console.error("❌ [WEBHOOK] Failed to update conversation:", conversationUpdateError);
+      } else {
+        console.log("✅ [WEBHOOK] Conversation updated to payment_completed");
+      }
+
+      // Send notifications
+      const io = require('../index').io;
+      if (io) {
+        // Emit payment completion events
+        io.to(`conversation_${conversation.id}`).emit("payment_status_update", {
+          conversation_id: conversation.id,
+          status: "completed",
+          message: "Payment has been successfully processed via webhook",
+          chat_status: "real_time"
+        });
+
+        // Notify both users
+        io.to(`user_${conversation.brand_owner_id}`).emit("notification", {
+          type: "payment_completed",
+          data: {
+            conversation_id: conversation.id,
+            message: "Payment completed successfully",
+            chat_status: "real_time"
+          }
+        });
+
+        io.to(`user_${conversation.influencer_id}`).emit("notification", {
+          type: "payment_completed",
+          data: {
+            conversation_id: conversation.id,
+            message: "Payment completed successfully",
+            chat_status: "real_time"
+          }
+        });
+      }
+
+      console.log("✅ [WEBHOOK] Payment processing completed successfully");
+
+    } catch (error) {
+      console.error("❌ [WEBHOOK] Error processing webhook payment:", error);
+    }
+  }
+
+  /**
+   * Check for unprocessed payments (fallback mechanism)
+   * This can be called periodically to catch any missed payments
+   */
+  async checkUnprocessedPayments(req, res) {
+    try {
+      console.log("🔍 [FALLBACK] Checking for unprocessed payments...");
+      
+      const { supabaseAdmin } = require('../supabase/client');
+      
+      // Get payment orders that are created but not verified
+      const { data: unprocessedOrders, error: ordersError } = await supabaseAdmin
+        .from("payment_orders")
+        .select("*")
+        .eq("status", "created")
+        .not("razorpay_order_id", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(10);
+
+      if (ordersError) {
+        console.error("❌ [FALLBACK] Error fetching unprocessed orders:", ordersError);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch unprocessed orders"
+        });
+      }
+
+      if (!unprocessedOrders || unprocessedOrders.length === 0) {
+        console.log("✅ [FALLBACK] No unprocessed payments found");
+        return res.json({
+          success: true,
+          message: "No unprocessed payments found",
+          count: 0
+        });
+      }
+
+      console.log(`🔍 [FALLBACK] Found ${unprocessedOrders.length} unprocessed orders`);
+
+      const results = {
+        processed: 0,
+        errors: 0,
+        details: []
+      };
+
+      // Check each order with Razorpay
+      const Razorpay = require('razorpay');
+      const razorpay = new Razorpay({
+        key_id: process.env.RAZORPAY_KEY_ID,
+        key_secret: process.env.RAZORPAY_KEY_SECRET,
+      });
+
+      for (const order of unprocessedOrders) {
+        try {
+          // Get order details from Razorpay
+          const razorpayOrder = await razorpay.orders.fetch(order.razorpay_order_id);
+          
+          if (razorpayOrder.status === 'paid') {
+            console.log(`🔍 [FALLBACK] Order ${order.razorpay_order_id} is paid, processing...`);
+            
+            // Get conversation details
+            const { data: conversation, error: convError } = await supabaseAdmin
+              .from("conversations")
+              .select("*")
+              .eq("id", order.conversation_id)
+              .single();
+
+            if (convError || !conversation) {
+              console.error(`❌ [FALLBACK] Conversation not found for order ${order.id}`);
+              results.errors++;
+              continue;
+            }
+
+            // Get payment details
+            const payments = razorpayOrder.payments;
+            if (payments && payments.length > 0) {
+              const payment = payments[0]; // Get the first (and usually only) payment
+              
+              // Check if already processed
+              const { data: existingTransaction } = await supabaseAdmin
+                .from("transactions")
+                .select("id")
+                .eq("razorpay_payment_id", payment.id)
+                .single();
+
+              if (existingTransaction) {
+                console.log(`🔍 [FALLBACK] Payment ${payment.id} already processed, skipping`);
+                continue;
+              }
+
+              // Process the payment
+              await this.processWebhookPayment(conversation, payment, order);
+              results.processed++;
+              results.details.push({
+                order_id: order.id,
+                razorpay_order_id: order.razorpay_order_id,
+                payment_id: payment.id,
+                status: 'processed'
+              });
+            }
+          } else {
+            console.log(`🔍 [FALLBACK] Order ${order.razorpay_order_id} status: ${razorpayOrder.status}`);
+          }
+        } catch (error) {
+          console.error(`❌ [FALLBACK] Error processing order ${order.id}:`, error);
+          results.errors++;
+          results.details.push({
+            order_id: order.id,
+            razorpay_order_id: order.razorpay_order_id,
+            status: 'error',
+            error: error.message
+          });
+        }
+      }
+
+      console.log(`✅ [FALLBACK] Processed ${results.processed} payments, ${results.errors} errors`);
+
+      return res.json({
+        success: true,
+        message: `Processed ${results.processed} payments, ${results.errors} errors`,
+        results
+      });
+
+    } catch (error) {
+      console.error("❌ [FALLBACK] Error checking unprocessed payments:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error"
       });
     }
   }

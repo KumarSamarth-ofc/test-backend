@@ -1,7 +1,6 @@
 const { supabaseAdmin } = require('../supabase/client');
 const stateMachineService = require('./stateMachineService');
 const escrowService = require('./escrowService');
-const fcmService = require('./fcmService');
 
 class AutomatedFlowService {
   constructor() {
@@ -13,45 +12,17 @@ class AutomatedFlowService {
   }
 
   /**
-   * Emit conversation state change event
-   */
-  emitConversationStateChange(conversationId, stateChange) {
-    if (this.io) {
-      this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
-        conversation_id: conversationId,
-        previous_state: stateChange.from,
-        new_state: stateChange.to,
-        reason: stateChange.reason,
-        timestamp: new Date().toISOString()
-      });
-    }
-  }
-
-  /**
    * Emit socket events for automated messages
    */
   emitMessageEvents(conversation, message, receiverId) {
     if (this.io) {
-      // Prepare conversation context
-      const conversationContext = {
-        id: conversation.id,
-        chat_status: conversation.chat_status,
-        flow_state: conversation.flow_state,
-        awaiting_role: conversation.awaiting_role,
-        conversation_type: conversation.campaign_id ? 'campaign' : 
-                          conversation.bid_id ? 'bid' : 'direct',
-        automation_enabled: conversation.automation_enabled || true, // Automated flow is always enabled
-        current_action_data: conversation.current_action_data
-      };
-
-      // Emit to conversation room with context
+      // Emit to conversation room
       this.io.to(`conversation_${conversation.id}`).emit('new_message', {
         conversation_id: conversation.id,
         message: message,
-        conversation_context: conversationContext,
       });
 
-      // Emit notification to receiver with context
+      // Emit notification to receiver
       this.io.to(`user_${receiverId}`).emit('notification', {
         type: 'message',
         data: {
@@ -59,7 +30,6 @@ class AutomatedFlowService {
           title: 'New message',
           body: message.message,
           created_at: message.created_at,
-          conversation_context: conversationContext,
           payload: { 
             conversation_id: conversation.id, 
             message_id: message.id, 
@@ -70,42 +40,6 @@ class AutomatedFlowService {
           sender_id: message.sender_id,
           receiver_id: receiverId,
         },
-      });
-    }
-
-    // Send FCM push notification for automated messages
-    const fcmService = require('./fcmService');
-    fcmService.sendMessageNotification(
-      conversation.id,
-      message,
-      message.sender_id,
-      receiverId
-    ).then(result => {
-      if (result.success) {
-        console.log(`✅ FCM automated message notification sent: ${result.sent} successful, ${result.failed} failed`);
-      } else {
-        console.error(`❌ FCM automated message notification failed:`, result.error);
-      }
-    }).catch(error => {
-      console.error(`❌ FCM automated message notification error:`, error);
-    });
-
-    // Emit conversation list update to receiver
-    if (this.io) {
-      console.log(`📡 [DEBUG] Socket emitting conversation_list_updated for automated message`);
-      this.io.to(`user_${receiverId}`).emit('conversation_list_updated', {
-        conversation_id: conversation.id,
-        message: message,
-        conversation_context: conversationContext,
-        action: 'message_received'
-      });
-
-      // Emit unread count update to receiver
-      console.log(`📡 [DEBUG] Socket emitting unread_count_updated for automated message`);
-      this.io.to(`user_${receiverId}`).emit('unread_count_updated', {
-        conversation_id: conversation.id,
-        unread_count: 1, // Increment by 1
-        action: 'increment'
       });
     }
   }
@@ -144,32 +78,13 @@ class AutomatedFlowService {
         throw new Error('Conversation already exists');
       }
 
-      // Create request record first to track the collaboration
-      const { data: request, error: requestError } = await supabaseAdmin
-        .from('requests')
-        .insert({
-          bid_id: bidId,
-          influencer_id: influencerId,
-          status: 'connected',
-          final_agreed_amount: parseFloat(proposedAmount),
-          initial_payment: Math.round(parseFloat(proposedAmount) * 0.3 * 100) / 100, // 30% in paise
-          final_payment: Math.round(parseFloat(proposedAmount) * 0.7 * 100) / 100   // 70% in paise
-        })
-        .select()
-        .single();
-
-      if (requestError) {
-        throw new Error(`Failed to create request: ${requestError.message}`);
-      }
-
-      // Create conversation linked to the request
+      // Create conversation directly
       const { data: conversation, error: convError } = await supabaseAdmin
         .from('conversations')
         .insert({
           bid_id: bidId,
           brand_owner_id: brandOwnerId,
           influencer_id: influencerId,
-          request_id: request.id,
           flow_state: 'influencer_responding',
           awaiting_role: 'influencer',
           chat_status: 'automated',
@@ -220,7 +135,6 @@ class AutomatedFlowService {
       return {
         success: true,
         conversation,
-        request,
         message
       };
     } catch (error) {
@@ -287,23 +201,6 @@ class AutomatedFlowService {
           newFlowState = 'influencer_price_response';
           newAwaitingRole = 'influencer';
           
-          // Update request with the price offer
-          if (conversation.request_id) {
-            const { error: requestUpdateError } = await supabaseAdmin
-              .from('requests')
-              .update({
-                final_agreed_amount: parseFloat(data.price),
-                initial_payment: Math.round(parseFloat(data.price) * 0.3 * 100) / 100,
-                final_payment: Math.round(parseFloat(data.price) * 0.7 * 100) / 100,
-                updated_at: new Date().toISOString()
-              })
-              .eq('id', conversation.request_id);
-
-            if (requestUpdateError) {
-              console.error('Failed to update request with price offer:', requestUpdateError);
-            }
-          }
-
           // Update conversation flow data with negotiation history
           const currentFlowData = conversation.flow_data || {};
           const negotiationHistory = currentFlowData.negotiation_history || [];
@@ -367,22 +264,6 @@ class AutomatedFlowService {
           
           if (agreedAmount <= 0) {
             throw new Error('Agreed amount is required for payment');
-          }
-
-          // Update request status to negotiating
-          if (conversation.request_id) {
-            const { error: requestUpdateError } = await supabaseAdmin
-              .from('requests')
-              .update({
-                status: 'negotiating',
-                final_agreed_amount: parseFloat(agreedAmount),
-                updated_at: new Date().toISOString()
-              })
-              .eq('id', conversation.request_id);
-
-            if (requestUpdateError) {
-              console.error('Failed to update request status:', requestUpdateError);
-            }
           }
 
           // Create payment order in the database
@@ -498,9 +379,6 @@ class AutomatedFlowService {
         updated_at: new Date().toISOString()
       };
 
-      // Note: final_agreed_amount field removed as it doesn't exist in conversations table
-      // Price information should be passed as data parameter when needed
-
       const { error: updateError } = await supabaseAdmin
         .from('conversations')
         .update(updateData)
@@ -562,7 +440,7 @@ class AutomatedFlowService {
       let newFlowState, newAwaitingRole, newMessage;
 
       switch (action) {
-        case 'accept':
+        case 'accept_connection':
           newFlowState = 'brand_owner_details';
           newAwaitingRole = 'brand_owner';
           
@@ -577,7 +455,7 @@ class AutomatedFlowService {
           };
           break;
 
-        case 'reject':
+        case 'reject_connection':
           newFlowState = 'collaboration_cancelled';
           newAwaitingRole = null;
           
@@ -614,24 +492,6 @@ class AutomatedFlowService {
           // Get the current amount from flow data
           const currentAmount = conversation.flow_data?.current_amount || data.price;
           
-          // Update request with final agreed amount
-          if (conversation.request_id) {
-            const { error: requestUpdateError } = await supabaseAdmin
-              .from('requests')
-              .update({
-                final_agreed_amount: parseFloat(currentAmount),
-                initial_payment: Math.round(parseFloat(currentAmount) * 0.3 * 100) / 100,
-                final_payment: Math.round(parseFloat(currentAmount) * 0.7 * 100) / 100,
-                status: 'negotiating',
-                updated_at: new Date().toISOString()
-              })
-              .eq('id', conversation.request_id);
-
-            if (requestUpdateError) {
-              console.error('Failed to update request with accepted price:', requestUpdateError);
-            }
-          }
-
           // Update conversation flow data
           const acceptFlowData = conversation.flow_data || {};
           const acceptNegotiationHistory = acceptFlowData.negotiation_history || [];
@@ -810,21 +670,6 @@ class AutomatedFlowService {
           };
           break;
 
-        case 'start_work':
-          newFlowState = 'work_in_progress';
-          newAwaitingRole = 'influencer';
-          
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.influencer_id,
-            receiver_id: conversation.brand_owner_id,
-            message: '🚀 **Work Started**\n\nI\'ve started working on the project. I\'ll submit the completed work when ready.',
-            message_type: 'system',
-            is_automated: true,
-            action_required: false
-          };
-          break;
-
         default:
           throw new Error(`Unknown action: ${action}`);
       }
@@ -949,13 +794,6 @@ class AutomatedFlowService {
         throw new Error('Conversation not found');
       }
 
-      // Store previous state for state change event
-      const previousState = {
-        chat_status: conversation.chat_status,
-        flow_state: conversation.flow_state,
-        awaiting_role: conversation.awaiting_role
-      };
-
       // Update conversation state
       const { error: updateError } = await supabaseAdmin
         .from('conversations')
@@ -973,17 +811,6 @@ class AutomatedFlowService {
       if (updateError) {
         throw new Error(`Failed to update conversation: ${updateError.message}`);
       }
-
-      // Emit conversation state change event
-      this.emitConversationStateChange(conversationId, {
-        from: previousState,
-        to: {
-          chat_status: conversation.chat_status,
-          flow_state: 'work_submitted',
-          awaiting_role: 'brand_owner'
-        },
-        reason: 'work_submitted'
-      });
 
       // Create message
       const { data: message, error: messageError } = await supabaseAdmin
@@ -1059,7 +886,7 @@ class AutomatedFlowService {
       let newFlowState, newAwaitingRole, newMessage;
 
       if (action === 'approve_work') {
-        newFlowState = 'real_time'; // Transition to real-time chat after work approval
+        newFlowState = 'work_approved';
         newAwaitingRole = null;
         
         // Release escrow funds
@@ -1074,26 +901,11 @@ class AutomatedFlowService {
           }
         }
 
-        // Update request status to completed
-        if (conversation.request_id) {
-          const { error: requestUpdateError } = await supabaseAdmin
-            .from('requests')
-            .update({
-              status: 'completed',
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', conversation.request_id);
-
-          if (requestUpdateError) {
-            console.error('Failed to update request status:', requestUpdateError);
-          }
-        }
-
         newMessage = {
           conversation_id: conversationId,
           sender_id: conversation.brand_owner_id,
           receiver_id: conversation.influencer_id,
-          message: '🎉 **Work Approved!**\n\nExcellent work! I approve the submission. Payment has been released. You can now communicate in real-time for any follow-up discussions.',
+          message: 'Excellent work! I approve the submission. Payment has been released.',
           message_type: 'system',
           is_automated: true,
           action_required: false
@@ -1127,13 +939,6 @@ class AutomatedFlowService {
         throw new Error(`Unknown review action: ${action}`);
       }
 
-      // Store previous state for state change event
-      const previousState = {
-        chat_status: conversation.chat_status,
-        flow_state: conversation.flow_state,
-        awaiting_role: conversation.awaiting_role
-      };
-
       // Update conversation state
       const { error: updateError } = await supabaseAdmin
         .from('conversations')
@@ -1148,30 +953,6 @@ class AutomatedFlowService {
         throw new Error(`Failed to update conversation: ${updateError.message}`);
       }
 
-      // Emit conversation state change event
-      this.emitConversationStateChange(conversationId, {
-        from: previousState,
-        to: {
-          chat_status: conversation.chat_status,
-          flow_state: newFlowState,
-          awaiting_role: newAwaitingRole
-        },
-        reason: action === 'approve_work' ? 'work_approved' : 'revision_requested'
-      });
-
-      // Send FCM notification for flow state change
-      const fcmService = require('./fcmService');
-      const targetUserId = action === 'approve_work' ? conversation.influencer_id : conversation.influencer_id;
-      fcmService.sendFlowStateNotification(conversationId, targetUserId, newFlowState).then(result => {
-        if (result.success) {
-          console.log(`✅ FCM flow state notification sent: ${result.sent} successful, ${result.failed} failed`);
-        } else {
-          console.error(`❌ FCM flow state notification failed:`, result.error);
-        }
-      }).catch(error => {
-        console.error(`❌ FCM flow state notification error:`, error);
-      });
-
       // Create message
       const { data: createdMessage, error: messageError } = await supabaseAdmin
         .from('messages')
@@ -1182,6 +963,12 @@ class AutomatedFlowService {
       if (messageError) {
         throw new Error(`Failed to create message: ${messageError.message}`);
       }
+
+      // Emit socket events for the automated message
+      const receiverId = conversation.brand_owner_id === newMessage.sender_id 
+        ? conversation.influencer_id 
+        : conversation.brand_owner_id;
+      this.emitMessageEvents(conversation, createdMessage, receiverId);
 
       return {
         success: true,

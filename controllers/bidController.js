@@ -1105,23 +1105,52 @@ class BidController {
         });
       }
 
-      // Update wallet balance (add payment amount in paise)
-      const newBalance = (wallet.balance_paise || 0) + paymentAmount;
-      const { error: walletUpdateError } = await supabaseAdmin
-        .from("wallets")
-        .update({ 
-          balance_paise: newBalance,
-          balance: newBalance / 100 // Keep old balance field for compatibility
-        })
-        .eq("id", wallet.id);
+      // Use enhanced balance service to add funds properly
+      console.log("🔍 [DEBUG] Starting wallet fund addition process...");
+      console.log("🔍 [DEBUG] Influencer ID:", conversation.influencer_id);
+      console.log("🔍 [DEBUG] Payment amount (paise):", paymentAmount);
+      console.log("🔍 [DEBUG] Conversation ID:", conversation_id);
+      
+      const enhancedBalanceService = require('../utils/enhancedBalanceService');
+      
+      // First check if wallet exists
+      console.log("🔍 [DEBUG] Checking if wallet exists for influencer...");
+      const walletCheckResult = await enhancedBalanceService.getWalletBalance(conversation.influencer_id);
+      console.log("🔍 [DEBUG] Wallet check result:", walletCheckResult);
+      
+      const addFundsResult = await enhancedBalanceService.addFunds(
+        conversation.influencer_id,
+        paymentAmount,
+        {
+          conversation_id: conversation_id,
+          razorpay_order_id: razorpay_order_id,
+          razorpay_payment_id: razorpay_payment_id,
+          conversation_type: conversation.campaign_id ? "campaign" : "bid",
+          brand_owner_id: conversation.brand_owner_id,
+          bid_id: conversation.bid_id,
+          campaign_id: conversation.campaign_id,
+          notes: `Payment received for ${conversation.campaign_id ? 'campaign' : 'bid'} collaboration`
+        }
+      );
 
-      if (walletUpdateError) {
-        console.error("Wallet update error:", walletUpdateError);
+      console.log("🔍 [DEBUG] Enhanced balance service result:", addFundsResult);
+
+      if (!addFundsResult.success) {
+        console.error("❌ [DEBUG] Enhanced balance service error:", addFundsResult.error);
+        console.error("❌ [DEBUG] Full error details:", JSON.stringify(addFundsResult, null, 2));
         return res.status(500).json({
           success: false,
-          message: "Failed to update wallet balance"
+          message: "Failed to add funds to wallet",
+          debug: {
+            error: addFundsResult.error,
+            influencer_id: conversation.influencer_id,
+            payment_amount: paymentAmount,
+            conversation_id: conversation_id
+          }
         });
       }
+
+      console.log("✅ [DEBUG] Enhanced balance service: Funds added successfully");
 
       // Upsert payment order: update if order already exists
       const { data: existingOrder } = await supabaseAdmin
@@ -1204,6 +1233,25 @@ class BidController {
           // Continue anyway as the payment is processed
         } else {
           escrowHold = newEscrowHold;
+          
+          // Use enhanced balance service to freeze funds in escrow
+          const freezeResult = await enhancedBalanceService.freezeFunds(
+            conversation.influencer_id,
+            paymentAmount,
+            newEscrowHold.id,
+            {
+              conversation_id: conversation_id,
+              payment_order_id: paymentOrder.id,
+              notes: `Funds frozen in escrow for ${conversation.campaign_id ? 'campaign' : 'bid'} collaboration`
+            }
+          );
+
+          if (!freezeResult.success) {
+            console.warn("⚠️ Escrow freeze failed:", freezeResult.error);
+            // Continue anyway as escrow hold is created
+          } else {
+            console.log("✅ Enhanced balance service: Funds frozen in escrow");
+          }
         }
       }
 
