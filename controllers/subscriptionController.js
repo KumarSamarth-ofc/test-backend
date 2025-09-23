@@ -84,7 +84,7 @@ class SubscriptionController {
    */
   async createSubscriptionOrder(req, res) {
     try {
-      const { plan_id } = req.body;
+      const { plan_id, coupon_code } = req.body;
       const userId = req.user.id;
 
       if (!plan_id) {
@@ -117,9 +117,78 @@ class SubscriptionController {
         });
       }
 
-      // Create RazorPay order first
+      let finalAmount = plan.price;
+      let couponData = null;
+      let discountAmount = 0;
+
+      // Validate coupon if provided (don't apply yet)
+      if (coupon_code) {
+        const { data: couponResult, error: couponError } = await supabaseAdmin.rpc("validate_coupon", {
+          p_coupon_code: coupon_code,
+          p_user_id: userId,
+          p_order_amount: parseFloat(plan.price),
+        });
+
+        if (couponError || !couponResult || !couponResult.valid) {
+          return res.status(400).json({
+            success: false,
+            message: couponResult?.error || "Invalid coupon code",
+          });
+        }
+
+        // Calculate discount without applying the coupon
+        couponData = {
+          code: coupon_code,
+          discount_amount: couponResult.discount_amount,
+          final_amount: couponResult.final_amount,
+          is_free: couponResult.final_amount === 0,
+          applied: false  // Not applied yet
+        };
+        finalAmount = couponResult.final_amount;
+        discountAmount = couponResult.discount_amount;
+      }
+
+      // Calculate subscription dates for reference
+      const startDate = new Date();
+      const endDate = SubscriptionController.calculateEndDate(
+        plan.period,
+        startDate
+      );
+
+      // Handle free subscriptions (amount = 0)
+      if (finalAmount === 0) {
+        // For free subscriptions, return success without creating Razorpay order
+        return res.json({
+          success: true,
+          order: {
+            id: `free_order_${Date.now()}`,
+            amount: 0,
+            currency: "INR",
+            receipt: `free_rec_${Date.now().toString().slice(-8)}`,
+          },
+          subscription_data: {
+            plan_id: plan_id,
+            start_date: startDate.toISOString(),
+            end_date: endDate.toISOString(),
+            amount_paid: 0,
+            original_amount: plan.price,
+            discount_amount: discountAmount,
+          },
+          plan: plan,
+          coupon: couponData,
+          pricing: {
+            original_price: plan.price,
+            discount_amount: discountAmount,
+            final_price: 0,
+            savings: discountAmount
+          },
+          is_free: true
+        });
+      }
+
+      // Create RazorPay order for paid subscriptions
       const orderOptions = {
-        amount: Math.round(plan.price * 100), // Convert to paise
+        amount: Math.round(finalAmount * 100), // Convert to paise
         currency: "INR",
         receipt: `rec_${Date.now().toString().slice(-8)}_${Math.random()
           .toString(36)
@@ -128,17 +197,15 @@ class SubscriptionController {
           user_id: userId,
           plan_id: plan_id,
           plan_name: plan.name,
+          coupon_code: coupon_code || null,
+          original_amount: plan.price,
+          final_amount: finalAmount,
+          discount_amount: discountAmount,
+          coupon_applied: couponData ? JSON.stringify(couponData) : null,
         },
       };
 
       const order = await razorpay.orders.create(orderOptions);
-
-      // Calculate subscription dates for reference
-      const startDate = new Date();
-      const endDate = SubscriptionController.calculateEndDate(
-        plan.period,
-        startDate
-      );
 
       // Check if user already has an active subscription
       const { data: existingActiveSubscription } = await supabaseAdmin
@@ -169,11 +236,25 @@ class SubscriptionController {
               plan_id: plan_id,
               start_date: startDate.toISOString(),
               end_date: endDate.toISOString(),
-              amount_paid: plan.price,
+              amount_paid: finalAmount,
+              original_amount: plan.price,
+              discount_amount: discountAmount,
             },
             plan: plan,
             existing_subscription: existingActiveSubscription,
             is_upgrade: true,
+            coupon: couponData ? {
+              code: coupon_code,
+              discount_amount: discountAmount,
+              final_amount: finalAmount,
+              is_free: finalAmount === 0
+            } : null,
+            pricing: {
+              original_price: plan.price,
+              discount_amount: discountAmount,
+              final_price: finalAmount,
+              savings: discountAmount
+            }
           });
         }
       }
@@ -191,9 +272,23 @@ class SubscriptionController {
           plan_id: plan_id,
           start_date: startDate.toISOString(),
           end_date: endDate.toISOString(),
-          amount_paid: plan.price,
+          amount_paid: finalAmount,
+          original_amount: plan.price,
+          discount_amount: discountAmount,
         },
         plan: plan,
+        coupon: couponData ? {
+          code: coupon_code,
+          discount_amount: discountAmount,
+          final_amount: finalAmount,
+          is_free: finalAmount === 0
+        } : null,
+        pricing: {
+          original_price: plan.price,
+          discount_amount: discountAmount,
+          final_price: finalAmount,
+          savings: discountAmount
+        }
       });
     } catch (error) {
       console.error("Subscription order creation error:", error);
@@ -217,6 +312,7 @@ class SubscriptionController {
         start_date,
         end_date,
         amount_paid,
+        coupon_code,
       } = req.body;
 
       const userId = req.user.id;
@@ -254,6 +350,41 @@ class SubscriptionController {
           success: false,
           message: "Invalid payment signature",
         });
+      }
+
+      // Apply coupon if provided (only after successful payment verification)
+      let couponData = null;
+      if (coupon_code) {
+        try {
+          // Get order details to retrieve coupon data
+          const order = await razorpay.orders.fetch(razorpay_order_id);
+          const orderNotes = order.notes || {};
+          
+          // Apply the coupon now that payment is successful
+          const { data: couponResult, error: couponError } = await supabaseAdmin.rpc("apply_coupon", {
+            p_coupon_code: coupon_code,
+            p_user_id: userId,
+            p_order_amount: parseFloat(orderNotes.original_amount || amount_paid || 0),
+            p_subscription_id: null,
+          });
+
+          if (couponError || !couponResult || !couponResult.valid) {
+            console.error('Failed to apply coupon after payment:', couponResult?.error);
+            // Continue without coupon data
+            couponData = null;
+          } else {
+            couponData = {
+              code: coupon_code,
+              discount_amount: couponResult.discount_amount,
+              final_amount: couponResult.final_amount,
+              is_free: couponResult.final_amount === 0,
+              applied: true
+            };
+          }
+        } catch (error) {
+          console.error('Error applying coupon after payment:', error);
+          couponData = null;
+        }
       }
 
       // Check if user already has an active subscription
@@ -340,6 +471,12 @@ class SubscriptionController {
         success: true,
         subscription: subscription,
         message: "Payment processed successfully and subscription activated",
+        coupon: couponData ? {
+          code: coupon_code,
+          discount_amount: couponData.discount_amount,
+          final_amount: couponData.final_amount,
+          is_free: couponData.final_amount === 0
+        } : null,
       });
     } catch (error) {
       console.error("Subscription payment processing error:", error);
@@ -646,6 +783,113 @@ class SubscriptionController {
         message: "Test subscription created successfully",
       });
     } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Create free subscription with coupon
+   */
+  async createFreeSubscription(req, res) {
+    try {
+      const { plan_id, coupon_code } = req.body;
+      const userId = req.user.id;
+
+      if (!plan_id || !coupon_code) {
+        return res.status(400).json({
+          success: false,
+          message: "Plan ID and coupon code are required",
+        });
+      }
+
+      // Get plan details
+      const { data: plan, error: planError } = await supabaseAdmin
+        .from("plans")
+        .select("*")
+        .eq("id", plan_id)
+        .eq("is_active", true)
+        .single();
+
+      if (planError || !plan) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid plan selected",
+        });
+      }
+
+      // Apply coupon
+      const { data: couponResult, error: couponError } = await supabaseAdmin.rpc("apply_coupon", {
+        p_coupon_code: coupon_code,
+        p_user_id: userId,
+        p_order_amount: parseFloat(plan.price),
+        p_subscription_id: null,
+      });
+
+      if (couponError || !couponResult || !couponResult.valid) {
+        return res.status(400).json({
+          success: false,
+          message: couponResult?.error || "Invalid coupon code",
+        });
+      }
+
+      // Check if user already has an active subscription
+      const { data: existingActiveSubscription } = await supabaseAdmin
+        .from("subscriptions")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("status", "active")
+        .single();
+
+      if (existingActiveSubscription) {
+        return res.status(400).json({
+          success: false,
+          message: "You already have an active subscription",
+        });
+      }
+
+      // Create free subscription
+      const startDate = new Date();
+      const endDate = SubscriptionController.calculateEndDate(plan.period, startDate);
+
+      const { data: subscription, error } = await supabaseAdmin
+        .from("subscriptions")
+        .insert({
+          user_id: userId,
+          plan_id: plan_id,
+          status: "active",
+          start_date: startDate.toISOString(),
+          end_date: endDate.toISOString(),
+          razorpay_payment_id: "free_subscription",
+          amount_paid: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+      if (error) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to create free subscription",
+        });
+      }
+
+      return res.json({
+        success: true,
+        subscription: subscription,
+        message: "Free subscription activated successfully",
+        coupon: {
+          code: coupon_code,
+          discount_amount: couponResult.discount_amount,
+          final_amount: couponResult.final_amount,
+          is_free: true
+        },
+      });
+    } catch (error) {
+      console.error("Free subscription creation error:", error);
       return res.status(500).json({
         success: false,
         message: "Internal server error",
