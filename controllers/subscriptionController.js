@@ -84,7 +84,7 @@ class SubscriptionController {
    */
   async createSubscriptionOrder(req, res) {
     try {
-      const { plan_id } = req.body;
+      const { plan_id, coupon_code } = req.body;
       const userId = req.user.id;
 
       if (!plan_id) {
@@ -117,9 +117,78 @@ class SubscriptionController {
         });
       }
 
-      // Create RazorPay order first
+      let finalAmount = plan.price;
+      let couponData = null;
+      let discountAmount = 0;
+
+      // Validate coupon if provided (don't apply yet)
+      if (coupon_code) {
+        const { data: couponResult, error: couponError } = await supabaseAdmin.rpc("validate_coupon", {
+          p_coupon_code: coupon_code,
+          p_user_id: userId,
+          p_order_amount: parseFloat(plan.price),
+        });
+
+        if (couponError || !couponResult || !couponResult.valid) {
+          return res.status(400).json({
+            success: false,
+            message: couponResult?.error || "Invalid coupon code",
+          });
+        }
+
+        // Calculate discount without applying the coupon
+        couponData = {
+          code: coupon_code,
+          discount_amount: couponResult.discount_amount,
+          final_amount: couponResult.final_amount,
+          is_free: couponResult.final_amount === 0,
+          applied: false  // Not applied yet
+        };
+        finalAmount = couponResult.final_amount;
+        discountAmount = couponResult.discount_amount;
+      }
+
+      // Calculate subscription dates for reference
+      const startDate = new Date();
+      const endDate = SubscriptionController.calculateEndDate(
+        plan.period,
+        startDate
+      );
+
+      // Handle free subscriptions (amount = 0)
+      if (finalAmount === 0) {
+        // For free subscriptions, return success without creating Razorpay order
+        return res.json({
+          success: true,
+          order: {
+            id: `free_order_${Date.now()}`,
+            amount: 0,
+            currency: "INR",
+            receipt: `free_rec_${Date.now().toString().slice(-8)}`,
+          },
+          subscription_data: {
+            plan_id: plan_id,
+            start_date: startDate.toISOString(),
+            end_date: endDate.toISOString(),
+            amount_paid: 0,
+            original_amount: plan.price,
+            discount_amount: discountAmount,
+          },
+          plan: plan,
+          coupon: couponData,
+          pricing: {
+            original_price: plan.price,
+            discount_amount: discountAmount,
+            final_price: 0,
+            savings: discountAmount
+          },
+          is_free: true
+        });
+      }
+
+      // Create RazorPay order for paid subscriptions
       const orderOptions = {
-        amount: Math.round(plan.price * 100), // Convert to paise
+        amount: Math.round(finalAmount * 100), // Convert to paise
         currency: "INR",
         receipt: `rec_${Date.now().toString().slice(-8)}_${Math.random()
           .toString(36)
@@ -128,17 +197,15 @@ class SubscriptionController {
           user_id: userId,
           plan_id: plan_id,
           plan_name: plan.name,
+          coupon_code: coupon_code || null,
+          original_amount: plan.price,
+          final_amount: finalAmount,
+          discount_amount: discountAmount,
+          coupon_applied: couponData ? JSON.stringify(couponData) : null,
         },
       };
 
       const order = await razorpay.orders.create(orderOptions);
-
-      // Calculate subscription dates for reference
-      const startDate = new Date();
-      const endDate = SubscriptionController.calculateEndDate(
-        plan.period,
-        startDate
-      );
 
       // Check if user already has an active subscription
       const { data: existingActiveSubscription } = await supabaseAdmin
@@ -169,11 +236,25 @@ class SubscriptionController {
               plan_id: plan_id,
               start_date: startDate.toISOString(),
               end_date: endDate.toISOString(),
-              amount_paid: plan.price,
+              amount_paid: finalAmount,
+              original_amount: plan.price,
+              discount_amount: discountAmount,
             },
             plan: plan,
             existing_subscription: existingActiveSubscription,
             is_upgrade: true,
+            coupon: couponData ? {
+              code: coupon_code,
+              discount_amount: discountAmount,
+              final_amount: finalAmount,
+              is_free: finalAmount === 0
+            } : null,
+            pricing: {
+              original_price: plan.price,
+              discount_amount: discountAmount,
+              final_price: finalAmount,
+              savings: discountAmount
+            }
           });
         }
       }
@@ -191,9 +272,23 @@ class SubscriptionController {
           plan_id: plan_id,
           start_date: startDate.toISOString(),
           end_date: endDate.toISOString(),
-          amount_paid: plan.price,
+          amount_paid: finalAmount,
+          original_amount: plan.price,
+          discount_amount: discountAmount,
         },
         plan: plan,
+        coupon: couponData ? {
+          code: coupon_code,
+          discount_amount: discountAmount,
+          final_amount: finalAmount,
+          is_free: finalAmount === 0
+        } : null,
+        pricing: {
+          original_price: plan.price,
+          discount_amount: discountAmount,
+          final_price: finalAmount,
+          savings: discountAmount
+        }
       });
     } catch (error) {
       console.error("Subscription order creation error:", error);
@@ -217,6 +312,7 @@ class SubscriptionController {
         start_date,
         end_date,
         amount_paid,
+        coupon_code,
       } = req.body;
 
       const userId = req.user.id;
@@ -254,6 +350,41 @@ class SubscriptionController {
           success: false,
           message: "Invalid payment signature",
         });
+      }
+
+      // Apply coupon if provided (only after successful payment verification)
+      let couponData = null;
+      if (coupon_code) {
+        try {
+          // Get order details to retrieve coupon data
+          const order = await razorpay.orders.fetch(razorpay_order_id);
+          const orderNotes = order.notes || {};
+          
+          // Apply the coupon now that payment is successful
+          const { data: couponResult, error: couponError } = await supabaseAdmin.rpc("apply_coupon", {
+            p_coupon_code: coupon_code,
+            p_user_id: userId,
+            p_order_amount: parseFloat(orderNotes.original_amount || amount_paid || 0),
+            p_subscription_id: null,
+          });
+
+          if (couponError || !couponResult || !couponResult.valid) {
+            console.error('Failed to apply coupon after payment:', couponResult?.error);
+            // Continue without coupon data
+            couponData = null;
+          } else {
+            couponData = {
+              code: coupon_code,
+              discount_amount: couponResult.discount_amount,
+              final_amount: couponResult.final_amount,
+              is_free: couponResult.final_amount === 0,
+              applied: true
+            };
+          }
+        } catch (error) {
+          console.error('Error applying coupon after payment:', error);
+          couponData = null;
+        }
       }
 
       // Check if user already has an active subscription
@@ -340,6 +471,12 @@ class SubscriptionController {
         success: true,
         subscription: subscription,
         message: "Payment processed successfully and subscription activated",
+        coupon: couponData ? {
+          code: coupon_code,
+          discount_amount: couponData.discount_amount,
+          final_amount: couponData.final_amount,
+          is_free: couponData.final_amount === 0
+        } : null,
       });
     } catch (error) {
       console.error("Subscription payment processing error:", error);
@@ -654,6 +791,113 @@ class SubscriptionController {
   }
 
   /**
+   * Create free subscription with coupon
+   */
+  async createFreeSubscription(req, res) {
+    try {
+      const { plan_id, coupon_code } = req.body;
+      const userId = req.user.id;
+
+      if (!plan_id || !coupon_code) {
+        return res.status(400).json({
+          success: false,
+          message: "Plan ID and coupon code are required",
+        });
+      }
+
+      // Get plan details
+      const { data: plan, error: planError } = await supabaseAdmin
+        .from("plans")
+        .select("*")
+        .eq("id", plan_id)
+        .eq("is_active", true)
+        .single();
+
+      if (planError || !plan) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid plan selected",
+        });
+      }
+
+      // Apply coupon
+      const { data: couponResult, error: couponError } = await supabaseAdmin.rpc("apply_coupon", {
+        p_coupon_code: coupon_code,
+        p_user_id: userId,
+        p_order_amount: parseFloat(plan.price),
+        p_subscription_id: null,
+      });
+
+      if (couponError || !couponResult || !couponResult.valid) {
+        return res.status(400).json({
+          success: false,
+          message: couponResult?.error || "Invalid coupon code",
+        });
+      }
+
+      // Check if user already has an active subscription
+      const { data: existingActiveSubscription } = await supabaseAdmin
+        .from("subscriptions")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("status", "active")
+        .single();
+
+      if (existingActiveSubscription) {
+        return res.status(400).json({
+          success: false,
+          message: "You already have an active subscription",
+        });
+      }
+
+      // Create free subscription
+      const startDate = new Date();
+      const endDate = SubscriptionController.calculateEndDate(plan.period, startDate);
+
+      const { data: subscription, error } = await supabaseAdmin
+        .from("subscriptions")
+        .insert({
+          user_id: userId,
+          plan_id: plan_id,
+          status: "active",
+          start_date: startDate.toISOString(),
+          end_date: endDate.toISOString(),
+          razorpay_payment_id: "free_subscription",
+          amount_paid: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+      if (error) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to create free subscription",
+        });
+      }
+
+      return res.json({
+        success: true,
+        subscription: subscription,
+        message: "Free subscription activated successfully",
+        coupon: {
+          code: coupon_code,
+          discount_amount: couponResult.discount_amount,
+          final_amount: couponResult.final_amount,
+          is_free: true
+        },
+      });
+    } catch (error) {
+      console.error("Free subscription creation error:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
    * Get payment configuration
    */
   async getPaymentConfig(req, res) {
@@ -687,7 +931,7 @@ class SubscriptionController {
     try {
       const { event, payload } = req.body;
 
-      console.log(`Received webhook event: ${event}`, payload);
+      console.log(`🔔 [WEBHOOK] Received event: ${event}`, payload);
 
       // Verify webhook signature (optional for development)
       const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
@@ -699,7 +943,7 @@ class SubscriptionController {
           .digest("hex");
 
         if (signature !== expectedSignature) {
-          console.error("Invalid webhook signature");
+          console.error("❌ [WEBHOOK] Invalid webhook signature");
           return res.status(400).json({
             success: false,
             message: "Invalid webhook signature",
@@ -710,36 +954,453 @@ class SubscriptionController {
       // Handle different webhook events
       switch (event) {
         case "payment.captured":
-          // Handle successful payment
-          console.log("Processing payment.captured event");
-          await SubscriptionController.handlePaymentSuccess(
-            payload.payment.entity
-          );
+          // Handle successful payment - check if it's subscription or bid/campaign
+          console.log("🔔 [WEBHOOK] Processing payment.captured event");
+          await this.handlePaymentCaptured(payload.payment.entity);
           break;
         case "subscription.activated":
           // Handle subscription activation
-          console.log("Processing subscription.activated event");
+          console.log("🔔 [WEBHOOK] Processing subscription.activated event");
           await SubscriptionController.handleSubscriptionActivation(
             payload.subscription.entity
           );
           break;
         case "subscription.cancelled":
           // Handle subscription cancellation
-          console.log("Processing subscription.cancelled event");
+          console.log("🔔 [WEBHOOK] Processing subscription.cancelled event");
           await SubscriptionController.handleSubscriptionCancellation(
             payload.subscription.entity
           );
           break;
         default:
-          console.log(`Unhandled webhook event: ${event}`);
+          console.log(`🔔 [WEBHOOK] Unhandled event: ${event}`);
       }
 
       return res.json({ success: true });
     } catch (error) {
-      console.error("Webhook error:", error);
+      console.error("❌ [WEBHOOK] Error:", error);
       return res.status(500).json({
         success: false,
         message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Handle payment.captured webhook - determine if it's subscription or bid/campaign payment
+   */
+  async handlePaymentCaptured(payment) {
+    try {
+      console.log("🔔 [WEBHOOK] Payment captured:", {
+        id: payment.id,
+        order_id: payment.order_id,
+        amount: payment.amount,
+        currency: payment.currency,
+        status: payment.status
+      });
+
+      // Check if this is a subscription payment by looking for subscription in notes
+      if (payment.notes && payment.notes.subscription_id) {
+        console.log("🔔 [WEBHOOK] Processing subscription payment");
+        await SubscriptionController.handlePaymentSuccess(payment);
+        return;
+      }
+
+      // Check if this is a bid/campaign payment by looking for conversation_id in notes
+      if (payment.notes && payment.notes.conversation_id) {
+        console.log("🔔 [WEBHOOK] Processing bid/campaign payment");
+        await this.handleBidCampaignPayment(payment);
+        return;
+      }
+
+      // Check if this is a bid/campaign payment by looking up the order
+      console.log("🔔 [WEBHOOK] Checking payment order for conversation...");
+      await this.handleBidCampaignPaymentByOrder(payment);
+
+    } catch (error) {
+      console.error("❌ [WEBHOOK] Error handling payment captured:", error);
+    }
+  }
+
+  /**
+   * Handle bid/campaign payment by conversation_id in notes
+   */
+  async handleBidCampaignPayment(payment) {
+    try {
+      const conversationId = payment.notes.conversation_id;
+      console.log("🔔 [WEBHOOK] Processing payment for conversation:", conversationId);
+
+      // Check if payment already processed
+      const { supabaseAdmin } = require('../supabase/client');
+      const { data: existingTransaction } = await supabaseAdmin
+        .from("transactions")
+        .select("id")
+        .eq("razorpay_payment_id", payment.id)
+        .single();
+
+      if (existingTransaction) {
+        console.log("🔔 [WEBHOOK] Payment already processed, skipping");
+        return;
+      }
+
+      // Get conversation details
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("*")
+        .eq("id", conversationId)
+        .single();
+
+      if (convError || !conversation) {
+        console.error("❌ [WEBHOOK] Conversation not found:", conversationId);
+        return;
+      }
+
+      // Process the payment using the same logic as verification endpoint
+      await this.processWebhookPayment(conversation, payment);
+
+    } catch (error) {
+      console.error("❌ [WEBHOOK] Error handling bid/campaign payment:", error);
+    }
+  }
+
+  /**
+   * Handle bid/campaign payment by looking up the order
+   */
+  async handleBidCampaignPaymentByOrder(payment) {
+    try {
+      const { supabaseAdmin } = require('../supabase/client');
+      
+      // Look up payment order by razorpay_order_id
+      const { data: paymentOrder, error: orderError } = await supabaseAdmin
+        .from("payment_orders")
+        .select("*")
+        .eq("razorpay_order_id", payment.order_id)
+        .single();
+
+      if (orderError || !paymentOrder) {
+        console.log("🔔 [WEBHOOK] No payment order found for order:", payment.order_id);
+        return;
+      }
+
+      // Check if payment already processed
+      const { data: existingTransaction } = await supabaseAdmin
+        .from("transactions")
+        .select("id")
+        .eq("razorpay_payment_id", payment.id)
+        .single();
+
+      if (existingTransaction) {
+        console.log("🔔 [WEBHOOK] Payment already processed, skipping");
+        return;
+      }
+
+      // Get conversation details
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("*")
+        .eq("id", paymentOrder.conversation_id)
+        .single();
+
+      if (convError || !conversation) {
+        console.error("❌ [WEBHOOK] Conversation not found:", paymentOrder.conversation_id);
+        return;
+      }
+
+      console.log("🔔 [WEBHOOK] Found conversation via payment order:", conversation.id);
+      
+      // Process the payment using the same logic as verification endpoint
+      await this.processWebhookPayment(conversation, payment, paymentOrder);
+
+    } catch (error) {
+      console.error("❌ [WEBHOOK] Error handling payment by order:", error);
+    }
+  }
+
+  /**
+   * Process webhook payment using the same logic as verification endpoint
+   */
+  async processWebhookPayment(conversation, payment, paymentOrder = null) {
+    try {
+      console.log("🔔 [WEBHOOK] Processing payment for conversation:", conversation.id);
+
+      const { supabaseAdmin } = require('../supabase/client');
+      const enhancedBalanceService = require('../utils/enhancedBalanceService');
+
+      // Get payment amount
+      const paymentAmount = payment.amount; // Razorpay amount is already in paise
+      console.log("🔔 [WEBHOOK] Payment amount (paise):", paymentAmount);
+
+      // Add funds to influencer's wallet
+      const addFundsResult = await enhancedBalanceService.addFunds(
+        conversation.influencer_id,
+        paymentAmount,
+        {
+          conversation_id: conversation.id,
+          razorpay_order_id: payment.order_id,
+          razorpay_payment_id: payment.id,
+          conversation_type: conversation.campaign_id ? "campaign" : "bid",
+          brand_owner_id: conversation.brand_owner_id,
+          notes: `Payment received via webhook for ${conversation.campaign_id ? 'campaign' : 'bid'} collaboration`,
+          source: 'webhook'
+        }
+      );
+
+      if (!addFundsResult.success) {
+        console.error("❌ [WEBHOOK] Failed to add funds:", addFundsResult.error);
+        return;
+      }
+
+      console.log("✅ [WEBHOOK] Funds added successfully");
+
+      // Update or create payment order
+      if (paymentOrder) {
+        const { error: updateOrderError } = await supabaseAdmin
+          .from("payment_orders")
+          .update({
+            status: "verified",
+            razorpay_payment_id: payment.id,
+            razorpay_signature: payment.notes?.signature || null,
+            verified_at: new Date().toISOString()
+          })
+          .eq("id", paymentOrder.id);
+
+        if (updateOrderError) {
+          console.error("❌ [WEBHOOK] Failed to update payment order:", updateOrderError);
+        }
+      } else {
+        // Create new payment order
+        const { data: newOrder, error: createOrderError } = await supabaseAdmin
+          .from("payment_orders")
+          .insert({
+            conversation_id: conversation.id,
+            amount_paise: paymentAmount,
+            currency: payment.currency,
+            status: "verified",
+            razorpay_order_id: payment.order_id,
+            razorpay_payment_id: payment.id,
+            verified_at: new Date().toISOString(),
+            metadata: {
+              conversation_type: conversation.campaign_id ? "campaign" : "bid",
+              brand_owner_id: conversation.brand_owner_id,
+              influencer_id: conversation.influencer_id,
+              source: 'webhook'
+            }
+          })
+          .select()
+          .single();
+
+        if (createOrderError) {
+          console.error("❌ [WEBHOOK] Failed to create payment order:", createOrderError);
+        } else {
+          paymentOrder = newOrder;
+        }
+      }
+
+      // Create escrow hold if needed
+      if (paymentOrder) {
+        const { data: escrowHold, error: escrowError } = await supabaseAdmin
+          .from('escrow_holds')
+          .insert({
+            conversation_id: conversation.id,
+            payment_order_id: paymentOrder.id,
+            amount_paise: paymentAmount,
+            status: 'held',
+            release_reason: 'Payment held in escrow until work completion',
+            created_at: new Date().toISOString()
+          })
+          .select()
+          .single();
+
+        if (escrowError) {
+          console.error("❌ [WEBHOOK] Escrow hold creation error:", escrowError);
+        } else {
+          console.log("✅ [WEBHOOK] Escrow hold created:", escrowHold.id);
+        }
+      }
+
+      // Update conversation state
+      const { error: conversationUpdateError } = await supabaseAdmin
+        .from("conversations")
+        .update({
+          flow_state: "payment_completed",
+          awaiting_role: "influencer",
+          chat_status: "real_time",
+          payment_completed: true,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", conversation.id);
+
+      if (conversationUpdateError) {
+        console.error("❌ [WEBHOOK] Failed to update conversation:", conversationUpdateError);
+      } else {
+        console.log("✅ [WEBHOOK] Conversation updated to payment_completed");
+      }
+
+      // Send notifications
+      const io = require('../index').io;
+      if (io) {
+        // Emit payment completion events
+        io.to(`conversation_${conversation.id}`).emit("payment_status_update", {
+          conversation_id: conversation.id,
+          status: "completed",
+          message: "Payment has been successfully processed via webhook",
+          chat_status: "real_time"
+        });
+
+        // Notify both users
+        io.to(`user_${conversation.brand_owner_id}`).emit("notification", {
+          type: "payment_completed",
+          data: {
+            conversation_id: conversation.id,
+            message: "Payment completed successfully",
+            chat_status: "real_time"
+          }
+        });
+
+        io.to(`user_${conversation.influencer_id}`).emit("notification", {
+          type: "payment_completed",
+          data: {
+            conversation_id: conversation.id,
+            message: "Payment completed successfully",
+            chat_status: "real_time"
+          }
+        });
+      }
+
+      console.log("✅ [WEBHOOK] Payment processing completed successfully");
+
+    } catch (error) {
+      console.error("❌ [WEBHOOK] Error processing webhook payment:", error);
+    }
+  }
+
+  /**
+   * Check for unprocessed payments (fallback mechanism)
+   * This can be called periodically to catch any missed payments
+   */
+  async checkUnprocessedPayments(req, res) {
+    try {
+      console.log("🔍 [FALLBACK] Checking for unprocessed payments...");
+      
+      const { supabaseAdmin } = require('../supabase/client');
+      
+      // Get payment orders that are created but not verified
+      const { data: unprocessedOrders, error: ordersError } = await supabaseAdmin
+        .from("payment_orders")
+        .select("*")
+        .eq("status", "created")
+        .not("razorpay_order_id", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(10);
+
+      if (ordersError) {
+        console.error("❌ [FALLBACK] Error fetching unprocessed orders:", ordersError);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch unprocessed orders"
+        });
+      }
+
+      if (!unprocessedOrders || unprocessedOrders.length === 0) {
+        console.log("✅ [FALLBACK] No unprocessed payments found");
+        return res.json({
+          success: true,
+          message: "No unprocessed payments found",
+          count: 0
+        });
+      }
+
+      console.log(`🔍 [FALLBACK] Found ${unprocessedOrders.length} unprocessed orders`);
+
+      const results = {
+        processed: 0,
+        errors: 0,
+        details: []
+      };
+
+      // Check each order with Razorpay
+      const Razorpay = require('razorpay');
+      const razorpay = new Razorpay({
+        key_id: process.env.RAZORPAY_KEY_ID,
+        key_secret: process.env.RAZORPAY_KEY_SECRET,
+      });
+
+      for (const order of unprocessedOrders) {
+        try {
+          // Get order details from Razorpay
+          const razorpayOrder = await razorpay.orders.fetch(order.razorpay_order_id);
+          
+          if (razorpayOrder.status === 'paid') {
+            console.log(`🔍 [FALLBACK] Order ${order.razorpay_order_id} is paid, processing...`);
+            
+            // Get conversation details
+            const { data: conversation, error: convError } = await supabaseAdmin
+              .from("conversations")
+              .select("*")
+              .eq("id", order.conversation_id)
+              .single();
+
+            if (convError || !conversation) {
+              console.error(`❌ [FALLBACK] Conversation not found for order ${order.id}`);
+              results.errors++;
+              continue;
+            }
+
+            // Get payment details
+            const payments = razorpayOrder.payments;
+            if (payments && payments.length > 0) {
+              const payment = payments[0]; // Get the first (and usually only) payment
+              
+              // Check if already processed
+              const { data: existingTransaction } = await supabaseAdmin
+                .from("transactions")
+                .select("id")
+                .eq("razorpay_payment_id", payment.id)
+                .single();
+
+              if (existingTransaction) {
+                console.log(`🔍 [FALLBACK] Payment ${payment.id} already processed, skipping`);
+                continue;
+              }
+
+              // Process the payment
+              await this.processWebhookPayment(conversation, payment, order);
+              results.processed++;
+              results.details.push({
+                order_id: order.id,
+                razorpay_order_id: order.razorpay_order_id,
+                payment_id: payment.id,
+                status: 'processed'
+              });
+            }
+          } else {
+            console.log(`🔍 [FALLBACK] Order ${order.razorpay_order_id} status: ${razorpayOrder.status}`);
+          }
+        } catch (error) {
+          console.error(`❌ [FALLBACK] Error processing order ${order.id}:`, error);
+          results.errors++;
+          results.details.push({
+            order_id: order.id,
+            razorpay_order_id: order.razorpay_order_id,
+            status: 'error',
+            error: error.message
+          });
+        }
+      }
+
+      console.log(`✅ [FALLBACK] Processed ${results.processed} payments, ${results.errors} errors`);
+
+      return res.json({
+        success: true,
+        message: `Processed ${results.processed} payments, ${results.errors} errors`,
+        results
+      });
+
+    } catch (error) {
+      console.error("❌ [FALLBACK] Error checking unprocessed payments:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error"
       });
     }
   }

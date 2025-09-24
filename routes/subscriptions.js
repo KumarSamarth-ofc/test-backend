@@ -7,11 +7,13 @@ const { SubscriptionController } = require('../controllers/subscriptionControlle
 router.get('/plans', SubscriptionController.getPlans);
 router.get('/payment-config', SubscriptionController.getPaymentConfig);
 router.post('/webhook', SubscriptionController.handleWebhook);
+router.post('/check-unprocessed-payments', SubscriptionController.checkUnprocessedPayments);
 
 // Protected routes (require authentication)
 router.get('/status', authService.authenticateToken, SubscriptionController.getSubscriptionStatus);
 router.post('/create-order', authService.authenticateToken, SubscriptionController.createSubscriptionOrder);
 router.post('/process-payment', authService.authenticateToken, SubscriptionController.processSubscriptionPayment);
+router.post('/create-free', authService.authenticateToken, SubscriptionController.createFreeSubscription);
 router.get('/payment-status/:payment_id', authService.authenticateToken, SubscriptionController.getPaymentStatus);
 router.post('/update-payment-status', authService.authenticateToken, SubscriptionController.updatePaymentStatus);
 router.post('/cancel', authService.authenticateToken, SubscriptionController.cancelSubscription);

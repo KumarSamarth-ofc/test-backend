@@ -309,8 +309,25 @@ class FCMService {
    */
   async sendMessageNotification(conversationId, message, senderId, receiverId) {
     try {
+      // Fetch sender's name
+      let senderName = 'Someone';
+      try {
+        const { data: sender, error } = await supabaseAdmin
+          .from('users')
+          .select('name')
+          .eq('id', senderId)
+          .eq('is_deleted', false)
+          .single();
+
+        if (!error && sender && sender.name) {
+          senderName = sender.name;
+        }
+      } catch (error) {
+        console.warn('⚠️ Could not fetch sender name for notification:', error.message);
+      }
+
       const notification = {
-        title: 'New Message',
+        title: `${senderName} sent you a message`,
         body: message.message.length > 100 
           ? message.message.substring(0, 100) + '...' 
           : message.message,

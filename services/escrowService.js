@@ -88,6 +88,8 @@ class EscrowService {
    */
   async releaseEscrowFunds(conversationId, reason = 'Work approved by brand owner') {
     try {
+      console.log("🔍 [DEBUG] releaseEscrowFunds called for conversation:", conversationId);
+      
       // Get escrow hold
       const { data: escrowHold, error: escrowError } = await supabaseAdmin
         .from('escrow_holds')
@@ -96,7 +98,10 @@ class EscrowService {
         .eq('status', 'held')
         .single();
 
+      console.log("🔍 [DEBUG] Escrow hold query result:", { escrowHold, escrowError });
+
       if (escrowError || !escrowHold) {
+        console.log("❌ [DEBUG] No active escrow hold found");
         throw new Error('No active escrow hold found');
       }
 
@@ -127,8 +132,20 @@ class EscrowService {
       const currentAvailableBalance = wallet.balance_paise || 0;
       const releaseAmount = escrowHold.amount_paise;
       
+      console.log("🔍 [DEBUG] Escrow release calculations:", {
+        currentFrozenBalance,
+        currentAvailableBalance,
+        releaseAmount,
+        conversationId
+      });
+      
       const newFrozenBalance = Math.max(0, currentFrozenBalance - releaseAmount);
       const newAvailableBalance = currentAvailableBalance + releaseAmount;
+      
+      console.log("🔍 [DEBUG] New balance calculations:", {
+        newFrozenBalance,
+        newAvailableBalance
+      });
       
       const { error: updateError } = await supabaseAdmin
         .from('wallets')

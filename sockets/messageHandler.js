@@ -106,6 +106,23 @@ class MessageHandler {
                     current_action_data: conversation.current_action_data
                 };
 
+                // Fetch sender's name for notifications
+                let senderName = 'Someone';
+                try {
+                    const { data: sender, error: senderError } = await supabaseAdmin
+                        .from('users')
+                        .select('name')
+                        .eq('id', senderId)
+                        .eq('is_deleted', false)
+                        .single();
+
+                    if (!senderError && sender && sender.name) {
+                        senderName = sender.name;
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Could not fetch sender name for socket notification:', error.message);
+                }
+
                 // Emit message to conversation room with context
                 console.log(`📡 [DEBUG] Socket emitting new_message to conversation_${conversationId}`);
                 this.io.to(`conversation_${conversationId}`).emit('new_message', {
@@ -120,7 +137,7 @@ class MessageHandler {
                     type: 'message',
                     data: {
                         id: savedMessage.id,
-                        title: 'New message',
+                        title: `${senderName} sent you a message`,
                         body: savedMessage.message,
                         created_at: savedMessage.created_at,
                         conversation_context: conversationContext,
