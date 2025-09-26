@@ -1492,18 +1492,28 @@ class MessageController {
               console.log("🔄 [DEBUG] Mapped agree_negotiation to handle_negotiation with action: agree");
               console.log("🔄 [DEBUG] Original additional_data was:", additional_data);
               console.log("🔄 [DEBUG] Mapped data is:", data);
+              console.log("🔄 [DEBUG] Ensuring mapped data takes precedence over additional_data");
             } else if (button_id === 'reject_negotiation') {
               action = 'handle_negotiation';
               data = { action: 'reject' };
               console.log("🔄 [DEBUG] Mapped reject_negotiation to handle_negotiation with action: reject");
+              console.log("🔄 [DEBUG] Ensuring mapped data takes precedence over additional_data");
             } else if (button_id === 'send_negotiated_price') {
               action = 'send_negotiated_price';
               data = { price: additional_data?.price };
               console.log("🔄 [DEBUG] Mapped send_negotiated_price with price:", additional_data?.price);
+            } else if (button_id === 'send_project_details') {
+              action = 'send_project_details';
+              data = { details: additional_data?.details };
+              console.log("🔄 [DEBUG] Mapped send_project_details with details:", additional_data?.details);
+              console.log("🔄 [DEBUG] Full additional_data:", JSON.stringify(additional_data, null, 2));
+              console.log("🔄 [DEBUG] Full data object:", JSON.stringify(data, null, 2));
             } else if (button_id === 'send_price_offer') {
               action = 'send_price_offer';
               data = { price: additional_data?.price };
               console.log("🔄 [DEBUG] Mapped send_price_offer with price:", additional_data?.price);
+              console.log("🔄 [DEBUG] Full additional_data:", JSON.stringify(additional_data, null, 2));
+              console.log("🔄 [DEBUG] Full data object:", JSON.stringify(data, null, 2));
             } else if (button_id === 'proceed_to_payment') {
               action = 'proceed_to_payment';
               data = additional_data || {};

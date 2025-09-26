@@ -776,13 +776,82 @@ class BidController {
    */
   async handleBrandOwnerAction(req, res) {
     try {
-      const { conversation_id, action, data } = req.body;
+      const { conversation_id, action, data, button_id, additional_data } = req.body;
       const userId = req.user.id;
 
-      if (!conversation_id || !action) {
+      if (!conversation_id) {
         return res.status(400).json({
           success: false,
-          message: "Missing required parameters",
+          message: "Missing conversation_id",
+        });
+      }
+
+      // Handle button mapping if button_id is provided OR if action is a button ID
+      let mappedAction = action;
+      let mappedData = data || {};
+
+      // Check if we have button_id OR if action looks like a button ID
+      const buttonToMap = button_id || action;
+      
+      if (buttonToMap) {
+        console.log("🔍 [DEBUG] Processing brand owner button mapping for:", buttonToMap);
+        console.log("🔍 [DEBUG] Original action:", action);
+        console.log("🔍 [DEBUG] Original data:", data);
+        console.log("🔍 [DEBUG] Additional data:", additional_data);
+        console.log("🔍 [DEBUG] Button ID provided:", !!button_id);
+        console.log("🔍 [DEBUG] Using action as button ID:", !button_id);
+
+        // Map button IDs to automated flow actions (same logic as message controller)
+        if (buttonToMap === 'agree_negotiation') {
+          mappedAction = 'handle_negotiation';
+          mappedData = { action: 'agree' };
+          console.log("🔄 [DEBUG] Mapped agree_negotiation to handle_negotiation with action: agree");
+        } else if (buttonToMap === 'reject_negotiation') {
+          mappedAction = 'handle_negotiation';
+          mappedData = { action: 'reject' };
+          console.log("🔄 [DEBUG] Mapped reject_negotiation to handle_negotiation with action: reject");
+        } else if (buttonToMap === 'send_negotiated_price') {
+          mappedAction = 'send_negotiated_price';
+          mappedData = { price: additional_data?.price };
+          console.log("🔄 [DEBUG] Mapped send_negotiated_price with price:", additional_data?.price);
+        } else if (buttonToMap === 'send_project_details') {
+          mappedAction = 'send_project_details';
+          mappedData = { details: additional_data?.details };
+          console.log("🔄 [DEBUG] Mapped send_project_details with details:", additional_data?.details);
+        } else if (buttonToMap === 'send_price_offer') {
+          mappedAction = 'send_price_offer';
+          mappedData = { price: additional_data?.price };
+          console.log("🔄 [DEBUG] Mapped send_price_offer with price:", additional_data?.price);
+        } else if (buttonToMap === 'proceed_to_payment') {
+          mappedAction = 'proceed_to_payment';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped proceed_to_payment");
+        } else if (buttonToMap === 'accept_counter_offer') {
+          mappedAction = 'accept_counter_offer';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped accept_counter_offer");
+        } else if (buttonToMap === 'reject_counter_offer') {
+          mappedAction = 'reject_counter_offer';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped reject_counter_offer");
+        } else if (buttonToMap === 'make_final_offer') {
+          mappedAction = 'make_final_offer';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped make_final_offer");
+        } else {
+          console.log("⚠️ [DEBUG] No special mapping found for button:", buttonToMap);
+          // Use additional_data for unmapped buttons
+          mappedData = additional_data || {};
+        }
+
+        console.log("🔄 [DEBUG] Final mapped action:", mappedAction);
+        console.log("🔄 [DEBUG] Final mapped data:", mappedData);
+      }
+
+      if (!mappedAction) {
+        return res.status(400).json({
+          success: false,
+          message: "Missing action or button_id",
         });
       }
 
@@ -804,8 +873,8 @@ class BidController {
       // Handle the action using automated flow service
       const result = await automatedFlowService.handleBrandOwnerAction(
         conversation_id,
-        action,
-        data
+        mappedAction,
+        mappedData
       );
 
       // Emit realtime events if action was successful
@@ -853,13 +922,94 @@ class BidController {
    */
   async handleInfluencerAction(req, res) {
     try {
-      const { conversation_id, action, data } = req.body;
+      const { conversation_id, action, data, button_id, additional_data } = req.body;
       const userId = req.user.id;
 
-      if (!conversation_id || !action) {
+      if (!conversation_id) {
         return res.status(400).json({
           success: false,
-          message: "Missing required parameters",
+          message: "Missing conversation_id",
+        });
+      }
+
+      // Handle button mapping if button_id is provided OR if action is a button ID
+      let mappedAction = action;
+      let mappedData = data || {};
+
+      // Check if we have button_id OR if action looks like a button ID
+      const buttonToMap = button_id || action;
+      
+      if (buttonToMap) {
+        console.log("🔍 [DEBUG] Processing influencer button mapping for:", buttonToMap);
+        console.log("🔍 [DEBUG] Original action:", action);
+        console.log("🔍 [DEBUG] Original data:", data);
+        console.log("🔍 [DEBUG] Additional data:", additional_data);
+        console.log("🔍 [DEBUG] Button ID provided:", !!button_id);
+        console.log("🔍 [DEBUG] Using action as button ID:", !button_id);
+
+        // Map button IDs to automated flow actions (same logic as message controller)
+        if (buttonToMap === 'accept_connection') {
+          mappedAction = 'accept_connection';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped accept_connection");
+        } else if (buttonToMap === 'reject_connection') {
+          mappedAction = 'reject_connection';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped reject_connection");
+        } else if (buttonToMap === 'accept_project') {
+          mappedAction = 'accept_project';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped accept_project");
+        } else if (buttonToMap === 'deny_project') {
+          mappedAction = 'deny_project';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped deny_project");
+        } else if (buttonToMap === 'accept_price') {
+          mappedAction = 'accept_price';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped accept_price");
+        } else if (buttonToMap === 'reject_price') {
+          mappedAction = 'reject_price';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped reject_price");
+        } else if (buttonToMap === 'negotiate_price') {
+          mappedAction = 'negotiate_price';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped negotiate_price");
+        } else if (buttonToMap === 'send_counter_offer') {
+          mappedAction = 'send_counter_offer';
+          mappedData = { price: additional_data?.price };
+          console.log("🔄 [DEBUG] Mapped send_counter_offer with price:", additional_data?.price);
+        } else if (buttonToMap === 'accept_final_offer') {
+          mappedAction = 'accept_final_offer';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped accept_final_offer");
+        } else if (buttonToMap === 'reject_final_offer') {
+          mappedAction = 'reject_final_offer';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped reject_final_offer");
+        } else if (buttonToMap === 'accept_negotiated_price') {
+          mappedAction = 'accept_negotiated_price';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped accept_negotiated_price");
+        } else if (buttonToMap === 'reject_negotiated_price') {
+          mappedAction = 'reject_negotiated_price';
+          mappedData = additional_data || {};
+          console.log("🔄 [DEBUG] Mapped reject_negotiated_price");
+        } else {
+          console.log("⚠️ [DEBUG] No special mapping found for button:", buttonToMap);
+          // Use additional_data for unmapped buttons
+          mappedData = additional_data || {};
+        }
+
+        console.log("🔄 [DEBUG] Final mapped action:", mappedAction);
+        console.log("🔄 [DEBUG] Final mapped data:", mappedData);
+      }
+
+      if (!mappedAction) {
+        return res.status(400).json({
+          success: false,
+          message: "Missing action or button_id",
         });
       }
 
@@ -881,8 +1031,8 @@ class BidController {
       // Handle the action using automated flow service
       const result = await automatedFlowService.handleInfluencerAction(
         conversation_id,
-        action,
-        data
+        mappedAction,
+        mappedData
       );
 
       // Emit realtime events if action was successful

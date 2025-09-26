@@ -500,6 +500,18 @@ Please respond to confirm your interest and availability for this campaign.`,
 
         case "send_price_offer":
           // Brand owner sends price offer
+          console.log("💰 [DEBUG] Processing send_price_offer with data:", data);
+          console.log("💰 [DEBUG] Price value:", data.price);
+          console.log("💰 [DEBUG] Price type:", typeof data.price);
+          
+          if (!data.price || data.price === undefined) {
+            console.error("❌ [ERROR] send_price_offer called without price data!");
+            return {
+              success: false,
+              error: "Price is required for price offer",
+            };
+          }
+          
           newFlowState = "influencer_price_response";
           newAwaitingRole = "influencer";
 
@@ -604,23 +616,37 @@ Please respond to confirm your interest and availability for this campaign.`,
           console.log("🔄 [DEBUG] Data action:", data.action);
           console.log("🔄 [DEBUG] Data action type:", typeof data.action);
           console.log("🔄 [DEBUG] Data action === 'agree':", data.action === "agree");
+          console.log("🔄 [DEBUG] Data action === 'agree' (single quotes):", data.action === 'agree');
+          console.log("🔄 [DEBUG] Data action trimmed:", data.action?.trim());
+          console.log("🔄 [DEBUG] Data action length:", data.action?.length);
           console.log("🔄 [DEBUG] Full data object:", JSON.stringify(data, null, 2));
           
-          if (data.action === "agree") {
-            console.log("✅ [DEBUG] Brand owner agreed to negotiate - setting state to influencer_price_response");
-            newFlowState = "influencer_price_response";
+          // More robust comparison
+          const actionValue = data.action?.toString()?.trim()?.toLowerCase();
+          console.log("🔄 [DEBUG] Processed action value:", actionValue);
+          
+          if (actionValue === "agree") {
+            console.log("✅ [DEBUG] Brand owner agreed to negotiate - setting state to influencer_price_input");
+            newFlowState = "influencer_price_input";
             newAwaitingRole = "influencer";
+            
+            // Fallback: if database doesn't support influencer_price_input yet, use influencer_price_response
+            console.log("🔄 [DEBUG] Note: Using influencer_price_input state. If database constraint fails, this will be handled by the database error.");
+
+            // Increment negotiation round
+            const currentRound = (conversation.negotiation_round || 0) + 1;
+            const maxRounds = conversation.max_negotiation_rounds || 3;
 
             newMessage = {
               conversation_id: conversationId,
               sender_id: conversation.brand_owner_id,
               receiver_id: conversation.influencer_id,
-              message: `🤝 **Negotiation Accepted**\n\nBrand owner has agreed to negotiate. Please set your new price offer.`,
+              message: `🤝 **Negotiation Accepted**\n\nBrand owner has agreed to negotiate. Please set your counter offer.\n\n**Negotiation Round:** ${currentRound}/${maxRounds}`,
               message_type: "automated",
               action_required: true,
               action_data: {
-                title: "💰 **Set Your Price Offer**",
-                subtitle: "What's your new price for this project?",
+                title: "💰 **Set Your Counter Offer**",
+                subtitle: `What's your counter offer for this project? (Round ${currentRound}/${maxRounds})`,
                 input_field: {
                   id: "counter_price",
                   type: "number",
@@ -636,9 +662,11 @@ Please respond to confirm your interest and availability for this campaign.`,
                     action: "send_counter_offer",
                   },
                 ],
-                flow_state: "influencer_price_response",
+                flow_state: "influencer_price_input", // Will be updated to influencer_price_response if fallback occurs
                 message_type: "influencer_counter_offer",
                 visible_to: "influencer",
+                negotiation_round: currentRound,
+                max_rounds: maxRounds
               },
             };
 
@@ -654,6 +682,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             // Reject negotiation
             console.log("❌ [DEBUG] Brand owner rejected negotiation - setting state to chat_closed");
             console.log("❌ [DEBUG] Data action was:", data.action);
+            console.log("❌ [DEBUG] Processed action value was:", actionValue);
             console.log("❌ [DEBUG] This is why chat is closing!");
             newFlowState = "chat_closed";
             newAwaitingRole = null;
@@ -683,25 +712,70 @@ Please respond to confirm your interest and availability for this campaign.`,
           newFlowState = "influencer_final_response";
           newAwaitingRole = "influencer";
 
-          // Note: flow_data column removed - negotiation tracking simplified
+          // Persist the negotiated price as requests.proposed_amount
+          if (conversation.request_id) {
+            await supabaseAdmin
+              .from("requests")
+              .update({
+                proposed_amount: data.price ? parseFloat(data.price) : null,
+                status: "negotiating"
+              })
+              .eq("id", conversation.request_id);
+          } else {
+            // Fallback: upsert request by bid_id + influencer_id
+            const { data: reqRow } = await supabaseAdmin
+              .from("requests")
+              .select("id")
+              .eq("bid_id", conversation.bid_id)
+              .eq("influencer_id", conversation.influencer_id)
+              .single();
+            if (reqRow) {
+              await supabaseAdmin
+                .from("requests")
+                .update({
+                  proposed_amount: data.price ? parseFloat(data.price) : null,
+                  status: "negotiating"
+                })
+                .eq("id", reqRow.id);
+              await supabaseAdmin
+                .from("conversations")
+                .update({ request_id: reqRow.id })
+                .eq("id", conversationId);
+            } else {
+              const { data: newReq } = await supabaseAdmin
+                .from("requests")
+                .insert({
+                  bid_id: conversation.bid_id,
+                  influencer_id: conversation.influencer_id,
+                  status: "negotiating",
+                  proposed_amount: data.price ? parseFloat(data.price) : null
+                })
+                .select()
+                .single();
+              if (newReq) {
+                await supabaseAdmin
+                  .from("conversations")
+                  .update({ request_id: newReq.id })
+                  .eq("id", conversationId);
+              }
+            }
+          }
 
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `💰 **Negotiated Price Offer**\n\nBrand owner has offered a new price: **₹${data.price}**\n\nThis is negotiation round ${updatedFlowData.negotiation_count}/${updatedFlowData.max_negotiations}.`,
+            message: `💰 **Negotiated Price Offer**\n\nBrand owner has offered a new price: **₹${data.price}**\n\nThis is negotiation round ${conversation.negotiation_round || 1}/${conversation.max_negotiation_rounds || 3}.`,
             message_type: "automated",
             action_required: true,
             action_data: {
               title: "🎯 **Final Price Response**",
               subtitle:
-                updatedFlowData.negotiation_count >=
-                updatedFlowData.max_negotiations
+                (conversation.negotiation_round || 1) >= (conversation.max_negotiation_rounds || 3)
                   ? "This is the final offer. You can only accept or reject."
                   : "Choose how you'd like to respond to this offer:",
               buttons:
-                updatedFlowData.negotiation_count >=
-                updatedFlowData.max_negotiations
+                (conversation.negotiation_round || 1) >= (conversation.max_negotiation_rounds || 3)
                   ? [
                       {
                         id: "accept_final_price",
@@ -1008,6 +1082,56 @@ Please respond to confirm your interest and availability for this campaign.`,
           newFlowState = "payment_pending";
           newAwaitingRole = "brand_owner";
 
+          // Update the final agreed amount in requests table
+          if (conversation.request_id) {
+            await supabaseAdmin
+              .from("requests")
+              .update({
+                final_agreed_amount: data.price ? parseFloat(data.price) : null,
+                status: "finalized"
+              })
+              .eq("id", conversation.request_id);
+          } else {
+            // Fallback: upsert request by bid_id + influencer_id
+            const { data: reqRow } = await supabaseAdmin
+              .from("requests")
+              .select("id")
+              .eq("bid_id", conversation.bid_id)
+              .eq("influencer_id", conversation.influencer_id)
+              .single();
+            if (reqRow) {
+              await supabaseAdmin
+                .from("requests")
+                .update({
+                  final_agreed_amount: data.price ? parseFloat(data.price) : null,
+                  status: "finalized"
+                })
+                .eq("id", reqRow.id);
+              await supabaseAdmin
+                .from("conversations")
+                .update({ request_id: reqRow.id })
+                .eq("id", conversationId);
+            } else {
+              const { data: newReq } = await supabaseAdmin
+                .from("requests")
+                .insert({
+                  bid_id: conversation.bid_id,
+                  influencer_id: conversation.influencer_id,
+                  status: "finalized",
+                  proposed_amount: data.price ? parseFloat(data.price) : null,
+                  final_agreed_amount: data.price ? parseFloat(data.price) : null
+                })
+                .select()
+                .single();
+              if (newReq) {
+                await supabaseAdmin
+                  .from("conversations")
+                  .update({ request_id: newReq.id })
+                  .eq("id", conversationId);
+              }
+            }
+          }
+
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
@@ -1044,33 +1168,154 @@ Please respond to confirm your interest and availability for this campaign.`,
           break;
 
         case "reject_counter_offer":
-          // Brand owner rejects counter offer
-          newFlowState = "chat_closed";
-          newAwaitingRole = null;
+          // Brand owner rejects counter offer - loop back to influencer for new counter offer
+          const currentRound = conversation.negotiation_round || 1;
+          const maxRounds = conversation.max_negotiation_rounds || 3;
+          
+          // Check if we've reached the maximum negotiation rounds
+          if (currentRound >= maxRounds) {
+            // Max rounds reached, close chat
+            newFlowState = "chat_closed";
+            newAwaitingRole = null;
 
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.brand_owner_id,
-            receiver_id: conversation.influencer_id,
-            message: `❌ **Counter Offer Rejected**\n\nBrand owner has rejected your counter offer. The collaboration has been cancelled.`,
-            message_type: "automated",
-            action_required: false,
-          };
+            newMessage = {
+              conversation_id: conversationId,
+              sender_id: conversation.brand_owner_id,
+              receiver_id: conversation.influencer_id,
+              message: `❌ **Maximum Negotiation Rounds Reached**\n\nBrand owner has rejected your counter offer and the maximum negotiation rounds (${maxRounds}) have been reached. The collaboration has been cancelled.`,
+              message_type: "automated",
+              action_required: false,
+            };
 
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.brand_owner_id,
-            message: `✅ **Action Taken: Counter Offer Rejected**\n\nYou have rejected the counter offer.`,
-            message_type: "audit",
-            action_required: false,
-          };
+            auditMessage = {
+              conversation_id: conversationId,
+              sender_id: SYSTEM_USER_ID,
+              receiver_id: conversation.brand_owner_id,
+              message: `✅ **Action Taken: Counter Offer Rejected (Max Rounds Reached)**\n\nYou have rejected the counter offer and reached the maximum negotiation rounds.`,
+              message_type: "audit",
+              action_required: false,
+            };
+          } else {
+            // Still within limits, loop back to influencer for new counter offer
+            newFlowState = "influencer_price_input";
+            newAwaitingRole = "influencer";
+
+            // Update negotiation history
+            const negotiationHistory = conversation.negotiation_history || [];
+            const newHistoryEntry = {
+              round: currentRound,
+              brand_owner_action: "rejected",
+              rejected_price: parseFloat(data.price),
+              timestamp: new Date().toISOString(),
+              action: "counter_offer_rejected"
+            };
+            const updatedHistory = [...negotiationHistory, newHistoryEntry];
+
+            newMessage = {
+              conversation_id: conversationId,
+              sender_id: conversation.brand_owner_id,
+              receiver_id: conversation.influencer_id,
+              message: `❌ **Counter Offer Rejected**\n\nBrand owner has rejected your counter offer of ₹${data.price}. You can make another counter offer.\n\n**Negotiation Round:** ${currentRound}/${maxRounds}`,
+              message_type: "automated",
+              action_required: true,
+              action_data: {
+                title: "💰 **Make Another Counter Offer**",
+                subtitle: `Your previous offer was rejected. What's your new counter offer? (Round ${currentRound}/${maxRounds})`,
+                input_field: {
+                  id: "counter_price",
+                  type: "number",
+                  placeholder: "Enter your new counter offer amount",
+                  required: true,
+                  min: 1,
+                },
+                buttons: [
+                  {
+                    id: "send_counter_offer",
+                    text: "Send Counter Offer",
+                    style: "success",
+                    action: "send_counter_offer",
+                  },
+                ],
+                flow_state: "influencer_price_input",
+                message_type: "influencer_counter_offer",
+                visible_to: "influencer",
+                negotiation_round: currentRound,
+                max_rounds: maxRounds
+              },
+            };
+
+            auditMessage = {
+              conversation_id: conversationId,
+              sender_id: SYSTEM_USER_ID,
+              receiver_id: conversation.brand_owner_id,
+              message: `✅ **Action Taken: Counter Offer Rejected**\n\nYou have rejected the counter offer. The influencer can make another offer.`,
+              message_type: "audit",
+              action_required: false,
+            };
+
+            // Update conversation with negotiation history
+            await supabaseAdmin
+              .from("conversations")
+              .update({
+                negotiation_history: updatedHistory
+              })
+              .eq("id", conversationId);
+          }
           break;
 
         case "make_final_offer":
           // Brand owner makes final offer
           newFlowState = "influencer_final_response";
           newAwaitingRole = "influencer";
+
+          // Persist the final offer price as requests.proposed_amount
+          if (conversation.request_id) {
+            await supabaseAdmin
+              .from("requests")
+              .update({
+                proposed_amount: data.price ? parseFloat(data.price) : null,
+                status: "negotiating"
+              })
+              .eq("id", conversation.request_id);
+          } else {
+            // Fallback: upsert request by bid_id + influencer_id
+            const { data: reqRow } = await supabaseAdmin
+              .from("requests")
+              .select("id")
+              .eq("bid_id", conversation.bid_id)
+              .eq("influencer_id", conversation.influencer_id)
+              .single();
+            if (reqRow) {
+              await supabaseAdmin
+                .from("requests")
+                .update({
+                  proposed_amount: data.price ? parseFloat(data.price) : null,
+                  status: "negotiating"
+                })
+                .eq("id", reqRow.id);
+              await supabaseAdmin
+                .from("conversations")
+                .update({ request_id: reqRow.id })
+                .eq("id", conversationId);
+            } else {
+              const { data: newReq } = await supabaseAdmin
+                .from("requests")
+                .insert({
+                  bid_id: conversation.bid_id,
+                  influencer_id: conversation.influencer_id,
+                  status: "negotiating",
+                  proposed_amount: data.price ? parseFloat(data.price) : null
+                })
+                .select()
+                .single();
+              if (newReq) {
+                await supabaseAdmin
+                  .from("conversations")
+                  .update({ request_id: newReq.id })
+                  .eq("id", conversationId);
+              }
+            }
+          }
 
           newMessage = {
             conversation_id: conversationId,
@@ -1128,6 +1373,12 @@ Please respond to confirm your interest and availability for this campaign.`,
         updateData.current_action_data = newMessage.action_data;
       }
 
+      // For negotiation actions, update negotiation round
+      if (action === "handle_negotiation" && data.action === "agree") {
+        const currentRound = (conversation.negotiation_round || 0) + 1;
+        updateData.negotiation_round = currentRound;
+      }
+
       console.log("🔄 [DEBUG] Updating conversation with data:", updateData);
       
       const { error: updateError } = await supabaseAdmin
@@ -1137,9 +1388,39 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       if (updateError) {
         console.error("❌ [DEBUG] Failed to update conversation:", updateError);
-        throw new Error(
-          `Failed to update conversation: ${updateError.message}`
-        );
+        
+        // Check if it's a constraint violation for flow_state
+        if (updateError.message && updateError.message.includes("check constraint") && updateError.message.includes("flow_state")) {
+          console.error("❌ [DEBUG] Flow state constraint violation! The database doesn't support the new flow state yet.");
+          console.error("❌ [DEBUG] This means the database migration hasn't been applied.");
+          console.error("❌ [DEBUG] Falling back to influencer_price_response state...");
+          
+          // Fallback to a supported state
+          const fallbackUpdateData = {
+            ...updateData,
+            flow_state: "influencer_price_response"
+          };
+          
+          const { error: fallbackError } = await supabaseAdmin
+            .from("conversations")
+            .update(fallbackUpdateData)
+            .eq("id", conversationId);
+            
+          if (fallbackError) {
+            console.error("❌ [DEBUG] Fallback update also failed:", fallbackError);
+            throw new Error(`Failed to update conversation: ${updateError.message}`);
+          } else {
+            console.log("✅ [DEBUG] Fallback update successful");
+            newFlowState = "influencer_price_response"; // Update the local variable too
+            
+            // Also update the message action_data to reflect the fallback state
+            if (newMessage && newMessage.action_data) {
+              newMessage.action_data.flow_state = "influencer_price_response";
+            }
+          }
+        } else {
+          throw new Error(`Failed to update conversation: ${updateError.message}`);
+        }
       } else {
         console.log("✅ [DEBUG] Conversation updated successfully");
       }
@@ -1568,19 +1849,94 @@ Please respond to confirm your interest and availability for this campaign.`,
 
         case "send_counter_offer":
           // Influencer sends counter offer
+          console.log("💰 [DEBUG] Processing send_counter_offer with data:", data);
+          console.log("💰 [DEBUG] Price value:", data.price);
+          console.log("💰 [DEBUG] Price type:", typeof data.price);
+          
+          if (!data.price || data.price === undefined) {
+            console.error("❌ [ERROR] send_counter_offer called without price data!");
+            return {
+              success: false,
+              error: "Price is required for counter offer",
+            };
+          }
+          
           newFlowState = "brand_owner_price_response";
           newAwaitingRole = "brand_owner";
+
+          // Get current negotiation round and update it
+          const currentRound = conversation.negotiation_round || 1;
+          const maxRounds = conversation.max_negotiation_rounds || 3;
+
+          // Update negotiation history
+          const negotiationHistory = conversation.negotiation_history || [];
+          const newHistoryEntry = {
+            round: currentRound,
+            influencer_price: parseFloat(data.price),
+            timestamp: new Date().toISOString(),
+            action: "counter_offer"
+          };
+          const updatedHistory = [...negotiationHistory, newHistoryEntry];
+
+          // Persist the counter offer price as requests.proposed_amount
+          if (conversation.request_id) {
+            await supabaseAdmin
+              .from("requests")
+              .update({
+                proposed_amount: data.price ? parseFloat(data.price) : null,
+                status: "negotiating"
+              })
+              .eq("id", conversation.request_id);
+          } else {
+            // Fallback: upsert request by bid_id + influencer_id
+            const { data: reqRow } = await supabaseAdmin
+              .from("requests")
+              .select("id")
+              .eq("bid_id", conversation.bid_id)
+              .eq("influencer_id", conversation.influencer_id)
+              .single();
+            if (reqRow) {
+              await supabaseAdmin
+                .from("requests")
+                .update({
+                  proposed_amount: data.price ? parseFloat(data.price) : null,
+                  status: "negotiating"
+                })
+                .eq("id", reqRow.id);
+              await supabaseAdmin
+                .from("conversations")
+                .update({ request_id: reqRow.id })
+                .eq("id", conversationId);
+            } else {
+              const { data: newReq } = await supabaseAdmin
+                .from("requests")
+                .insert({
+                  bid_id: conversation.bid_id,
+                  influencer_id: conversation.influencer_id,
+                  status: "negotiating",
+                  proposed_amount: data.price ? parseFloat(data.price) : null
+                })
+                .select()
+                .single();
+              if (newReq) {
+                await supabaseAdmin
+                  .from("conversations")
+                  .update({ request_id: newReq.id })
+                  .eq("id", conversationId);
+              }
+            }
+          }
 
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `💰 **Counter Offer: ₹${data.price}**\n\nInfluencer has made a counter offer. Please respond to this offer.`,
+            message: `💰 **Counter Offer: ₹${data.price}**\n\nInfluencer has made a counter offer. Please respond to this offer.\n\n**Negotiation Round:** ${currentRound}/${maxRounds}`,
             message_type: "automated",
             action_required: true,
             action_data: {
               title: "🎯 **Counter Offer Response**",
-              subtitle: `Influencer's counter offer: ₹${data.price}`,
+              subtitle: `Influencer's counter offer: ₹${data.price} (Round ${currentRound}/${maxRounds})`,
               buttons: [
                 {
                   id: "accept_counter_offer",
@@ -1594,6 +1950,7 @@ Please respond to confirm your interest and availability for this campaign.`,
                   text: "Reject Counter Offer",
                   style: "danger",
                   action: "reject_counter_offer",
+                  data: { price: data.price },
                 },
                 {
                   id: "make_final_offer",
@@ -1605,6 +1962,8 @@ Please respond to confirm your interest and availability for this campaign.`,
               flow_state: "brand_owner_price_response",
               message_type: "brand_owner_counter_response",
               visible_to: "brand_owner",
+              negotiation_round: currentRound,
+              max_rounds: maxRounds
             },
           };
 
@@ -1612,10 +1971,19 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: SYSTEM_USER_ID,
             receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Counter Offer Sent**\n\nYou have sent a counter offer of ₹${data.price}.`,
+            message: `✅ **Action Taken: Counter Offer Sent**\n\nYou have sent a counter offer of ₹${data.price} (Round ${currentRound}/${maxRounds}).`,
             message_type: "audit",
             action_required: false,
           };
+
+          // Update conversation with negotiation round and history
+          await supabaseAdmin
+            .from("conversations")
+            .update({
+              negotiation_round: currentRound,
+              negotiation_history: updatedHistory
+            })
+            .eq("id", conversationId);
           break;
 
         case "accept_final_offer":
@@ -1687,6 +2055,56 @@ Please respond to confirm your interest and availability for this campaign.`,
           // Influencer accepts negotiated price
           newFlowState = "payment_pending";
           newAwaitingRole = "brand_owner";
+
+          // Update the final agreed amount in requests table
+          if (conversation.request_id) {
+            await supabaseAdmin
+              .from("requests")
+              .update({
+                final_agreed_amount: data.price ? parseFloat(data.price) : null,
+                status: "finalized"
+              })
+              .eq("id", conversation.request_id);
+          } else {
+            // Fallback: upsert request by bid_id + influencer_id
+            const { data: reqRow } = await supabaseAdmin
+              .from("requests")
+              .select("id")
+              .eq("bid_id", conversation.bid_id)
+              .eq("influencer_id", conversation.influencer_id)
+              .single();
+            if (reqRow) {
+              await supabaseAdmin
+                .from("requests")
+                .update({
+                  final_agreed_amount: data.price ? parseFloat(data.price) : null,
+                  status: "finalized"
+                })
+                .eq("id", reqRow.id);
+              await supabaseAdmin
+                .from("conversations")
+                .update({ request_id: reqRow.id })
+                .eq("id", conversationId);
+            } else {
+              const { data: newReq } = await supabaseAdmin
+                .from("requests")
+                .insert({
+                  bid_id: conversation.bid_id,
+                  influencer_id: conversation.influencer_id,
+                  status: "finalized",
+                  proposed_amount: data.price ? parseFloat(data.price) : null,
+                  final_agreed_amount: data.price ? parseFloat(data.price) : null
+                })
+                .select()
+                .single();
+              if (newReq) {
+                await supabaseAdmin
+                  .from("conversations")
+                  .update({ request_id: newReq.id })
+                  .eq("id", conversationId);
+              }
+            }
+          }
 
           newMessage = {
             conversation_id: conversationId,
