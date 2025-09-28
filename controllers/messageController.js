@@ -2598,6 +2598,7 @@ const validateSendMessage = [
     ),
 
   body("message")
+    .optional()
     .isString()
     .trim()
     .isLength({ min: 1, max: 1000 })
@@ -2607,6 +2608,19 @@ const validateSendMessage = [
     .optional()
     .isURL()
     .withMessage("Media URL must be a valid URL"),
+
+  // Custom validation: either message or media_url must be provided
+  body()
+    .custom((value, { req }) => {
+      const { message, media_url } = req.body;
+      
+      if (!message && !media_url) {
+        throw new Error("Either message or media_url must be provided");
+      }
+      
+      return true;
+    })
+    .withMessage("Either message or media_url must be provided"),
 
   // Optional fields for new conversations
   body("campaign_id")

@@ -21,6 +21,12 @@ class AuthService {
         role: "brand_owner",
         name: "Test Brand Owner",
       },
+      brandOwner2: {
+        phone: "9988776655",
+        otp: "123456",
+        role: "brand_owner",
+        name: "Test Brand Owner 2",
+      },
       influencer: {
         phone: "9876543212",
         otp: "123456",
@@ -178,11 +184,17 @@ class AuthService {
         };
       }
 
-      // Handle mock phone numbers
+      // Handle mock phone numbers (with or without country code)
+      const phoneWithoutCountryCode = phone.startsWith('+91') ? phone.substring(3) : phone;
       if (
         phone === this.mockPhone ||
         phone === this.testUsers.brandOwner.phone ||
-        phone === this.testUsers.influencer.phone
+        phone === this.testUsers.brandOwner2.phone ||
+        phone === this.testUsers.influencer.phone ||
+        phoneWithoutCountryCode === this.mockPhone ||
+        phoneWithoutCountryCode === this.testUsers.brandOwner.phone ||
+        phoneWithoutCountryCode === this.testUsers.brandOwner2.phone ||
+        phoneWithoutCountryCode === this.testUsers.influencer.phone
       ) {
         return {
           success: true,
@@ -246,11 +258,17 @@ class AuthService {
         };
       }
 
-      // Handle mock phone numbers
+      // Handle mock phone numbers (with or without country code)
+      const phoneWithoutCountryCode = phone.startsWith('+91') ? phone.substring(3) : phone;
       if (
         phone === this.mockPhone ||
         phone === this.testUsers.brandOwner.phone ||
-        phone === this.testUsers.influencer.phone
+        phone === this.testUsers.brandOwner2.phone ||
+        phone === this.testUsers.influencer.phone ||
+        phoneWithoutCountryCode === this.mockPhone ||
+        phoneWithoutCountryCode === this.testUsers.brandOwner.phone ||
+        phoneWithoutCountryCode === this.testUsers.brandOwner2.phone ||
+        phoneWithoutCountryCode === this.testUsers.influencer.phone
       ) {
         return {
           success: true,
@@ -296,21 +314,30 @@ class AuthService {
    */
   async verifyOTP(phone, token, userData) {
     try {
-      // Handle mock phone numbers and OTP
+      // Handle mock phone numbers and OTP (with or without country code)
+      const phoneWithoutCountryCode = phone.startsWith('+91') ? phone.substring(3) : phone;
       if (
-        (phone === this.mockPhone ||
+        ((phone === this.mockPhone ||
           phone === this.testUsers.brandOwner.phone ||
-          phone === this.testUsers.influencer.phone) &&
+          phone === this.testUsers.brandOwner2.phone ||
+          phone === this.testUsers.influencer.phone) ||
+         (phoneWithoutCountryCode === this.mockPhone ||
+          phoneWithoutCountryCode === this.testUsers.brandOwner.phone ||
+          phoneWithoutCountryCode === this.testUsers.brandOwner2.phone ||
+          phoneWithoutCountryCode === this.testUsers.influencer.phone)) &&
         token === "123456"
       ) {
         // Determine user role based on phone number
         let userRole = "influencer";
         let userName = "Mock Test User";
 
-        if (phone === this.testUsers.brandOwner.phone) {
+        if (phone === this.testUsers.brandOwner.phone || phoneWithoutCountryCode === this.testUsers.brandOwner.phone) {
           userRole = "brand_owner";
           userName = "Test Brand Owner";
-        } else if (phone === this.testUsers.influencer.phone) {
+        } else if (phone === this.testUsers.brandOwner2.phone || phoneWithoutCountryCode === this.testUsers.brandOwner2.phone) {
+          userRole = "brand_owner";
+          userName = "Test Brand Owner 2";
+        } else if (phone === this.testUsers.influencer.phone || phoneWithoutCountryCode === this.testUsers.influencer.phone) {
           userRole = "influencer";
           userName = "Test Influencer";
         }

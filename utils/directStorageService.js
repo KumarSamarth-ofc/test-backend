@@ -1,10 +1,6 @@
 const { supabaseAdmin } = require('../supabase/client');
-const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
-
-// Configure multer for memory storage
-const storage = multer.memoryStorage();
 
 // File type configurations
 const FILE_TYPES = {
@@ -23,37 +19,16 @@ const FILE_TYPES = {
   document: {
     extensions: ['.pdf', '.doc', '.docx', '.txt', '.rtf', '.odt', '.xls', '.xlsx', '.ppt', '.pptx'],
     mimeTypes: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain', 'application/rtf', 'application/vnd.oasis.opendocument.text', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
-    maxSize: 500 * 1024 * 1024, // 500MB - considerable leverage for PDFs
+    maxSize: 500 * 1024 * 1024, // 500MB
     folder: 'chat-documents'
   },
   audio: {
     extensions: ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac'],
     mimeTypes: ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4', 'audio/aac', 'audio/flac'],
-    maxSize: 200 * 1024 * 1024, // 200MB - increased for high-quality audio
+    maxSize: 200 * 1024 * 1024, // 200MB
     folder: 'chat-audio'
   }
 };
-
-// File filter for all supported types
-const fileFilter = (req, file, cb) => {
-  const fileType = getFileType(file.originalname, file.mimetype);
-  
-  if (fileType) {
-    req.fileType = fileType; // Store file type for later use
-    cb(null, true);
-  } else {
-    cb(new Error('Unsupported file type! Only images, videos, documents, and audio files are allowed.'), false);
-  }
-};
-
-// Configure multer with dynamic limits
-const upload = multer({
-  storage: storage,
-  fileFilter: fileFilter,
-  limits: {
-    fileSize: 1024 * 1024 * 1024, // 1GB max (will be overridden by file type)
-  }
-});
 
 /**
  * Determine file type based on extension and MIME type
@@ -129,29 +104,44 @@ function generateUniqueFileName(originalName, fileType) {
 }
 
 /**
- * Upload attachment to Supabase Storage
+ * Upload file directly to Supabase Storage
+ * @param {Buffer} fileBuffer - The file buffer
+ * @param {string} fileName - Original file name
+ * @param {string} mimeType - File MIME type
+ * @param {string} conversationId - Conversation ID
+ * @param {string} userId - User ID
+ * @returns {Promise<{success: boolean, attachment?: object, error?: string}>}
  */
-async function uploadAttachment(fileBuffer, fileName, fileType, conversationId, userId) {
+async function uploadFileToStorage(fileBuffer, fileName, mimeType, conversationId, userId) {
   try {
-    console.log('Starting attachment upload process...');
+    console.log('Starting direct file upload to Supabase Storage...');
     console.log('File name:', fileName);
-    console.log('File type:', fileType);
-    console.log('File buffer size:', fileBuffer.length, 'bytes');
-    console.log('Conversation ID:', conversationId);
-    console.log('User ID:', userId);
+    console.log('MIME type:', mimeType);
+    console.log('File size:', fileBuffer.length, 'bytes');
 
-    // File size validation is now handled by multer limits
-    // Individual file type size limits are removed to allow larger uploads
+    // Determine file type
+    const fileType = getFileType(fileName, mimeType);
+    if (!fileType) {
+      return { 
+        success: false, 
+        error: 'Unsupported file type' 
+      };
+    }
+
+    // Validate file size
+    const typeConfig = FILE_TYPES[fileType];
+    if (fileBuffer.length > typeConfig.maxSize) {
+      return { 
+        success: false, 
+        error: `File size exceeds limit for ${fileType} files (${Math.round(typeConfig.maxSize / (1024 * 1024))}MB)` 
+      };
+    }
 
     // Generate unique filename
     const uniqueFileName = generateUniqueFileName(fileName, typeConfig.folder);
     console.log('Generated filename:', uniqueFileName);
 
-    // Detect MIME type
-    const mimeType = getMimeType(fileName);
-    console.log('Detected MIME type:', mimeType);
-
-    // Upload to Supabase Storage
+    // Upload directly to Supabase Storage
     console.log('Uploading to Supabase Storage...');
     const { data, error } = await supabaseAdmin.storage
       .from('attachments')
@@ -179,7 +169,7 @@ async function uploadAttachment(fileBuffer, fileName, fileType, conversationId, 
     console.log('Public URL generated:', urlData.publicUrl);
 
     // Create attachment metadata
-    const attachmentMetadata = {
+    const attachment = {
       url: urlData.publicUrl,
       fileName: fileName,
       fileType: fileType,
@@ -193,12 +183,12 @@ async function uploadAttachment(fileBuffer, fileName, fileType, conversationId, 
 
     return { 
       success: true, 
-      attachment: attachmentMetadata,
+      attachment: attachment,
       error: null 
     };
 
   } catch (error) {
-    console.error('Attachment upload error:', error);
+    console.error('File upload error:', error);
     return { 
       success: false, 
       error: error.message 
@@ -207,19 +197,23 @@ async function uploadAttachment(fileBuffer, fileName, fileType, conversationId, 
 }
 
 /**
- * Delete attachment from Supabase Storage
+ * Delete file from Supabase Storage
+ * @param {string} fileUrl - The file URL to delete
+ * @returns {Promise<{success: boolean, error?: string}>}
  */
-async function deleteAttachment(attachmentUrl) {
+async function deleteFileFromStorage(fileUrl) {
   try {
-    if (!attachmentUrl) {
+    if (!fileUrl) {
       return { success: true, error: null };
     }
 
     // Extract file path from URL
-    const urlParts = attachmentUrl.split('/');
+    const urlParts = fileUrl.split('/');
     const fileName = urlParts[urlParts.length - 1];
     const folder = urlParts[urlParts.length - 2];
     const filePath = `${folder}/${fileName}`;
+
+    console.log('Deleting file from storage:', filePath);
 
     const { error } = await supabaseAdmin.storage
       .from('attachments')
@@ -230,18 +224,21 @@ async function deleteAttachment(attachmentUrl) {
       return { success: false, error: error.message };
     }
 
+    console.log('File deleted successfully');
     return { success: true, error: null };
   } catch (error) {
-    console.error('Attachment deletion error:', error);
+    console.error('File deletion error:', error);
     return { success: false, error: error.message };
   }
 }
 
 /**
- * Get attachment preview data
+ * Get file preview data
+ * @param {object} attachment - Attachment metadata
+ * @returns {object} Preview data
  */
-function getAttachmentPreview(attachment) {
-  const { fileType, mimeType, fileName, size, url } = attachment;
+function getFilePreview(attachment) {
+  const { fileType, fileName, size, url } = attachment;
   
   const preview = {
     type: fileType,
@@ -259,8 +256,7 @@ function getAttachmentPreview(attachment) {
     preview.thumbnail = url;
   } else if (fileType === 'video') {
     preview.canPreview = true;
-    // For videos, we might want to generate a thumbnail
-    preview.thumbnail = null; // Could be implemented later
+    preview.thumbnail = null; // Could generate thumbnail later
   } else if (fileType === 'audio') {
     preview.canPreview = true;
   } else {
@@ -272,6 +268,8 @@ function getAttachmentPreview(attachment) {
 
 /**
  * Get file icon based on type
+ * @param {string} fileType - File type
+ * @returns {string} Icon emoji
  */
 function getFileIcon(fileType) {
   const icons = {
@@ -285,6 +283,8 @@ function getFileIcon(fileType) {
 
 /**
  * Format file size for display
+ * @param {number} bytes - File size in bytes
+ * @returns {string} Formatted file size
  */
 function formatFileSize(bytes) {
   if (bytes === 0) return '0 Bytes';
@@ -296,29 +296,13 @@ function formatFileSize(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-/**
- * Validate file before upload
- */
-function validateFile(file, fileType) {
-  const typeConfig = FILE_TYPES[fileType];
-  
-  if (!typeConfig) {
-    return { valid: false, error: 'Invalid file type' };
-  }
-
-  // Size validation is now handled by multer limits
-  // Individual file type size limits are removed to allow larger uploads
-  return { valid: true, error: null };
-}
-
 module.exports = {
-  upload,
-  uploadAttachment,
-  deleteAttachment,
-  getAttachmentPreview,
+  uploadFileToStorage,
+  deleteFileFromStorage,
+  getFilePreview,
   getFileIcon,
   formatFileSize,
-  validateFile,
   getFileType,
+  getMimeType,
   FILE_TYPES
 };

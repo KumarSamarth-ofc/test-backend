@@ -451,6 +451,13 @@ class AuthController {
                 "Test brand owner account for testing campaigns and bids",
             },
             {
+              role: "Brand Owner 2",
+              phone: "9988776655",
+              otp: "123456",
+              description:
+                "Additional test brand owner account for testing campaigns and bids",
+            },
+            {
               role: "Influencer",
               phone: "9876543212",
               otp: "123456",

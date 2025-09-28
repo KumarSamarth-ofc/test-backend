@@ -29,10 +29,10 @@ CREATE TABLE messages (
 
 | Type | Extensions | Max Size | MIME Types |
 |------|------------|----------|------------|
-| **Images** | .jpg, .jpeg, .png, .gif, .webp, .bmp, .svg | 10MB | image/* |
-| **Videos** | .mp4, .mov, .avi, .mkv, .webm, .m4v | 100MB | video/* |
-| **Documents** | .pdf, .doc, .docx, .txt, .rtf, .odt, .xls, .xlsx, .ppt, .pptx | 50MB | application/*, text/* |
-| **Audio** | .mp3, .wav, .ogg, .m4a, .aac, .flac | 25MB | audio/* |
+| **Images** | .jpg, .jpeg, .png, .gif, .webp, .bmp, .svg | 1GB | image/* |
+| **Videos** | .mp4, .mov, .avi, .mkv, .webm, .m4v | 1GB | video/* |
+| **Documents** | .pdf, .doc, .docx, .txt, .rtf, .odt, .xls, .xlsx, .ppt, .pptx | 500MB | application/*, text/* |
+| **Audio** | .mp3, .wav, .ogg, .m4a, .aac, .flac | 200MB | audio/* |
 
 ### 3. API Endpoints
 
@@ -348,10 +348,10 @@ const FileUpload = ({ onFileSelect, onUpload, uploading = false }) => {
 
   const validateFile = (file) => {
     const maxSizes = {
-      image: 10 * 1024 * 1024,    // 10MB
-      video: 100 * 1024 * 1024,   // 100MB
-      document: 50 * 1024 * 1024,  // 50MB
-      audio: 25 * 1024 * 1024     // 25MB
+      image: 1024 * 1024 * 1024,    // 1GB
+      video: 1024 * 1024 * 1024,    // 1GB
+      document: 500 * 1024 * 1024,  // 500MB
+      audio: 200 * 1024 * 1024      // 200MB
     };
 
     const fileType = getFileType(file);
@@ -434,7 +434,7 @@ const FileUpload = ({ onFileSelect, onUpload, uploading = false }) => {
           Images, videos, documents, and audio files
         </p>
         <p className="text-xs text-gray-400">
-          Max sizes: Images 10MB, Videos 100MB, Documents 50MB, Audio 25MB
+          Max sizes: Images 1GB, Videos 1GB, Documents 500MB, Audio 200MB
         </p>
       </div>
       
@@ -728,10 +728,10 @@ You can adjust file size limits in `utils/attachmentService.js`:
 
 ```javascript
 const FILE_TYPES = {
-  image: { maxSize: 10 * 1024 * 1024 },    // 10MB
-  video: { maxSize: 100 * 1024 * 1024 },   // 100MB
-  document: { maxSize: 50 * 1024 * 1024 },  // 50MB
-  audio: { maxSize: 25 * 1024 * 1024 }     // 25MB
+  image: { maxSize: 1024 * 1024 * 1024 },    // 1GB
+  video: { maxSize: 1024 * 1024 * 1024 },    // 1GB
+  document: { maxSize: 500 * 1024 * 1024 },  // 500MB
+  audio: { maxSize: 200 * 1024 * 1024 }      // 200MB
 };
 ```
 
