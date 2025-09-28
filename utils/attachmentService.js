@@ -17,13 +17,13 @@ const FILE_TYPES = {
   video: {
     extensions: ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'],
     mimeTypes: ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/x-matroska', 'video/webm', 'video/x-m4v'],
-    maxSize: 1024 * 1024 * 1024, // 1GB
+    maxSize: 500 * 1024 * 1024, // 500MB
     folder: 'chat-videos'
   },
   document: {
     extensions: ['.pdf', '.doc', '.docx', '.txt', '.rtf', '.odt', '.xls', '.xlsx', '.ppt', '.pptx'],
     mimeTypes: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain', 'application/rtf', 'application/vnd.oasis.opendocument.text', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
-    maxSize: 500 * 1024 * 1024, // 500MB - considerable leverage for PDFs
+    maxSize: 200 * 1024 * 1024, // 200MB
     folder: 'chat-documents'
   },
   audio: {
@@ -140,8 +140,11 @@ async function uploadAttachment(fileBuffer, fileName, fileType, conversationId, 
     console.log('Conversation ID:', conversationId);
     console.log('User ID:', userId);
 
-    // File size validation is now handled by multer limits
-    // Individual file type size limits are removed to allow larger uploads
+    // Get file type configuration
+    const typeConfig = FILE_TYPES[fileType];
+    if (!typeConfig) {
+      throw new Error(`Invalid file type: ${fileType}`);
+    }
 
     // Generate unique filename
     const uniqueFileName = generateUniqueFileName(fileName, typeConfig.folder);
@@ -297,18 +300,47 @@ function formatFileSize(bytes) {
 }
 
 /**
+ * Determine file type from filename and mime type
+ */
+function validateFileType(fileName, mimeType) {
+  const ext = path.extname(fileName).toLowerCase();
+  
+  for (const [type, config] of Object.entries(FILE_TYPES)) {
+    if (config.extensions.includes(ext) || config.mimeTypes.includes(mimeType)) {
+      return { valid: true, fileType: type, error: null };
+    }
+  }
+  
+  return { valid: false, fileType: null, error: 'Unsupported file type' };
+}
+
+/**
  * Validate file before upload
  */
-function validateFile(file, fileType) {
+function validateFile(fileBuffer, fileName, mimeType) {
+  // First validate file type
+  const typeValidation = validateFileType(fileName, mimeType);
+  if (!typeValidation.valid) {
+    return { valid: false, error: typeValidation.error };
+  }
+
+  const fileType = typeValidation.fileType;
   const typeConfig = FILE_TYPES[fileType];
   
   if (!typeConfig) {
     return { valid: false, error: 'Invalid file type' };
   }
 
-  // Size validation is now handled by multer limits
-  // Individual file type size limits are removed to allow larger uploads
-  return { valid: true, error: null };
+  // Validate file size
+  if (fileBuffer.length > typeConfig.maxSize) {
+    const maxSizeMB = Math.round(typeConfig.maxSize / (1024 * 1024));
+    return { 
+      valid: false, 
+      error: `File size exceeds limit for ${fileType} files (${maxSizeMB}MB maximum)` 
+    };
+  }
+
+  return { valid: true, fileType: fileType, error: null };
 }
 
 module.exports = {
@@ -319,6 +351,7 @@ module.exports = {
   getFileIcon,
   formatFileSize,
   validateFile,
+  validateFileType,
   getFileType,
   FILE_TYPES
 };

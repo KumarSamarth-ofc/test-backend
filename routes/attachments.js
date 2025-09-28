@@ -4,25 +4,22 @@ const attachmentController = require('../controllers/attachmentController');
 const attachmentService = require('../utils/attachmentService');
 const authService = require('../utils/auth');
 
-// Middleware for different file types
-const uploadImage = attachmentService.upload.single('image');
-const uploadVideo = attachmentService.upload.single('video');
-const uploadDocument = attachmentService.upload.single('document');
-const uploadAudio = attachmentService.upload.single('audio');
-const uploadAny = attachmentService.upload.single('attachment');
-
 // Upload attachment for a conversation
 router.post('/conversations/:conversation_id/upload', 
   authService.authenticateToken, 
-  uploadAny, 
   attachmentController.uploadAttachment
 );
 
 // Send message with attachment
 router.post('/conversations/:conversation_id/send-with-attachment',
   authService.authenticateToken,
-  uploadAny,
   attachmentController.sendMessageWithAttachment
+);
+
+// Upload with FormData (for Android content URIs)
+router.post('/conversations/:conversation_id/upload-formdata',
+  authService.authenticateToken,
+  attachmentController.uploadWithFormData
 );
 
 // Delete attachment

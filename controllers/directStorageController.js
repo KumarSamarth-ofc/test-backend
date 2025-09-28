@@ -7,27 +7,59 @@ class DirectStorageController {
    */
   async uploadAndSendMessage(req, res) {
     try {
+      console.log('🔍 [DIRECT STORAGE DEBUG] uploadAndSendMessage called');
+      console.log('🔍 [DIRECT STORAGE DEBUG] Request body keys:', Object.keys(req.body));
+      console.log('🔍 [DIRECT STORAGE DEBUG] fileName:', req.body.fileName);
+      console.log('🔍 [DIRECT STORAGE DEBUG] mimeType:', req.body.mimeType);
+      console.log('🔍 [DIRECT STORAGE DEBUG] fileData length:', req.body.fileData ? req.body.fileData.length : 'undefined');
+      
       const { conversation_id } = req.params;
-      const { message, message_type = 'user_input' } = req.body;
+      const { message, message_type = 'user_input', fileName, mimeType, fileData } = req.body;
       const userId = req.user.id;
 
-      // Get file from request (assuming it's in req.file from multer or similar)
-      const file = req.file;
-      if (!file) {
+      if (!fileName || !mimeType || !fileData) {
         return res.status(400).json({
           success: false,
-          message: 'No file provided'
+          message: 'Missing required fields: fileName, mimeType, fileData'
+        });
+      }
+
+      // Convert base64 file data to buffer
+      let fileBuffer;
+      try {
+        fileBuffer = Buffer.from(fileData, 'base64');
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid file data format. Expected base64 encoded data.'
         });
       }
 
       // Verify conversation exists and user has access
+      console.log('🔍 [DIRECT STORAGE DEBUG] Looking up conversation:', conversation_id);
+      console.log('🔍 [DIRECT STORAGE DEBUG] User ID:', userId);
+      
       const { data: conversation, error: convError } = await supabaseAdmin
         .from('conversations')
         .select('id, brand_owner_id, influencer_id')
         .eq('id', conversation_id)
         .single();
 
-      if (convError || !conversation) {
+      console.log('🔍 [DIRECT STORAGE DEBUG] Conversation lookup result:');
+      console.log('   - Error:', convError);
+      console.log('   - Data:', conversation);
+
+      if (convError) {
+        console.log('❌ [DIRECT STORAGE DEBUG] Conversation lookup error:', convError);
+        return res.status(404).json({
+          success: false,
+          message: 'Conversation not found',
+          error: convError.message
+        });
+      }
+
+      if (!conversation) {
+        console.log('❌ [DIRECT STORAGE DEBUG] No conversation found with ID:', conversation_id);
         return res.status(404).json({
           success: false,
           message: 'Conversation not found'
@@ -35,6 +67,10 @@ class DirectStorageController {
       }
 
       if (conversation.brand_owner_id !== userId && conversation.influencer_id !== userId) {
+        console.log('❌ [DIRECT STORAGE DEBUG] Access denied - User not in conversation');
+        console.log('   - Brand Owner ID:', conversation.brand_owner_id);
+        console.log('   - Influencer ID:', conversation.influencer_id);
+        console.log('   - User ID:', userId);
         return res.status(403).json({
           success: false,
           message: 'Access denied to this conversation'
@@ -48,9 +84,9 @@ class DirectStorageController {
 
       // Upload file directly to Supabase Storage
       const uploadResult = await storageService.uploadFileToStorage(
-        file.buffer,
-        file.originalname,
-        file.mimetype,
+        fileBuffer,
+        fileName,
+        mimeType,
         conversation_id,
         userId
       );
@@ -346,7 +382,6 @@ class DirectStorageController {
       });
     }
   }
-
 }
 
 module.exports = new DirectStorageController();

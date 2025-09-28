@@ -1,5 +1,6 @@
 const { supabaseAdmin } = require('../supabase/client');
 const attachmentService = require('../utils/attachmentService');
+const multiparty = require('multiparty');
 
 class AttachmentController {
   /**
@@ -7,24 +8,59 @@ class AttachmentController {
    */
   async uploadAttachment(req, res) {
     try {
+      console.log('🔍 [ATTACHMENT DEBUG] uploadAttachment called');
+      console.log('🔍 [ATTACHMENT DEBUG] Request body keys:', Object.keys(req.body));
+      console.log('🔍 [ATTACHMENT DEBUG] fileName:', req.body.fileName);
+      console.log('🔍 [ATTACHMENT DEBUG] mimeType:', req.body.mimeType);
+      console.log('🔍 [ATTACHMENT DEBUG] fileData length:', req.body.fileData ? req.body.fileData.length : 'undefined');
+      
       const { conversation_id } = req.params;
+      const { fileName, mimeType, fileData } = req.body;
       const userId = req.user.id;
 
-      if (!req.file) {
+      if (!fileName || !mimeType || !fileData) {
         return res.status(400).json({
           success: false,
-          message: 'No file provided'
+          message: 'Missing required fields: fileName, mimeType, fileData'
+        });
+      }
+
+      // Convert base64 file data to buffer
+      let fileBuffer;
+      try {
+        fileBuffer = Buffer.from(fileData, 'base64');
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid file data format. Expected base64 encoded data.'
         });
       }
 
       // Verify conversation exists and user has access
+      console.log('🔍 [ATTACHMENT DEBUG] Looking up conversation:', conversation_id);
+      console.log('🔍 [ATTACHMENT DEBUG] User ID:', userId);
+      
       const { data: conversation, error: convError } = await supabaseAdmin
         .from('conversations')
         .select('id, brand_owner_id, influencer_id')
         .eq('id', conversation_id)
         .single();
 
-      if (convError || !conversation) {
+      console.log('🔍 [ATTACHMENT DEBUG] Conversation lookup result:');
+      console.log('   - Error:', convError);
+      console.log('   - Data:', conversation);
+
+      if (convError) {
+        console.log('❌ [ATTACHMENT DEBUG] Conversation lookup error:', convError);
+        return res.status(404).json({
+          success: false,
+          message: 'Conversation not found',
+          error: convError.message
+        });
+      }
+
+      if (!conversation) {
+        console.log('❌ [ATTACHMENT DEBUG] No conversation found with ID:', conversation_id);
         return res.status(404).json({
           success: false,
           message: 'Conversation not found'
@@ -32,23 +68,18 @@ class AttachmentController {
       }
 
       if (conversation.brand_owner_id !== userId && conversation.influencer_id !== userId) {
+        console.log('❌ [ATTACHMENT DEBUG] Access denied - User not in conversation');
+        console.log('   - Brand Owner ID:', conversation.brand_owner_id);
+        console.log('   - Influencer ID:', conversation.influencer_id);
+        console.log('   - User ID:', userId);
         return res.status(403).json({
           success: false,
           message: 'Access denied to this conversation'
         });
       }
 
-      // Get file type from request (set by multer middleware)
-      const fileType = req.fileType;
-      if (!fileType) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid file type'
-        });
-      }
-
       // Validate file
-      const validation = attachmentService.validateFile(req.file, fileType);
+      const validation = attachmentService.validateFile(fileBuffer, fileName, mimeType);
       if (!validation.valid) {
         return res.status(400).json({
           success: false,
@@ -58,9 +89,9 @@ class AttachmentController {
 
       // Upload attachment
       const result = await attachmentService.uploadAttachment(
-        req.file.buffer,
-        req.file.originalname,
-        fileType,
+        fileBuffer,
+        fileName,
+        validation.fileType,
         conversation_id,
         userId
       );
@@ -92,29 +123,283 @@ class AttachmentController {
   }
 
   /**
+   * Upload with FormData (for Android content URIs)
+   */
+  async uploadWithFormData(req, res) {
+    try {
+      console.log('🔍 [FORMDATA DEBUG] uploadWithFormData called');
+      
+      const { conversation_id } = req.params;
+      const userId = req.user.id;
+
+      // Parse FormData using multiparty
+      const form = new multiparty.Form();
+      
+      form.parse(req, async (err, fields, files) => {
+        if (err) {
+          console.error('FormData parsing error:', err);
+          return res.status(400).json({
+            success: false,
+            message: 'Failed to parse FormData'
+          });
+        }
+
+        console.log('🔍 [FORMDATA DEBUG] Parsed fields:', fields);
+        console.log('🔍 [FORMDATA DEBUG] Parsed files:', files);
+
+        const message = fields.message ? fields.message[0] : '';
+        const message_type = fields.message_type ? fields.message_type[0] : 'user_input';
+
+        if (!files.file || !files.file[0]) {
+          return res.status(400).json({
+            success: false,
+            message: 'No file provided in FormData'
+          });
+        }
+
+        const file = files.file[0];
+        const fileName = file.originalFilename || 'unknown_file';
+        const mimeType = file.headers['content-type'] || 'application/octet-stream';
+        
+        // Read file from temporary path
+        const fs = require('fs');
+        const fileBuffer = fs.readFileSync(file.path);
+
+        console.log('🔍 [FORMDATA DEBUG] File details:', {
+          fileName,
+          mimeType,
+          size: fileBuffer.length
+        });
+
+        // Clean up temporary file
+        try {
+          fs.unlinkSync(file.path);
+        } catch (cleanupError) {
+          console.warn('Failed to clean up temporary file:', cleanupError.message);
+        }
+
+        try {
+          // Verify conversation exists and user has access
+          const { data: conversation, error: convError } = await supabaseAdmin
+            .from('conversations')
+            .select('id, brand_owner_id, influencer_id')
+            .eq('id', conversation_id)
+            .single();
+
+          if (convError || !conversation) {
+            return res.status(404).json({
+              success: false,
+              message: 'Conversation not found'
+            });
+          }
+
+          if (conversation.brand_owner_id !== userId && conversation.influencer_id !== userId) {
+            return res.status(403).json({
+              success: false,
+              message: 'Access denied to this conversation'
+            });
+          }
+
+          // Determine receiver ID
+          const receiverId = conversation.brand_owner_id === userId 
+            ? conversation.influencer_id 
+            : conversation.brand_owner_id;
+
+          // Validate file
+          const validation = attachmentService.validateFile(fileBuffer, fileName, mimeType);
+          if (!validation.valid) {
+            return res.status(400).json({
+              success: false,
+              message: validation.error
+            });
+          }
+
+          // Upload attachment
+          const uploadResult = await attachmentService.uploadAttachment(
+            fileBuffer,
+            fileName,
+            validation.fileType,
+            conversation_id,
+            userId
+          );
+
+          if (!uploadResult.success) {
+            return res.status(500).json({
+              success: false,
+              message: uploadResult.error
+            });
+          }
+
+          // Create message with attachment
+          const { data: newMessage, error: msgError } = await supabaseAdmin
+            .from('messages')
+            .insert({
+              conversation_id,
+              sender_id: userId,
+              receiver_id: receiverId,
+              message: message || `📎 Sent ${fileName}`,
+              media_url: uploadResult.attachment.url,
+              message_type: message_type,
+              attachment_metadata: {
+                fileName: uploadResult.attachment.fileName,
+                fileType: uploadResult.attachment.fileType,
+                mimeType: uploadResult.attachment.mimeType,
+                size: uploadResult.attachment.size,
+                preview: attachmentService.getAttachmentPreview(uploadResult.attachment)
+              }
+            })
+            .select()
+            .single();
+
+          if (msgError) {
+            await attachmentService.deleteAttachment(uploadResult.attachment.url);
+            return res.status(500).json({
+              success: false,
+              message: 'Failed to create message'
+            });
+          }
+
+          // Update conversation timestamp
+          await supabaseAdmin
+            .from('conversations')
+            .update({ updated_at: new Date().toISOString() })
+            .eq('id', conversation_id);
+
+          // Emit real-time update
+          const io = req.app.get('io');
+          if (io) {
+            // Get conversation context
+            const { data: conversationContext } = await supabaseAdmin
+              .from('conversations')
+              .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data')
+              .eq('id', conversation_id)
+              .single();
+
+            const context = conversationContext ? {
+              id: conversationContext.id,
+              chat_status: conversationContext.chat_status,
+              flow_state: conversationContext.flow_state,
+              awaiting_role: conversationContext.awaiting_role,
+              conversation_type: conversationContext.campaign_id ? 'campaign' : 
+                                conversationContext.bid_id ? 'bid' : 'direct',
+              automation_enabled: conversationContext.automation_enabled || false,
+              current_action_data: conversationContext.current_action_data
+            } : null;
+
+            // Emit to conversation room
+            io.to(`conversation_${conversation_id}`).emit('new_message', {
+              conversation_id,
+              message: newMessage,
+              conversation_context: context
+            });
+
+            // Emit notification to receiver
+            io.to(`user_${receiverId}`).emit('notification', {
+              type: 'message',
+              data: {
+                id: newMessage.id,
+                title: `${req.user.name} sent a file`,
+                body: newMessage.message,
+                created_at: newMessage.created_at,
+                conversation_context: context,
+                payload: { 
+                  conversation_id, 
+                  message_id: newMessage.id, 
+                  sender_id: userId 
+                },
+                conversation_id,
+                message: newMessage,
+                sender_id: userId,
+                receiver_id: receiverId
+              }
+            });
+          }
+
+          res.json({
+            success: true,
+            message: newMessage,
+            attachment: uploadResult.attachment,
+            preview: attachmentService.getAttachmentPreview(uploadResult.attachment)
+          });
+
+        } catch (error) {
+          console.error('FormData upload error:', error);
+          res.status(500).json({
+            success: false,
+            message: 'Internal server error'
+          });
+        }
+      });
+
+    } catch (error) {
+      console.error('FormData parsing error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  /**
    * Send message with attachment
    */
   async sendMessageWithAttachment(req, res) {
     try {
-      const { conversation_id, message, message_type = 'user_input' } = req.body;
+      console.log('🔍 [ATTACHMENT DEBUG] sendMessageWithAttachment called');
+      console.log('🔍 [ATTACHMENT DEBUG] Request params:', req.params);
+      console.log('🔍 [ATTACHMENT DEBUG] Request body keys:', Object.keys(req.body));
+      console.log('🔍 [ATTACHMENT DEBUG] fileName:', req.body.fileName);
+      console.log('🔍 [ATTACHMENT DEBUG] mimeType:', req.body.mimeType);
+      console.log('🔍 [ATTACHMENT DEBUG] fileData length:', req.body.fileData ? req.body.fileData.length : 'undefined');
+      
+      const { conversation_id } = req.params;
+      console.log('🔍 [ATTACHMENT DEBUG] conversation_id from params:', conversation_id);
+      const { message, message_type = 'user_input', fileName, mimeType, fileData } = req.body;
       const userId = req.user.id;
-      const file = req.file;
 
-      if (!file) {
+      if (!fileName || !mimeType || !fileData) {
         return res.status(400).json({
           success: false,
-          message: 'No attachment provided'
+          message: 'Missing required fields: fileName, mimeType, fileData'
+        });
+      }
+
+      // Convert base64 file data to buffer
+      let fileBuffer;
+      try {
+        fileBuffer = Buffer.from(fileData, 'base64');
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid file data format. Expected base64 encoded data.'
         });
       }
 
       // Verify conversation exists and user has access
+      console.log('🔍 [ATTACHMENT DEBUG] Looking up conversation:', conversation_id);
+      console.log('🔍 [ATTACHMENT DEBUG] User ID:', userId);
+      
       const { data: conversation, error: convError } = await supabaseAdmin
         .from('conversations')
         .select('id, brand_owner_id, influencer_id')
         .eq('id', conversation_id)
         .single();
 
-      if (convError || !conversation) {
+      console.log('🔍 [ATTACHMENT DEBUG] Conversation lookup result:');
+      console.log('   - Error:', convError);
+      console.log('   - Data:', conversation);
+
+      if (convError) {
+        console.log('❌ [ATTACHMENT DEBUG] Conversation lookup error:', convError);
+        return res.status(404).json({
+          success: false,
+          message: 'Conversation not found',
+          error: convError.message
+        });
+      }
+
+      if (!conversation) {
+        console.log('❌ [ATTACHMENT DEBUG] No conversation found with ID:', conversation_id);
         return res.status(404).json({
           success: false,
           message: 'Conversation not found'
@@ -122,6 +407,10 @@ class AttachmentController {
       }
 
       if (conversation.brand_owner_id !== userId && conversation.influencer_id !== userId) {
+        console.log('❌ [ATTACHMENT DEBUG] Access denied - User not in conversation');
+        console.log('   - Brand Owner ID:', conversation.brand_owner_id);
+        console.log('   - Influencer ID:', conversation.influencer_id);
+        console.log('   - User ID:', userId);
         return res.status(403).json({
           success: false,
           message: 'Access denied to this conversation'
@@ -133,47 +422,65 @@ class AttachmentController {
         ? conversation.influencer_id 
         : conversation.brand_owner_id;
 
-      // Get file type and validate
-      const fileType = req.fileType;
-      if (!fileType) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid file type'
-        });
-      }
-
-      const validation = attachmentService.validateFile(file, fileType);
+      // Validate file
+      console.log('🔍 [ATTACHMENT DEBUG] Validating file...');
+      console.log('🔍 [ATTACHMENT DEBUG] File buffer size:', fileBuffer.length);
+      console.log('🔍 [ATTACHMENT DEBUG] File name:', fileName);
+      console.log('🔍 [ATTACHMENT DEBUG] MIME type:', mimeType);
+      
+      const validation = attachmentService.validateFile(fileBuffer, fileName, mimeType);
+      console.log('🔍 [ATTACHMENT DEBUG] Validation result:', validation);
+      
       if (!validation.valid) {
+        console.log('❌ [ATTACHMENT DEBUG] File validation failed:', validation.error);
         return res.status(400).json({
           success: false,
           message: validation.error
         });
       }
+      
+      console.log('✅ [ATTACHMENT DEBUG] File validation passed');
 
       // Upload attachment
+      console.log('🔍 [ATTACHMENT DEBUG] Starting file upload...');
       const uploadResult = await attachmentService.uploadAttachment(
-        file.buffer,
-        file.originalname,
-        fileType,
+        fileBuffer,
+        fileName,
+        validation.fileType,
         conversation_id,
         userId
       );
 
+      console.log('🔍 [ATTACHMENT DEBUG] Upload result:', uploadResult);
+
       if (!uploadResult.success) {
+        console.log('❌ [ATTACHMENT DEBUG] Upload failed:', uploadResult.error);
         return res.status(500).json({
           success: false,
           message: uploadResult.error
         });
       }
 
+      console.log('✅ [ATTACHMENT DEBUG] Upload successful');
+
       // Create message with attachment
+      console.log('🔍 [ATTACHMENT DEBUG] Creating message...');
+      console.log('🔍 [ATTACHMENT DEBUG] Message data:', {
+        conversation_id,
+        sender_id: userId,
+        receiver_id: receiverId,
+        message: message || `Sent a ${validation.fileType}`,
+        media_url: uploadResult.attachment.url,
+        message_type: message_type
+      });
+
       const { data: newMessage, error: msgError } = await supabaseAdmin
         .from('messages')
         .insert({
           conversation_id,
           sender_id: userId,
           receiver_id: receiverId,
-          message: message || `Sent a ${fileType}`,
+          message: message || `📎 Sent ${fileName}`,
           media_url: uploadResult.attachment.url,
           message_type: message_type,
           attachment_metadata: {
@@ -187,7 +494,12 @@ class AttachmentController {
         .select()
         .single();
 
+      console.log('🔍 [ATTACHMENT DEBUG] Message creation result:');
+      console.log('   - Error:', msgError);
+      console.log('   - Data:', newMessage);
+
       if (msgError) {
+        console.log('❌ [ATTACHMENT DEBUG] Message creation failed:', msgError);
         // Clean up uploaded file if message creation fails
         await attachmentService.deleteAttachment(uploadResult.attachment.url);
         return res.status(500).json({
@@ -195,6 +507,8 @@ class AttachmentController {
           message: 'Failed to create message'
         });
       }
+
+      console.log('✅ [ATTACHMENT DEBUG] Message created successfully');
 
       // Update conversation timestamp
       await supabaseAdmin
@@ -204,7 +518,11 @@ class AttachmentController {
 
       // Emit real-time update
       const io = req.app.get('io');
+      console.log('🔍 [ATTACHMENT DEBUG] Socket IO available:', !!io);
+      console.log('🔍 [ATTACHMENT DEBUG] Socket IO type:', typeof io);
+      console.log('🔍 [ATTACHMENT DEBUG] Socket IO methods:', io ? Object.getOwnPropertyNames(Object.getPrototypeOf(io)) : 'N/A');
       if (io) {
+        console.log('🔍 [ATTACHMENT DEBUG] Emitting real-time updates...');
         // Get conversation context
         const { data: conversationContext } = await supabaseAdmin
           .from('conversations')
@@ -224,13 +542,17 @@ class AttachmentController {
         } : null;
 
         // Emit to conversation room
-        io.to(`conversation_${conversation_id}`).emit('new_message', {
+        console.log('🔍 [ATTACHMENT DEBUG] Emitting to conversation room:', `conversation_${conversation_id}`);
+        const messageData = {
           conversation_id,
           message: newMessage,
           conversation_context: context
-        });
+        };
+        console.log('🔍 [ATTACHMENT DEBUG] Message data being emitted:', JSON.stringify(messageData, null, 2));
+        io.to(`conversation_${conversation_id}`).emit('new_message', messageData);
 
         // Emit notification to receiver
+        console.log('🔍 [ATTACHMENT DEBUG] Emitting notification to user:', `user_${receiverId}`);
         io.to(`user_${receiverId}`).emit('notification', {
           type: 'message',
           data: {
