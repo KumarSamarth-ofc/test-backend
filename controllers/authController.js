@@ -577,9 +577,106 @@ const validateUpdateProfile = [
     .withMessage("Categories must be an array"),
 ];
 
+// Validation for verification details
+const validateVerificationDetails = [
+  body("pan_number")
+    .optional()
+    .matches(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/)
+    .withMessage("PAN number must be in format: AAAAA9999A"),
+  body("verification_document_type")
+    .optional()
+    .isIn(["pan_card", "aadhaar_card", "passport", "driving_license", "voter_id"])
+    .withMessage("Invalid verification document type"),
+  body("address_line1")
+    .optional()
+    .isLength({ min: 5, max: 200 })
+    .withMessage("Address line 1 must be between 5 and 200 characters"),
+  body("address_city")
+    .optional()
+    .isLength({ min: 2, max: 100 })
+    .withMessage("City must be between 2 and 100 characters"),
+  body("address_state")
+    .optional()
+    .isLength({ min: 2, max: 100 })
+    .withMessage("State must be between 2 and 100 characters"),
+  body("address_pincode")
+    .optional()
+    .matches(/^[1-9][0-9]{5}$/)
+    .withMessage("Pincode must be 6 digits and not start with 0"),
+  body("address_country")
+    .optional()
+    .isLength({ min: 2, max: 100 })
+    .withMessage("Country must be between 2 and 100 characters"),
+  body("date_of_birth")
+    .optional()
+    .isISO8601()
+    .withMessage("Date of birth must be a valid date"),
+  body("bio")
+    .optional()
+    .isLength({ min: 10, max: 1000 })
+    .withMessage("Bio must be between 10 and 1000 characters"),
+  body("experience_years")
+    .optional()
+    .isInt({ min: 0, max: 50 })
+    .withMessage("Experience years must be between 0 and 50"),
+  body("specializations")
+    .optional()
+    .isArray()
+    .withMessage("Specializations must be an array"),
+  body("portfolio_links")
+    .optional()
+    .isArray()
+    .withMessage("Portfolio links must be an array"),
+  body("emergency_contact_name")
+    .optional()
+    .isLength({ min: 2, max: 100 })
+    .withMessage("Emergency contact name must be between 2 and 100 characters"),
+  body("emergency_contact_phone")
+    .optional()
+    .isMobilePhone("any")
+    .withMessage("Emergency contact phone must be a valid phone number"),
+  body("emergency_contact_relation")
+    .optional()
+    .isLength({ min: 2, max: 50 })
+    .withMessage("Emergency contact relation must be between 2 and 50 characters"),
+  body("business_name")
+    .optional()
+    .isLength({ min: 2, max: 200 })
+    .withMessage("Business name must be between 2 and 200 characters"),
+  body("business_type")
+    .optional()
+    .isIn(["individual", "partnership", "private_limited", "public_limited", "llp", "sole_proprietorship"])
+    .withMessage("Invalid business type"),
+  body("gst_number")
+    .optional()
+    .matches(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/)
+    .withMessage("GST number must be in valid format"),
+  body("business_registration_number")
+    .optional()
+    .isLength({ min: 5, max: 50 })
+    .withMessage("Business registration number must be between 5 and 50 characters"),
+  body("business_address")
+    .optional()
+    .isLength({ min: 10, max: 500 })
+    .withMessage("Business address must be between 10 and 500 characters"),
+  body("business_website")
+    .optional()
+    .isURL()
+    .withMessage("Business website must be a valid URL"),
+];
+
+// Validation for verification document upload
+const validateVerificationDocument = [
+  body("document_type")
+    .isIn(["pan_card", "aadhaar_card", "passport", "driving_license", "voter_id"])
+    .withMessage("Invalid document type"),
+];
+
 module.exports = {
   AuthController: new AuthController(),
   validateSendOTP,
   validateVerifyOTP,
   validateUpdateProfile,
+  validateVerificationDetails,
+  validateVerificationDocument,
 };
