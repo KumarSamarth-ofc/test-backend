@@ -44,6 +44,188 @@ class AuthService {
   }
 
   /**
+   * Upsert an array of social platforms for a user during registration/onboarding
+   */
+  async upsertUserSocialPlatforms(userId, rawPlatforms) {
+    try {
+      if (!userId || !Array.isArray(rawPlatforms) || rawPlatforms.length === 0) {
+        return { success: true };
+      }
+
+      // Normalize incoming items and filter invalid ones
+      const platforms = rawPlatforms
+        .map((item) => {
+          const platform = item.platform || item.platform_name || item.name;
+          const username = item.username || item.handle;
+          const profileLink = item.profile_link || item.link || (platform && username ? `https://${platform}.com/${username}` : undefined);
+          const followersCount = item.followers_count !== undefined ? parseInt(item.followers_count, 10) : (item.followers !== undefined ? parseInt(item.followers, 10) : undefined);
+          const engagementRate = item.engagement_rate !== undefined ? parseFloat(item.engagement_rate) : (item.engagement !== undefined ? parseFloat(item.engagement) : undefined);
+          return {
+            platform,
+            username,
+            profile_link: profileLink,
+            followers_count: Number.isFinite(followersCount) ? followersCount : null,
+            engagement_rate: Number.isFinite(engagementRate) ? engagementRate : null,
+          };
+        })
+        .filter((p) => p.platform && p.username);
+
+      if (platforms.length === 0) {
+        return { success: true };
+      }
+
+      // For each normalized platform, perform an upsert-like behavior:
+      // If an entry with same user_id and platform_name exists, update it; else insert a new row.
+      for (const p of platforms) {
+        // Check existing by platform_name first (current controllers use platform_name)
+        const { data: existingByName } = await supabaseAdmin
+          .from("social_platforms")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("platform_name", p.platform)
+          .limit(1)
+          .maybeSingle?.() ?? await supabaseAdmin
+          .from("social_platforms")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("platform_name", p.platform)
+          .single();
+
+        const row = {
+          user_id: userId,
+          platform_name: p.platform,
+          platform: p.platform, // best-effort fill for enum column if present
+          username: p.username,
+          profile_link: p.profile_link,
+          followers_count: p.followers_count,
+          engagement_rate: p.engagement_rate,
+          is_connected: true,
+        };
+
+        if (existingByName && existingByName.id) {
+          await supabaseAdmin
+            .from("social_platforms")
+            .update({
+              username: row.username,
+              profile_link: row.profile_link,
+              followers_count: row.followers_count,
+              engagement_rate: row.engagement_rate,
+              platform: row.platform,
+              is_connected: row.is_connected,
+            })
+            .eq("id", existingByName.id)
+            .eq("user_id", userId);
+          continue;
+        }
+
+        // Otherwise insert
+        await supabaseAdmin
+          .from("social_platforms")
+          .insert(row);
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error("Failed to upsert social platforms:", error);
+      return { success: false, message: "Failed to upsert social platforms" };
+    }
+  }
+
+  /**
+   * Normalize a platform item from client payload into DB-ready fields
+   */
+  normalizePlatformItem(rawItem) {
+    if (!rawItem || typeof rawItem !== "object") return null;
+
+    // Accept multiple possible keys from frontend
+    const platformName =
+      rawItem.platform_name || rawItem.platform || rawItem.name || null;
+    const username = rawItem.username || rawItem.platform_username || null;
+    const profileLink = rawItem.profile_link || rawItem.url || null;
+
+    // Followers may arrive as string/number
+    const followersRaw =
+      rawItem.followers_count ?? rawItem.followers ?? rawItem.followersCount;
+    const followersCount =
+      followersRaw === undefined || followersRaw === null
+        ? null
+        : parseInt(followersRaw);
+
+    const engagementRaw = rawItem.engagement_rate ?? rawItem.engagementRate;
+    const engagementRate =
+      engagementRaw === undefined || engagementRaw === null
+        ? null
+        : parseFloat(engagementRaw);
+
+    if (!platformName || !username) return null;
+
+    return {
+      platform_name: String(platformName).toLowerCase(),
+      username: String(username),
+      profile_link: profileLink || null,
+      followers_count: Number.isNaN(followersCount) ? null : followersCount,
+      engagement_rate: Number.isNaN(engagementRate) ? null : engagementRate,
+    };
+  }
+
+  /**
+   * Upsert an array of social platforms for a user
+   */
+  async upsertSocialPlatforms(userId, platforms) {
+    try {
+      if (!Array.isArray(platforms) || platforms.length === 0) return;
+
+      // Normalize and de-duplicate by platform_name
+      const normalized = platforms
+        .map((p) => this.normalizePlatformItem(p))
+        .filter((p) => !!p);
+
+      const uniqueByPlatform = new Map();
+      for (const item of normalized) {
+        uniqueByPlatform.set(item.platform_name, item);
+      }
+
+      for (const [, item] of uniqueByPlatform) {
+        // Check if a row already exists for this user+platform
+        const { data: existing, error: checkError } = await supabaseAdmin
+          .from("social_platforms")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("platform_name", item.platform_name)
+          .limit(1)
+          .single();
+
+        if (existing && !checkError) {
+          // Update existing
+          await supabaseAdmin
+            .from("social_platforms")
+            .update({
+              username: item.username,
+              profile_link: item.profile_link,
+              followers_count: item.followers_count,
+              engagement_rate: item.engagement_rate,
+            })
+            .eq("id", existing.id)
+            .eq("user_id", userId);
+        } else {
+          // Insert new
+          await supabaseAdmin.from("social_platforms").insert({
+            user_id: userId,
+            platform_name: item.platform_name,
+            username: item.username,
+            profile_link: item.profile_link,
+            followers_count: item.followers_count,
+            engagement_rate: item.engagement_rate,
+          });
+        }
+      }
+    } catch (error) {
+      // Do not block registration flow on platform sync errors
+      console.error("Failed to upsert social platforms:", error);
+    }
+  }
+
+  /**
    * Generate OTP
    */
   generateOTP() {
@@ -457,6 +639,22 @@ class AuthService {
           }
         }
 
+        // If social platforms provided in registration payload, upsert them now
+        if (userData?.social_platforms || userData?.socialPlatforms) {
+          const upsertResult = await this.upsertUserSocialPlatforms(
+            user.id,
+            userData.social_platforms || userData.socialPlatforms
+          );
+          if (!upsertResult.success) {
+            console.warn("Social platforms upsert failed for mock user");
+          }
+        }
+
+        // Sync social platforms for mock user when provided
+        if (userData?.social_platforms) {
+          await this.upsertSocialPlatforms(user.id, userData.social_platforms);
+        }
+
         // Generate JWT token for mock user
         const jwtToken = jwt.sign(
           {
@@ -580,6 +778,11 @@ class AuthService {
 
         user = newUser;
 
+        // Sync social platforms for newly created user when provided
+        if (userData?.social_platforms) {
+          await this.upsertSocialPlatforms(user.id, userData.social_platforms);
+        }
+
         // Send welcome message
         try {
           await whatsappService.sendWelcome(phone, userData?.name || "User");
@@ -646,6 +849,22 @@ class AuthService {
               user = updatedUser;
             }
           }
+
+          // Sync social platforms for existing user when provided
+          if (userData.social_platforms) {
+            await this.upsertSocialPlatforms(user.id, userData.social_platforms);
+          }
+        }
+      }
+
+      // If social platforms provided in registration payload, upsert them now (works for both new and existing users)
+      if (userData?.social_platforms || userData?.socialPlatforms) {
+        const upsertResult = await this.upsertUserSocialPlatforms(
+          user.id,
+          userData.social_platforms || userData.socialPlatforms
+        );
+        if (!upsertResult.success) {
+          console.warn("Social platforms upsert failed for user", user.id);
         }
       }
 
