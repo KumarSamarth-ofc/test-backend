@@ -157,6 +157,114 @@ class UserController {
     }
 
     /**
+     * List brand owners (admin-only) with filtering and pagination
+     */
+    async listBrandOwners(req, res) {
+        try {
+            const {
+                page = 1,
+                limit = 10,
+                search,
+                sort_by = 'created_at',
+                sort_order = 'desc'
+            } = req.query;
+
+            const pageNum = parseInt(page);
+            const limitNum = parseInt(limit);
+            const offset = (pageNum - 1) * limitNum;
+
+            // Whitelist sort fields
+            const allowedSortBy = new Set(['created_at']);
+            const sortField = allowedSortBy.has(sort_by) ? sort_by : 'created_at';
+            const sortAscending = (String(sort_order).toLowerCase() === 'asc');
+
+            let query = supabaseAdmin
+                .from('users')
+                .select(`
+                    id,
+                    name,
+                    email,
+                    phone,
+                    role,
+                    business_name,
+                    business_type,
+                    gst_number,
+                    created_at
+                `, { count: 'exact' })
+                .eq('role', 'brand_owner')
+                .eq('is_deleted', false);
+
+            // Basic search on name, business_name, email
+            if (search && String(search).trim().length > 0) {
+                const term = String(search).trim();
+                query = query.or(
+                    `name.ilike.%${term}%,business_name.ilike.%${term}%,email.ilike.%${term}%`
+                );
+            }
+
+            const { data: brandOwners, error, count } = await query
+                .order(sortField, { ascending: sortAscending })
+                .range(offset, offset + limitNum - 1);
+
+            if (error) {
+                return res.status(500).json({ success: false, message: 'Failed to fetch brand owners' });
+            }
+
+            return res.json({
+                success: true,
+                brand_owners: brandOwners || [],
+                pagination: {
+                    page: pageNum,
+                    limit: limitNum,
+                    total: count || 0,
+                    pages: Math.ceil((count || 0) / limitNum)
+                }
+            });
+        } catch (error) {
+            return res.status(500).json({ success: false, message: 'Internal server error' });
+        }
+    }
+
+    /**
+     * Get user counts by role (admin-only)
+     */
+    async getUserStats(req, res) {
+        try {
+            // Count influencers
+            const { count: influencersCount } = await supabaseAdmin
+                .from('users')
+                .select('id', { count: 'exact', head: true })
+                .eq('role', 'influencer')
+                .eq('is_deleted', false);
+
+            // Count brand owners
+            const { count: brandOwnersCount } = await supabaseAdmin
+                .from('users')
+                .select('id', { count: 'exact', head: true })
+                .eq('role', 'brand_owner')
+                .eq('is_deleted', false);
+
+            // Count admins
+            const { count: adminsCount } = await supabaseAdmin
+                .from('users')
+                .select('id', { count: 'exact', head: true })
+                .eq('role', 'admin')
+                .eq('is_deleted', false);
+
+            return res.json({
+                success: true,
+                stats: {
+                    influencers: influencersCount || 0,
+                    brand_owners: brandOwnersCount || 0,
+                    admins: adminsCount || 0
+                }
+            });
+        } catch (error) {
+            return res.status(500).json({ success: false, message: 'Internal server error' });
+        }
+    }
+
+    /**
      * Get user verification status and details
      */
     async getVerificationStatus(req, res) {

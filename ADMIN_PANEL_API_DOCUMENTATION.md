@@ -1,6 +1,6 @@
-# Admin Panel Integration Guide
+# Admin Panel API Documentation
 
-This comprehensive guide covers all available API endpoints for your Stoory Backend application that can be integrated into your admin panel.
+This comprehensive guide covers all available API endpoints for the Stoory Backend application that can be used by the admin panel.
 
 ## Table of Contents
 1. [Quick Start - Admin Setup](#quick-start---admin-setup)
@@ -133,10 +133,39 @@ All endpoints require authentication and specific role permissions.
 | Method | Endpoint | Description | Required Role | Request Body | Response |
 |--------|----------|-------------|---------------|--------------|----------|
 | GET | `/influencers` | List all influencers | `brand_owner`, `admin` | Query: `page`, `limit`, `search` | `{ "success": boolean, "influencers": array, "pagination": object }` |
+| GET | `/brand-owners` | List all brand owners | `admin` | Query: `page`, `limit`, `search` | `{ "success": boolean, "brand_owners": array, "pagination": object }` |
+| GET | `/stats` | Get user counts by role | `admin` | - | `{ "success": boolean, "stats": { "influencers": number, "brand_owners": number, "admins": number } }` |
 | GET | `/profile` | Get user profile | Any authenticated user | - | `{ "success": boolean, "user": object }` |
 | GET | `/verification-status` | Get user verification status | Any authenticated user | - | `{ "success": boolean, "verification": object }` |
 | PUT | `/verification-details` | Update verification details | Any authenticated user | `{ "verification_details": object }` | `{ "success": boolean, "verification": object }` |
 | POST | `/verification-document` | Upload verification document | Any authenticated user | FormData with `verification_document` file | `{ "success": boolean, "document_url": string }` |
+
+### User Data Structure
+```json
+{
+  "id": "string",
+  "name": "string", 
+  "role": "influencer" | "brand_owner" | "admin",
+  "phone": "string",
+  "email": "string",
+  "gender": "string",
+  "languages": "array",
+  "categories": "array", 
+  "min_range": "number",
+  "max_range": "number",
+  "profile_image_url": "string",
+  "created_at": "string",
+  "social_platforms": [
+    {
+      "id": "string",
+      "platform_name": "string",
+      "profile_link": "string", 
+      "followers_count": "number",
+      "engagement_rate": "number"
+    }
+  ]
+}
+```
 
 ---
 
@@ -157,16 +186,30 @@ All endpoints require authentication. CRUD operations require `brand_owner` or `
 | PUT | `/:id` | Update campaign | `brand_owner`, `admin` | `{ "title": "string", "description": "string", "budget": number, "image": file }` | `{ "success": boolean, "campaign": object }` |
 | DELETE | `/:id` | Delete campaign | `brand_owner`, `admin` | - | `{ "success": boolean }` |
 
-#### Automated Campaign Flow
-
-| Method | Endpoint | Description | Required Role | Request Body | Response |
-|--------|----------|-------------|---------------|--------------|----------|
-| POST | `/automated/initialize` | Initialize campaign conversation | `brand_owner` | `{ "campaign_id": "string", "influencer_id": "string" }` | `{ "success": boolean, "conversation": object }` |
-| POST | `/automated/influencer-action` | Handle influencer action | `influencer` | `{ "conversation_id": "string", "action": "string", "data": object }` | `{ "success": boolean, "response": object }` |
-| POST | `/automated/brand-owner-action` | Handle brand owner action | `brand_owner` | `{ "conversation_id": "string", "action": "string", "data": object }` | `{ "success": boolean, "response": object }` |
-| POST | `/:conversation_id/automated/submit-work` | Submit work for review | `influencer` | `{ "work_data": object }` | `{ "success": boolean, "submission": object }` |
-| POST | `/:conversation_id/automated/review-work` | Review submitted work | `brand_owner` | `{ "approval": boolean, "feedback": "string" }` | `{ "success": boolean, "review": object }` |
-| POST | `/automated/verify-payment` | Verify automated flow payment | Any authenticated user | `{ "payment_data": object }` | `{ "success": boolean, "verification": object }` |
+### Campaign Data Structure
+```json
+{
+  "id": "string",
+  "title": "string",
+  "description": "string", 
+  "budget": "number",
+  "status": "open" | "pending" | "closed",
+  "start_date": "string",
+  "end_date": "string",
+  "requirements": "string",
+  "deliverables": "array",
+  "campaign_type": "product" | "service",
+  "image_url": "string",
+  "language": "string",
+  "platform": "string",
+  "content_type": "string",
+  "sending_package": "boolean",
+  "no_of_packages": "number",
+  "created_by": "string",
+  "created_at": "string",
+  "updated_at": "string"
+}
+```
 
 ---
 
@@ -187,23 +230,26 @@ All endpoints require authentication. CRUD operations require `brand_owner` or `
 | PUT | `/:id` | Update bid | `brand_owner`, `admin` | `{ "title": "string", "description": "string", "budget": number, "image": file }` | `{ "success": boolean, "bid": object }` |
 | DELETE | `/:id` | Delete bid | `brand_owner`, `admin` | - | `{ "success": boolean }` |
 
-#### Automated Bid Flow
-
-| Method | Endpoint | Description | Required Role | Request Body | Response |
-|--------|----------|-------------|---------------|--------------|----------|
-| POST | `/automated/initialize` | Initialize bid conversation | `brand_owner`, `admin` | `{ "bid_id": "string", "influencer_id": "string" }` | `{ "success": boolean, "conversation": object }` |
-| POST | `/automated/brand-owner-action` | Handle brand owner action | `brand_owner`, `admin` | `{ "conversation_id": "string", "action": "string", "data": object }` | `{ "success": boolean, "response": object }` |
-| POST | `/automated/influencer-action` | Handle influencer action | `influencer` | `{ "conversation_id": "string", "action": "string", "data": object }` | `{ "success": boolean, "response": object }` |
-| POST | `/automated/final-confirmation` | Final confirmation | `brand_owner`, `admin` | `{ "conversation_id": "string", "confirmation": object }` | `{ "success": boolean, "confirmation": object }` |
-| GET | `/automated/conversation/:conversation_id/context` | Get conversation flow context | Any authenticated user | - | `{ "success": boolean, "context": object }` |
-| POST | `/automated/verify-payment` | Verify automated flow payment | Any authenticated user | `{ "payment_data": object }` | `{ "success": boolean, "verification": object }` |
-
-#### Work Management
-
-| Method | Endpoint | Description | Required Role | Request Body | Response |
-|--------|----------|-------------|---------------|--------------|----------|
-| POST | `/:conversation_id/submit-work` | Submit work | `influencer` | `{ "work_data": object }` | `{ "success": boolean, "submission": object }` |
-| POST | `/:conversation_id/review-work` | Review work | `brand_owner`, `admin` | `{ "approval": boolean, "feedback": "string" }` | `{ "success": boolean, "review": object }` |
+### Bid Data Structure
+```json
+{
+  "id": "string",
+  "title": "string",
+  "description": "string",
+  "min_budget": "number",
+  "max_budget": "number", 
+  "requirements": "string",
+  "language": "string",
+  "platform": "string",
+  "content_type": "string",
+  "category": "string",
+  "expiry_date": "string",
+  "status": "open" | "pending" | "closed",
+  "created_by": "string",
+  "created_at": "string",
+  "updated_at": "string"
+}
+```
 
 ---
 
@@ -222,31 +268,21 @@ All endpoints require authentication. Most operations require specific roles.
 | PUT | `/:id/agree` | Update agreed amount | `influencer` | `{ "agreed_amount": number }` | `{ "success": boolean, "request": object }` |
 | DELETE | `/:id` | Withdraw request | `influencer` | - | `{ "success": boolean }` |
 
-#### Payment Operations
-
-| Method | Endpoint | Description | Required Role | Request Body | Response |
-|--------|----------|-------------|---------------|--------------|----------|
-| POST | `/approval-payment` | Process approval payment | `brand_owner`, `admin` | `{ "request_id": "string", "amount": number }` | `{ "success": boolean, "payment": object }` |
-| POST | `/completion-payment` | Process completion payment | `brand_owner`, `admin` | `{ "request_id": "string", "amount": number }` | `{ "success": boolean, "payment": object }` |
-
-#### Influencer Management
-
-| Method | Endpoint | Description | Required Role | Request Body | Response |
-|--------|----------|-------------|---------------|--------------|----------|
-| GET | `/bid/:bid_id/influencers` | Get bid influencers | Any authenticated user | - | `{ "success": boolean, "influencers": array }` |
-| GET | `/campaign/:campaign_id/influencers` | Get campaign influencers | Any authenticated user | - | `{ "success": boolean, "influencers": array }` |
-| GET | `/bid/:bid_id/influencer-count` | Get bid influencer count | Any authenticated user | - | `{ "success": boolean, "count": number }` |
-| GET | `/campaign/:campaign_id/influencer-count` | Get campaign influencer count | Any authenticated user | - | `{ "success": boolean, "count": number }` |
-
-#### Work Management
-
-| Method | Endpoint | Description | Required Role | Request Body | Response |
-|--------|----------|-------------|---------------|--------------|----------|
-| POST | `/:id/finalize-agreement` | Finalize agreement | Any authenticated user | `{ "final_agreed_amount": number, "max_revokes": number }` | `{ "success": boolean, "agreement": object }` |
-| POST | `/:id/submit-work` | Submit work | Any authenticated user | `{ "work_submission_link": "string", "work_description": "string", "work_files": array }` | `{ "success": boolean, "submission": object }` |
-| POST | `/:id/approve-work` | Approve work | Any authenticated user | - | `{ "success": boolean, "approval": object }` |
-| POST | `/:id/request-revision` | Request revision | Any authenticated user | `{ "revision_reason": "string" }` | `{ "success": boolean, "revision": object }` |
-| GET | `/:id/work-status` | Get work status | Any authenticated user | - | `{ "success": boolean, "work_status": object }` |
+### Request Data Structure
+```json
+{
+  "id": "string",
+  "campaign_id": "string",
+  "bid_id": "string", 
+  "influencer_id": "string",
+  "status": "connected" | "negotiating" | "paid" | "completed" | "cancelled",
+  "final_agreed_amount": "number",
+  "initial_payment": "number",
+  "final_payment": "number",
+  "created_at": "string",
+  "updated_at": "string"
+}
+```
 
 ---
 
@@ -313,34 +349,11 @@ All endpoints require authentication.
 | PUT | `/conversations/:conversation_id/seen` | Mark messages as seen | - | `{ "success": boolean }` |
 | DELETE | `/messages/:message_id` | Delete message | - | `{ "success": boolean }` |
 
-#### Interactive Features
-
-| Method | Endpoint | Description | Request Body | Response |
-|--------|----------|-------------|--------------|----------|
-| POST | `/conversations/:conversation_id/button-click` | Handle button click | `{ "button_id": "string", "data": object }` | `{ "success": boolean, "response": object }` |
-| POST | `/conversations/:conversation_id/text-input` | Handle text input | `{ "input": "string", "context": object }` | `{ "success": boolean, "response": object }` |
-
-#### Direct Connect
-
-| Method | Endpoint | Description | Request Body | Response |
-|--------|----------|-------------|--------------|----------|
-| POST | `/direct-connect` | Initiate direct connection | `{ "target_user_id": "string" }` | `{ "success": boolean, "connection": object }` |
-| GET | `/direct-connections` | Get direct connections | - | `{ "success": boolean, "connections": array }` |
-| POST | `/direct-message` | Send direct message | `{ "target_user_id": "string", "message": "string" }` | `{ "success": boolean, "message": object }` |
-
 #### Utility
 
 | Method | Endpoint | Description | Response |
 |--------|----------|-------------|----------|
 | GET | `/unread-count` | Get unread message count | `{ "success": boolean, "unread_count": number }` |
-
-### Conversation State Management
-
-### Base URL: `/api/conversations`
-
-| Method | Endpoint | Description | Request Body | Response |
-|--------|----------|-------------|--------------|----------|
-| PATCH | `/:conversation_id/state` | Update conversation state | `{ "flow_state": "string", "awaiting_role": "string" }` | `{ "success": boolean, "conversation": object }` |
 
 ---
 
@@ -369,13 +382,6 @@ All endpoints require authentication.
 | POST | `/update-payment-status` | Update payment status | `{ "payment_id": "string", "status": "string" }` | `{ "success": boolean, "payment": object }` |
 | POST | `/cancel` | Cancel subscription | - | `{ "success": boolean, "subscription": object }` |
 | GET | `/history` | Get subscription history | - | `{ "success": boolean, "history": array }` |
-
-#### Test Endpoints
-
-| Method | Endpoint | Description | Request Body | Response |
-|--------|----------|-------------|--------------|----------|
-| POST | `/test-create` | Create test subscription | `{ "plan_id": "string" }` | `{ "success": boolean, "subscription": object }` |
-| POST | `/test-payment` | Process test payment | `{ "subscription_id": "string" }` | `{ "success": boolean, "payment": object }` |
 
 ---
 
@@ -595,3 +601,4 @@ The application supports real-time communication via WebSocket:
 ## Support
 
 For technical support or questions about API integration, please refer to the individual controller files in the `controllers/` directory or contact the development team.
+

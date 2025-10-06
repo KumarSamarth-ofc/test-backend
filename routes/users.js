@@ -11,6 +11,12 @@ router.use(authService.authenticateToken);
 // Brand owners and admins can list influencers
 router.get('/influencers', authService.requireRole(['brand_owner', 'admin']), UserController.listInfluencers);
 
+// Admin can list brand owners
+router.get('/brand-owners', authService.requireRole(['admin']), UserController.listBrandOwners);
+
+// Admin user stats
+router.get('/stats', authService.requireRole(['admin']), UserController.getUserStats);
+
 // User profile and verification routes
 router.get('/profile', UserController.getUserProfile);
 router.get('/verification-status', UserController.getVerificationStatus);
