@@ -1,18 +1,19 @@
-# 🚀 Stoory Backend - Automated Chat System
+# 🚀 Stoory Backend - Influencer Marketing Platform
 
 ## 📋 Overview
 
-This is the backend for the Stoory platform, featuring a **complete automated chat system** that handles influencer-brand owner collaborations through structured, automated workflows.
+This is the backend for the Stoory platform, a comprehensive influencer marketing platform that connects brand owners with influencers through automated workflows, real-time messaging, and secure payment processing.
 
 ## ✨ **Key Features**
 
-- 🔄 **Automated Chat Flow** - 9-step structured conversation system
-- 🎯 **Role-Based Actions** - Different actions for brand owners and influencers
-- 💬 **Smart Message System** - Automatic message generation and audit trails
-- 💰 **Payment Integration** - Built-in payment flow handling
-- 🔒 **Secure Authentication** - JWT-based user authentication
-- 📱 **Real-time Updates** - WebSocket support for live chat
-- 🗄️ **Database Persistence** - All conversations and actions are saved
+- 🔄 **Automated Workflows** - Structured conversation flows for campaign management
+- 🎯 **Role-Based Access** - Different capabilities for admins, brand owners, and influencers
+- 💬 **Real-time Messaging** - WebSocket-based chat system with file attachments
+- 💰 **Payment Integration** - Razorpay integration with escrow and wallet management
+- 🔒 **Secure Authentication** - JWT-based authentication with role-based authorization
+- 📱 **Push Notifications** - FCM integration for real-time updates
+- 🗄️ **Database Persistence** - PostgreSQL with Supabase for data management
+- 📊 **Analytics & Reporting** - Comprehensive tracking and reporting capabilities
 
 ## 🏗️ **Architecture**
 
@@ -23,16 +24,17 @@ Backend (Node.js/Express)
     ↓
 Database (Supabase/PostgreSQL)
     ↓
-External APIs (Razorpay, WhatsApp)
+External APIs (Razorpay, FCM, WhatsApp)
 ```
 
-## 📚 **Documentation**
+## 📚 **API Documentation**
 
-### **For Frontend Developers:**
-- 📖 **[Frontend API Endpoints Guide](FRONTEND_API_ENDPOINTS_GUIDE.md)** - Complete API reference
-- 🎯 **[Frontend Action Buttons Guide](FRONTEND_ACTION_BUTTONS_IMPLEMENTATION_GUIDE.md)** - Implementation details
+### **Comprehensive API Guides:**
+- 📖 **[Admin Panel API Documentation](ADMIN_PANEL_API_DOCUMENTATION.md)** - Complete admin panel API reference
+- 👥 **[Influencer API Documentation](INFLUENCER_API_DOCUMENTATION.md)** - All APIs for influencers
+- 🏢 **[Brand Owner API Documentation](BRAND_OWNER_API_DOCUMENTATION.md)** - All APIs for brand owners
 
-### **For Backend Developers:**
+### **For Developers:**
 - 🔧 **API Routes** - Located in `/routes/` directory
 - 🎮 **Controllers** - Business logic in `/controllers/` directory
 - 🗄️ **Database Schema** - SQL files in `/database/` directory
@@ -71,74 +73,133 @@ npm start
 node index.js
 ```
 
-## 🔌 **API Endpoints**
+## 🔌 **API Endpoints Overview**
 
-### **Automated Chat Flow**
-- `POST /api/bids/automated/initialize` - Initialize conversation
-- `POST /api/bids/automated/brand-owner-action` - Brand owner actions
-- `POST /api/bids/automated/influencer-action` - Influencer actions
-- `GET /api/bids/automated/conversation/{id}/context` - Get flow context
-
-### **Regular Chat**
-- `GET /api/conversations/{id}/messages` - Get messages
-- `POST /api/conversations/{id}/messages` - Send message
-- `PUT /api/conversations/{id}/seen` - Mark as seen
+### **Authentication & Authorization**
+- `POST /api/auth/send-otp` - Send OTP for login
+- `POST /api/auth/verify-otp` - Verify OTP and get tokens
+- `POST /api/auth/refresh-token` - Refresh access token
+- `GET /api/auth/profile` - Get user profile
 
 ### **User Management**
-- `POST /api/auth/login` - User login
-- `POST /api/auth/register` - User registration
+- `GET /api/users/influencers` - List influencers (brand owners & admins)
 - `GET /api/users/profile` - Get user profile
+- `PUT /api/users/verification-details` - Update verification details
 
-## 🎯 **Automated Chat Flow**
+### **Campaign Management**
+- `POST /api/campaigns` - Create campaign (brand owners & admins)
+- `GET /api/campaigns` - List campaigns
+- `GET /api/campaigns/stats` - Get campaign statistics
+- `PUT /api/campaigns/:id` - Update campaign
+- `DELETE /api/campaigns/:id` - Delete campaign
 
-The system implements a **9-step automated workflow**:
+### **Bid Management**
+- `POST /api/bids` - Create bid (brand owners & admins)
+- `GET /api/bids` - List bids
+- `GET /api/bids/stats` - Get bid statistics
+- `PUT /api/bids/:id` - Update bid
+- `DELETE /api/bids/:id` - Delete bid
 
-1. **Connection Request** - Brand owner initiates connection
-2. **Influencer Response** - Accept/reject connection
-3. **Project Details** - Brand owner provides requirements
-4. **Project Review** - Influencer reviews requirements
-5. **Price Offer** - Brand owner makes price offer
-6. **Price Response** - Influencer accepts/rejects/negotiates
-7. **Negotiation Loop** - Up to 3 rounds of price negotiation
-8. **Payment** - Brand owner completes payment
-9. **Real-time Chat** - Transition to live conversation
+### **Request Management**
+- `POST /api/requests` - Create request (influencers)
+- `GET /api/requests` - List requests
+- `PUT /api/requests/:id/status` - Update request status
+- `POST /api/requests/approval-payment` - Process approval payment
+
+### **Payment & Wallet**
+- `GET /api/payments/transactions` - Get transaction history
+- `GET /api/payments/wallet/balance` - Get wallet balance
+- `POST /api/payments/wallet/withdraw` - Withdraw from wallet
+- `POST /api/payments/process-payment` - Process payment
+
+### **Messaging & Conversations**
+- `GET /api/messages/conversations` - List conversations
+- `POST /api/messages/conversations/:id/messages` - Send message
+- `GET /api/messages/unread-count` - Get unread count
+
+### **Admin Panel (Admin Only)**
+- `GET /api/coupons/admin/all` - Get all coupons
+- `POST /api/coupons/admin/create` - Create coupon
+- `GET /api/fcm/cleanup` - Cleanup inactive tokens
+
+## 🎯 **User Roles & Capabilities**
+
+### **Admin**
+- Full access to all endpoints
+- User management and verification
+- Campaign and bid oversight
+- Payment and transaction management
+- System monitoring and analytics
+
+### **Brand Owner**
+- Create and manage campaigns/bids
+- Discover and connect with influencers
+- Process payments and manage requests
+- Review and approve work submissions
+- Access to premium features with subscription
+
+### **Influencer**
+- Discover available campaigns/bids
+- Submit requests and proposals
+- Manage work submissions
+- Receive payments and manage wallet
+- Update profile and social platforms
 
 ## 🔧 **Key Components**
 
-### **Automated Flow Service** (`/utils/automatedFlowService.js`)
-- Handles all automated flow logic
-- Manages state transitions
-- Generates automated messages
-- Creates audit trails
-
 ### **Controllers**
-- **Bid Controller** - Handles bid-related operations
-- **Campaign Controller** - Manages campaign workflows
-- **Message Controller** - Handles regular messaging
-- **User Controller** - User management
+- **Auth Controller** - Authentication and user management
+- **User Controller** - Profile and verification management
+- **Campaign Controller** - Campaign creation and management
+- **Bid Controller** - Bid creation and management
+- **Request Controller** - Request processing and work management
+- **Payment Controller** - Payment processing and wallet management
+- **Message Controller** - Real-time messaging and conversations
+- **Coupon Controller** - Coupon management and validation
+- **FCM Controller** - Push notification management
+
+### **Services**
+- **FCM Service** - Push notification handling
+- **Escrow Service** - Payment escrow management
+- **State Machine Service** - Workflow state management
+
+### **Utilities**
+- **Automated Flow Service** - Automated conversation workflows
+- **Enhanced Balance Service** - Advanced wallet management
+- **Image Upload Service** - File upload and storage
+- **Payment Service** - Razorpay integration
 
 ### **Database Schema**
-- **Conversations** - Flow state, awaiting role, flow data
-- **Messages** - Automated messages, audit messages, user messages
-- **Users** - Brand owners, influencers, system users
-- **Bids/Campaigns** - Project details and requirements
+- **Users** - User profiles, roles, and verification
+- **Campaigns** - Marketing campaigns and requirements
+- **Bids** - Project bids and specifications
+- **Requests** - Influencer applications and work submissions
+- **Conversations** - Chat conversations and flow states
+- **Messages** - Real-time messages and attachments
+- **Transactions** - Payment and wallet transactions
+- **Subscriptions** - User subscription management
 
 ## 🚨 **Important Notes**
 
-### **System User**
-- A dedicated system user (UUID: `00000000-0000-0000-0000-000000000000`) is required
-- This user sends all automated and audit messages
-- Must be created in the database before using automated features
+### **Admin Setup**
+- Default admin user: Phone `+919999999999`, OTP `123456`
+- Run `database/seed_admin_user.sql` to create admin user
+- Admin has full access to all endpoints and data
 
-### **Flow State Management**
-- The backend controls all flow state transitions
-- Frontend should only display UI based on current state
-- Actions are validated against current flow state
+### **Authentication**
+- JWT-based authentication with role-based authorization
+- Access tokens expire in 15 minutes, refresh tokens last longer
+- All protected endpoints require `Authorization: Bearer <token>` header
 
-### **Message Persistence**
-- All messages (automated, audit, user) are automatically saved
-- Frontend doesn't need to handle message persistence
-- Messages include action buttons and input fields as metadata
+### **Payment Integration**
+- Razorpay integration for payment processing
+- Escrow system for secure fund holding
+- Wallet system for influencer earnings management
+
+### **Real-time Features**
+- WebSocket support for live messaging
+- FCM push notifications for mobile apps
+- Real-time conversation updates
 
 ## 🧪 **Testing**
 
@@ -147,18 +208,23 @@ The system implements a **9-step automated workflow**:
 # Test health endpoint
 curl http://localhost:3000/health
 
-# Test conversation initialization
-curl -X POST http://localhost:3000/api/bids/automated/initialize \
+# Test admin login
+curl -X POST http://localhost:3000/api/auth/verify-otp \
+  -H "Content-Type: application/json" \
+  -d '{"phone":"+919999999999","otp":"123456"}'
+
+# Test campaign creation (requires auth token)
+curl -X POST http://localhost:3000/api/campaigns \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_TOKEN" \
-  -d '{"bid_id":"uuid","influencer_id":"uuid","proposed_amount":5000}'
+  -d '{"title":"Test Campaign","description":"Test Description","budget":5000}'
 ```
 
 ### **Database Testing**
 ```bash
-# Check if system user exists
-# Verify conversation flow states
-# Test message creation
+# Check if admin user exists
+# Verify user roles and permissions
+# Test campaign and bid creation
 ```
 
 ## 🐛 **Troubleshooting**
@@ -166,28 +232,30 @@ curl -X POST http://localhost:3000/api/bids/automated/initialize \
 ### **Common Issues**
 
 1. **"API route not found"**
-   - Use correct endpoints from the API guide
+   - Use correct endpoints from the API documentation
    - Check route definitions in `/routes/` directory
 
-2. **"Conversation not found"**
-   - Verify conversation ID is correct
-   - Check if conversation was properly initialized
+2. **"Unauthorized" errors**
+   - Verify JWT token is valid and not expired
+   - Check if user has required role for the endpoint
 
-3. **"Invalid UUID" errors**
-   - Ensure system user exists in database
-   - Check SYSTEM_USER_ID environment variable
+3. **"Admin access denied"**
+   - Ensure admin user is created in database
+   - Run `database/seed_admin_user.sql` script
 
-4. **Missing automated messages**
-   - Check backend logs for message creation errors
-   - Verify database schema has required columns
+4. **Payment processing errors**
+   - Check Razorpay configuration
+   - Verify webhook endpoints are properly set up
 
 ### **Debug Commands**
 ```bash
 # Check backend health
 curl http://localhost:3000/health
 
-# View backend logs
-tail -f logs/app.log
+# Test admin login
+curl -X POST http://localhost:3000/api/auth/verify-otp \
+  -H "Content-Type: application/json" \
+  -d '{"phone":"+919999999999","otp":"123456"}'
 
 # Check database connection
 # Use Supabase dashboard or CLI
@@ -195,17 +263,18 @@ tail -f logs/app.log
 
 ## 📱 **Frontend Integration**
 
-### **Required Changes**
-1. **Use correct API endpoints** (see API guide)
-2. **Handle flow state changes** properly
-3. **Show action buttons** based on current state
-4. **Implement proper error handling**
+### **API Integration**
+1. **Use correct API endpoints** (see comprehensive API documentation)
+2. **Implement proper authentication** with JWT token management
+3. **Handle role-based access** for different user types
+4. **Implement real-time features** with WebSocket and FCM
 
-### **Key Frontend Files**
-- API service with correct endpoints
-- Flow state management
-- Action button rendering
-- Message display with action data
+### **Key Frontend Components**
+- Authentication service with token management
+- Role-based UI components
+- Real-time messaging interface
+- Payment integration components
+- File upload and attachment handling
 
 ## 🤝 **Contributing**
 
@@ -221,8 +290,8 @@ This project is proprietary software. All rights reserved.
 ## 🆘 **Support**
 
 For technical issues or questions:
-1. Check the documentation files
-2. Review the API endpoints guide
+1. Check the comprehensive API documentation
+2. Review the role-specific API guides
 3. Check backend logs for errors
 4. Contact the backend development team
 
@@ -230,8 +299,8 @@ For technical issues or questions:
 
 ## 🎉 **Status: Production Ready**
 
-The automated chat system is **fully implemented and tested**. The backend handles all business logic, flow control, and message persistence. Frontend teams can now implement the UI using the provided API guides.
+The Stoory Backend is **fully implemented and production-ready**. The platform provides comprehensive APIs for admin panel management, influencer operations, and brand owner functionality. All major features are implemented including authentication, payment processing, real-time messaging, and automated workflows.
 
-**Last Updated**: August 27, 2025
-**Version**: 1.0.0
+**Last Updated**: December 2024
+**Version**: 2.0.0
 **Status**: ✅ Production Ready 
