@@ -18,6 +18,7 @@ const userRoutes = require("./routes/users");
 const messageRoutes = require("./routes/messages");
 const paymentRoutes = require("./routes/payments");
 const subscriptionRoutes = require("./routes/subscriptions");
+const reportRoutes = require("./routes/reports");
 // Social platform routes moved to auth routes
 const fcmRoutes = require("./routes/fcm");
 const couponRoutes = require("./routes/coupons");
@@ -325,7 +326,7 @@ app.use("/api/conversations", conversationRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/subscriptions", subscriptionRoutes);
-// Social platform routes now under /api/auth/social-platforms
+app.use("/api/reports", reportRoutes);
 app.use("/api/fcm", fcmRoutes);
 app.use("/api/coupons", couponRoutes);
 app.use("/api/attachments", attachmentRoutes);

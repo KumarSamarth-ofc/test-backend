@@ -375,7 +375,7 @@ class CampaignController {
       const { id } = req.params;
       const userId = req.user.id;
       let query = null;
-
+      console.log(req.user.role)
       if(req.user.role === "influencer") {
         query = supabaseAdmin
         .from("campaigns")
@@ -410,9 +410,9 @@ class CampaignController {
         query = supabaseAdmin
         .from("campaigns")
         .select(
-          `
+        `
                     *,
-                    created_by_user:users!bids_created_by_fkey (
+                    created_by_user:users!campaigns_created_by_fkey (
                         id,
                         role,
                         name,
