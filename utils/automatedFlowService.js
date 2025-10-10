@@ -693,20 +693,16 @@ Please respond to confirm your interest and availability for this campaign.`,
             // Fallback: if database doesn't support influencer_price_input yet, use influencer_price_response
             console.log("🔄 [DEBUG] Note: Using influencer_price_input state. If database constraint fails, this will be handled by the database error.");
 
-            // Increment negotiation round
-            const currentRound = (conversation.negotiation_round || 0) + 1;
-            const maxRounds = conversation.max_negotiation_rounds || 3;
-
             newMessage = {
               conversation_id: conversationId,
               sender_id: conversation.brand_owner_id,
               receiver_id: conversation.influencer_id,
-              message: `🤝 **Negotiation Accepted**\n\nBrand owner has agreed to negotiate. Please set your counter offer.\n\n**Negotiation Round:** ${currentRound}/${maxRounds}`,
+              message: `🤝 **Negotiation Accepted**\n\nBrand owner has agreed to negotiate. Please set your counter offer.`,
               message_type: "automated",
               action_required: true,
               action_data: {
                 title: "💰 **Set Your Counter Offer**",
-                subtitle: `What's your counter offer for this project? (Round ${currentRound}/${maxRounds})`,
+                subtitle: `What's your counter offer for this project?`,
                 input_field: {
                   id: "counter_price",
                   type: "number",
@@ -725,8 +721,6 @@ Please respond to confirm your interest and availability for this campaign.`,
                 flow_state: "influencer_price_input", // Will be updated to influencer_price_response if fallback occurs
                 message_type: "influencer_counter_offer",
                 visible_to: "influencer",
-                negotiation_round: currentRound,
-                max_rounds: maxRounds
               },
             };
 
@@ -825,51 +819,32 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `💰 **Negotiated Price Offer**\n\nBrand owner has offered a new price: **₹${data.price}**\n\nThis is negotiation round ${conversation.negotiation_round || 1}/${conversation.max_negotiation_rounds || 3}.`,
+            message: `💰 **Negotiated Price Offer**\n\nBrand owner has offered a new price: **₹${data.price}**`,
             message_type: "automated",
             action_required: true,
             action_data: {
               title: "🎯 **Final Price Response**",
-              subtitle:
-                (conversation.negotiation_round || 1) >= (conversation.max_negotiation_rounds || 3)
-                  ? "This is the final offer. You can only accept or reject."
-                  : "Choose how you'd like to respond to this offer:",
-              buttons:
-                (conversation.negotiation_round || 1) >= (conversation.max_negotiation_rounds || 3)
-                  ? [
-                      {
-                        id: "accept_final_price",
-                        text: "Accept Final Offer",
-                        style: "success",
-                        action: "accept_final_price",
-                      },
-                      {
-                        id: "reject_final_price",
-                        text: "Reject Final Offer",
-                        style: "danger",
-                        action: "reject_final_price",
-                      },
-                    ]
-                  : [
-                      {
-                        id: "accept_negotiated_price",
-                        text: "Accept Offer",
-                        style: "success",
-                        action: "accept_negotiated_price",
-                      },
-                      {
-                        id: "reject_negotiated_price",
-                        text: "Reject Offer",
-                        style: "danger",
-                        action: "reject_negotiated_price",
-                      },
-                      {
-                        id: "continue_negotiate",
-                        text: "Continue Negotiating",
-                        style: "warning",
-                        action: "continue_negotiate",
-                      },
-                    ],
+              subtitle: "Choose how you'd like to respond to this offer:",
+              buttons: [
+                {
+                  id: "accept_negotiated_price",
+                  text: "Accept Offer",
+                  style: "success",
+                  action: "accept_negotiated_price",
+                },
+                {
+                  id: "reject_negotiated_price",
+                  text: "Reject Offer",
+                  style: "danger",
+                  action: "reject_negotiated_price",
+                },
+                {
+                  id: "continue_negotiate",
+                  text: "Continue Negotiating",
+                  style: "warning",
+                  action: "continue_negotiate",
+                },
+              ],
               flow_state: "influencer_final_response",
               message_type: "influencer_final_price_response",
               visible_to: "influencer",
@@ -1232,30 +1207,8 @@ Please respond to confirm your interest and availability for this campaign.`,
           const currentRound = conversation.negotiation_round || 1;
           const maxRounds = conversation.max_negotiation_rounds || 3;
           
-          // Check if we've reached the maximum negotiation rounds
-          if (currentRound >= maxRounds) {
-            // Max rounds reached, close chat
-            newFlowState = "chat_closed";
-            newAwaitingRole = null;
-
-            newMessage = {
-              conversation_id: conversationId,
-              sender_id: conversation.brand_owner_id,
-              receiver_id: conversation.influencer_id,
-              message: `❌ **Maximum Negotiation Rounds Reached**\n\nBrand owner has rejected your counter offer and the maximum negotiation rounds (${maxRounds}) have been reached. The collaboration has been cancelled.`,
-              message_type: "automated",
-              action_required: false,
-            };
-
-            auditMessage = {
-              conversation_id: conversationId,
-              sender_id: SYSTEM_USER_ID,
-              receiver_id: conversation.brand_owner_id,
-              message: `✅ **Action Taken: Counter Offer Rejected (Max Rounds Reached)**\n\nYou have rejected the counter offer and reached the maximum negotiation rounds.`,
-              message_type: "audit",
-              action_required: false,
-            };
-          } else {
+          // No max rounds logic: always loop back for another counter if rejected
+          {
             // Still within limits, loop back to influencer for new counter offer
             newFlowState = "influencer_price_input";
             newAwaitingRole = "influencer";
@@ -1275,12 +1228,12 @@ Please respond to confirm your interest and availability for this campaign.`,
               conversation_id: conversationId,
               sender_id: conversation.brand_owner_id,
               receiver_id: conversation.influencer_id,
-              message: `❌ **Counter Offer Rejected**\n\nBrand owner has rejected your counter offer of ₹${data.price}. You can make another counter offer.\n\n**Negotiation Round:** ${currentRound}/${maxRounds}`,
+              message: `❌ **Counter Offer Rejected**\n\nBrand owner has rejected your counter offer of ₹${data.price}. You can make another counter offer.`,
               message_type: "automated",
               action_required: true,
               action_data: {
                 title: "💰 **Make Another Counter Offer**",
-                subtitle: `Your previous offer was rejected. What's your new counter offer? (Round ${currentRound}/${maxRounds})`,
+                subtitle: `Your previous offer was rejected. What's your new counter offer?`,
                 input_field: {
                   id: "counter_price",
                   type: "number",
@@ -1299,8 +1252,6 @@ Please respond to confirm your interest and availability for this campaign.`,
                 flow_state: "influencer_price_input",
                 message_type: "influencer_counter_offer",
                 visible_to: "influencer",
-                negotiation_round: currentRound,
-                max_rounds: maxRounds
               },
             };
 
@@ -1433,11 +1384,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         updateData.current_action_data = newMessage.action_data;
       }
 
-      // For negotiation actions, update negotiation round
-      if (action === "handle_negotiation" && data.action === "agree") {
-        const currentRound = (conversation.negotiation_round || 0) + 1;
-        updateData.negotiation_round = currentRound;
-      }
+      // Stop updating negotiation_round; negotiations can continue indefinitely
 
       console.log("🔄 [DEBUG] Updating conversation with data:", updateData);
       
@@ -1939,9 +1886,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           newFlowState = "brand_owner_price_response";
           newAwaitingRole = "brand_owner";
 
-          // Get current negotiation round and update it
-          const currentRound = conversation.negotiation_round || 1;
-          const maxRounds = conversation.max_negotiation_rounds || 3;
+          // No negotiation rounds tracking
 
           // Update negotiation history
           const negotiationHistory = conversation.negotiation_history || [];
@@ -2006,12 +1951,12 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `💰 **Counter Offer: ₹${data.price}**\n\nInfluencer has made a counter offer. Please respond to this offer.\n\n**Negotiation Round:** ${currentRound}/${maxRounds}`,
+            message: `💰 **Counter Offer: ₹${data.price}**\n\nInfluencer has made a counter offer. Please respond to this offer.`,
             message_type: "automated",
             action_required: true,
             action_data: {
               title: "🎯 **Counter Offer Response**",
-              subtitle: `Influencer's counter offer: ₹${data.price} (Round ${currentRound}/${maxRounds})`,
+              subtitle: `Influencer's counter offer: ₹${data.price}`,
               buttons: [
                 {
                   id: "accept_counter_offer",
@@ -2037,8 +1982,6 @@ Please respond to confirm your interest and availability for this campaign.`,
               flow_state: "brand_owner_price_response",
               message_type: "brand_owner_counter_response",
               visible_to: "brand_owner",
-              negotiation_round: currentRound,
-              max_rounds: maxRounds
             },
           };
 
@@ -2046,16 +1989,15 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: SYSTEM_USER_ID,
             receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Counter Offer Sent**\n\nYou have sent a counter offer of ₹${data.price} (Round ${currentRound}/${maxRounds}).`,
+            message: `✅ **Action Taken: Counter Offer Sent**\n\nYou have sent a counter offer of ₹${data.price}.`,
             message_type: "audit",
             action_required: false,
           };
 
-          // Update conversation with negotiation round and history
+          // Update conversation with negotiation history only
           await supabaseAdmin
             .from("conversations")
             .update({
-              negotiation_round: currentRound,
               negotiation_history: updatedHistory
             })
             .eq("id", conversationId);

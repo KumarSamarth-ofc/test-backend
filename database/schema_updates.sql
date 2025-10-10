@@ -1,3 +1,86 @@
+-- User reporting and blocking feature
+DO $$ BEGIN
+  CREATE TYPE report_status AS ENUM ('open', 'in_review', 'resolved', 'dismissed');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Reasons master (admin-manageable)
+CREATE TABLE IF NOT EXISTS report_reasons (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  title TEXT NOT NULL,
+  description TEXT,
+  is_active BOOLEAN DEFAULT TRUE,
+  position INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Reports from users
+CREATE TABLE IF NOT EXISTS user_reports (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  reporter_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reporter_role user_role NOT NULL,
+  reported_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+  reason_id UUID REFERENCES report_reasons(id) ON DELETE SET NULL,
+  reason_text TEXT,
+  status report_status DEFAULT 'open',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Helpful indexes
+CREATE INDEX IF NOT EXISTS idx_user_reports_reported_user_id ON user_reports(reported_user_id);
+CREATE INDEX IF NOT EXISTS idx_user_reports_reporter_id ON user_reports(reporter_id);
+CREATE INDEX IF NOT EXISTS idx_user_reports_status ON user_reports(status);
+
+-- Add block fields to users if not present
+DO $$ BEGIN
+  ALTER TABLE users ADD COLUMN is_blocked BOOLEAN DEFAULT FALSE;
+EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE users ADD COLUMN blocked_until TIMESTAMPTZ;
+EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE users ADD COLUMN blocked_reason TEXT;
+EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
+-- Track admin block/unblock actions
+CREATE TABLE IF NOT EXISTS user_block_events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  action TEXT NOT NULL CHECK (action IN ('block','unblock')),
+  reason TEXT,
+  blocked_until TIMESTAMPTZ,
+  performed_by UUID REFERENCES users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Simple RLS (admin-only) for management tables (optional depending on usage of PostgREST)
+ALTER TABLE report_reasons ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_block_events ENABLE ROW LEVEL SECURITY;
+
+-- Policies: allow admins full access; reporters can see their own; reported users can see reports against them (counting in UI)
+DO $$ BEGIN
+  CREATE POLICY report_reasons_admin_all ON report_reasons FOR ALL USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE POLICY user_reports_admin_all ON user_reports FOR ALL USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE POLICY user_reports_read_own ON user_reports FOR SELECT USING (auth.uid()::text = reporter_id::text OR auth.uid()::text = reported_user_id::text);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE POLICY user_reports_insert_self ON user_reports FOR INSERT WITH CHECK (auth.uid()::text = reporter_id::text);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE POLICY user_block_events_admin_all ON user_block_events FOR ALL USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 -- Automated Chat System Schema Updates
 -- Run this file to add all required fields for automated conversations
 
