@@ -356,8 +356,10 @@ class BidController {
     try {
       const { id } = req.params;
       const userId = req.user.id;
+      let query = null;
 
-      let query = supabaseAdmin
+      if(req.user.role === "influencer") {
+        query = supabaseAdmin
         .from("bids")
         .select(
           `
@@ -386,6 +388,39 @@ class BidController {
                 `
         )
         .eq("id", id);
+      } else {
+        query = supabaseAdmin
+        .from("bids")
+        .select(
+          `
+                    *,
+                    created_by_user:users!bids_created_by_fkey (
+                        id,
+                        role,
+                        name,
+                        profile_image_url
+                    ),
+                    requests (
+                        id,
+                        status,
+                        proposed_amount,
+                        message,
+                        created_at,
+                        influencer:users!requests_influencer_id_fkey (
+                            id,
+                            name,
+                            role,
+                            languages,
+                            categories,
+                            min_range,
+                            max_range,
+                            profile_image_url
+                        )
+                    )
+                `
+        )
+        .eq("id", id);
+      }
 
       const { data: bid, error } = await query.single();
 

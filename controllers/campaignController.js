@@ -374,8 +374,10 @@ class CampaignController {
     try {
       const { id } = req.params;
       const userId = req.user.id;
+      let query = null;
 
-      let query = supabaseAdmin
+      if(req.user.role === "influencer") {
+        query = supabaseAdmin
         .from("campaigns")
         .select(
           `
@@ -404,6 +406,40 @@ class CampaignController {
                 `
         )
         .eq("id", id);
+      } else {
+        query = supabaseAdmin
+        .from("campaigns")
+        .select(
+          `
+                    *,
+                    created_by_user:users!campaigns_created_by_fkey (
+                        id,
+                        name,
+                        phone,
+                        profile_image_url,
+                        role
+                    ),
+                    requests (
+                        id,
+                        status,
+                        proposed_amount,
+                        message,
+                        created_at,
+                        influencer:users!requests_influencer_id_fkey (
+                            id,
+                            name,
+                            role,
+                            languages,
+                            categories,
+                            min_range,
+                            max_range,
+                            profile_image_url
+                        )
+                    )
+                `
+        )
+        .eq("id", id);
+      }
 
       const { data: campaign, error } = await query.single();
 
