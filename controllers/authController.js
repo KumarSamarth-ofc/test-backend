@@ -2,8 +2,95 @@ const authService = require("../utils/auth");
 const { supabaseAdmin } = require("../supabase/client");
 const { body, validationResult } = require("express-validator");
 const { uploadImageToStorage, deleteImageFromStorage } = require("../utils/imageUpload");
+const axios = require("axios");
+const { v4: uuidv4 } = require("uuid");
 
 class AuthController {
+  /**
+   * Verify PAN using Zoop
+   */
+  async verifyPAN(req, res) {
+    try {
+      const panInput = req.body?.pan || req.body?.pan_number || req.query?.pan || "";
+      const pan = panInput.toString().trim().toUpperCase();
+
+      // Basic PAN format validation
+      const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+      if (!pan || !panRegex.test(pan)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid PAN format. Expected AAAAA9999A",
+        });
+      }
+
+      // Require Zoop header-lite credentials (app-id + api-key)
+      const hasHeaderLiteCreds = !!(process.env.ZOOP_APP_ID && process.env.ZOOP_API_KEY);
+
+      let url;
+      const headers = { "Content-Type": "application/json" };
+      let payload;
+
+      if (!hasHeaderLiteCreds) {
+        return res.status(500).json({
+          success: false,
+          message: "Zoop credentials missing. Set ZOOP_APP_ID and ZOOP_API_KEY.",
+        });
+      }
+
+      //ZOOP PAN LITE URL
+      url = process.env.ZOOP_API_URL;
+      headers["app-id"] = process.env.ZOOP_APP_ID;
+      headers["api-key"] = process.env.ZOOP_API_KEY;
+      // Always send full Zoop v1 payload (works for live and test)
+      payload = {
+        mode: "sync",
+        data: {
+          customer_pan_number: pan,
+          consent: "Y",
+          consent_text: req.body?.consent_text || "I authorize Zoop to verify my PAN details.",
+        },
+        task_id: req.body?.task_id || uuidv4(),
+      };
+
+      const response = await axios.post(url, payload, { headers });
+
+      // Normalize Zoop response
+      const data = response?.data || {};
+      let isValid = false;
+      let holderName = null;
+      let responseCode = data?.response_code;
+
+      // Header lite response shape (handle both live v1 and test v1)
+      const resultObj = data?.result || data?.data || {};
+      holderName = resultObj?.user_full_name || resultObj?.name || null;
+      const status = (resultObj?.pan_status || resultObj?.status || "").toUpperCase();
+      isValid = status === "VALID" || data?.transaction_status === 1;
+      responseCode = data?.response_code ?? data?.transaction_status ?? responseCode;
+
+      return res.json({
+        success: true,
+        verified: !!isValid,
+        pan: pan,
+        holder_name: holderName,
+        vendor: "zoop",
+        response_code: responseCode,
+        task_id: data?.task_id,
+        raw: data,
+      });
+    } catch (error) {
+      const httpStatus = error?.response?.status || 500;
+      const vendorError = error?.response?.data || { message: error.message };
+      let message = vendorError?.response_message || vendorError?.message || "PAN verification failed";
+      if (vendorError?.response_code === "106") {
+        message = "Invalid PAN or input combination";
+      }
+      return res.status(httpStatus === 200 ? 500 : httpStatus).json({
+        success: false,
+        message,
+        vendor_error: vendorError,
+      });
+    }
+  }
   /**
    * Send OTP to phone number via WhatsApp (for existing users)
    */

@@ -304,9 +304,22 @@ class BidController {
             .status(500)
             .json({ success: false, message: "Failed to fetch bids" });
         }
+        // Expired visibility: brand_owner sees by default; others only if include_expired=true
+        const includeExpired = String(req.query.include_expired || 'false') === 'true';
+        const now = new Date();
+        const withExpired = (bids || []).map(b => {
+          const requestsCount = Array.isArray(b.requests_count) && b.requests_count[0] && typeof b.requests_count[0].count === 'number' ? b.requests_count[0].count : 0;
+          const isExpired = (b.status === 'open') && (!requestsCount || requestsCount === 0) && b.expiry_date && (new Date(b.expiry_date) < now);
+          return { ...b, __expired: isExpired };
+        });
+        let visible = withExpired.filter(b => true); // brand_owner sees all
+        visible.sort((a, b) => {
+          if (a.__expired !== b.__expired) return a.__expired ? 1 : -1;
+          return new Date(b.created_at) - new Date(a.created_at);
+        });
         return res.json({
           success: true,
-          bids: bids,
+          bids: visible,
           pagination: {
             page: parseInt(page),
             limit: parseInt(limit),
@@ -330,9 +343,21 @@ class BidController {
             .status(500)
             .json({ success: false, message: "Failed to fetch bids" });
         }
+        const includeExpired = String(req.query.include_expired || 'false') === 'true';
+        const now = new Date();
+        const withExpired = (bids || []).map(b => {
+          const requestsCount = Array.isArray(b.requests_count) && b.requests_count[0] && typeof b.requests_count[0].count === 'number' ? b.requests_count[0].count : 0;
+          const isExpired = (b.status === 'open') && (!requestsCount || requestsCount === 0) && b.expiry_date && (new Date(b.expiry_date) < now);
+          return { ...b, __expired: isExpired };
+        });
+        let visible = withExpired.filter(b => includeExpired ? true : !b.__expired);
+        visible.sort((a, b) => {
+          if (a.__expired !== b.__expired) return a.__expired ? 1 : -1;
+          return new Date(b.created_at) - new Date(a.created_at);
+        });
         return res.json({
           success: true,
-          bids: bids,
+          bids: visible,
           pagination: {
             page: parseInt(page),
             limit: parseInt(limit),
@@ -869,8 +894,8 @@ class BidController {
           console.log("🔄 [DEBUG] Mapped accept_counter_offer");
         } else if (buttonToMap === 'reject_counter_offer') {
           mappedAction = 'reject_counter_offer';
-          mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped reject_counter_offer");
+          mappedData = { price: additional_data?.price };
+          console.log("🔄 [DEBUG] Mapped reject_counter_offer with price:", additional_data?.price);
         } else if (buttonToMap === 'make_final_offer') {
           mappedAction = 'make_final_offer';
           mappedData = additional_data || {};

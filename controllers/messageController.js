@@ -549,8 +549,35 @@ class MessageController {
           conversation_context: conversationContext,
         });
 
+        // Store notification in database and emit to receiver
+        console.log(`📡 [DEBUG] Storing and emitting notification to user_${receiverId}`);
+        
+        // Store notification in database
+        const notificationService = require('../services/notificationService');
+        notificationService.storeNotification({
+          user_id: receiverId,
+          type: 'message',
+          title: `${req.user.name} sent you a message`,
+          message: newMessage.message,
+          data: {
+            conversation_id: conversationId,
+            message: newMessage,
+            conversation_context: conversationContext,
+            sender_id: senderId,
+            receiver_id: receiverId,
+          },
+          action_url: `/conversations/${conversationId}`
+        }).then(result => {
+          if (result.success) {
+            console.log(`✅ Notification stored successfully: ${result.notification.id}`);
+          } else {
+            console.error(`❌ Failed to store notification:`, result.error);
+          }
+        }).catch(error => {
+          console.error(`❌ Error storing notification:`, error);
+        });
+
         // Emit notification to receiver's personal room with context
-        console.log(`📡 [DEBUG] Emitting notification to user_${receiverId}`);
         io.to(`user_${receiverId}`).emit("notification", {
           type: "message",
           data: {
@@ -1022,6 +1049,53 @@ class MessageController {
           chat_status: "real_time", // FIXED: Use 'real_time' to match database constraint
           conversation_type: "direct",
           conversation_context: conversationContext
+        });
+
+        // Store notifications in database and send to both users
+        const notificationService = require('../services/notificationService');
+        
+        // Store notification for brand owner
+        notificationService.storeNotification({
+          user_id: brandOwnerId,
+          type: 'direct_connection_created',
+          title: 'Direct connection established',
+          message: 'You have a new direct connection with an influencer',
+          data: {
+            conversation_id: conversation.id,
+            chat_status: "real_time",
+            conversation_context: conversationContext
+          },
+          action_url: `/conversations/${conversation.id}`
+        }).then(result => {
+          if (result.success) {
+            console.log(`✅ Brand owner notification stored: ${result.notification.id}`);
+          } else {
+            console.error(`❌ Failed to store brand owner notification:`, result.error);
+          }
+        }).catch(error => {
+          console.error(`❌ Error storing brand owner notification:`, error);
+        });
+
+        // Store notification for influencer
+        notificationService.storeNotification({
+          user_id: influencerId,
+          type: 'direct_connection_created',
+          title: 'Direct connection established',
+          message: 'You have a new direct connection with a brand owner',
+          data: {
+            conversation_id: conversation.id,
+            chat_status: "real_time",
+            conversation_context: conversationContext
+          },
+          action_url: `/conversations/${conversation.id}`
+        }).then(result => {
+          if (result.success) {
+            console.log(`✅ Influencer notification stored: ${result.notification.id}`);
+          } else {
+            console.error(`❌ Failed to store influencer notification:`, result.error);
+          }
+        }).catch(error => {
+          console.error(`❌ Error storing influencer notification:`, error);
         });
 
         // Send individual notifications to both users with context
@@ -1583,8 +1657,8 @@ class MessageController {
               console.log("🔄 [DEBUG] Mapped accept_counter_offer");
             } else if (button_id === 'reject_counter_offer') {
               action = 'reject_counter_offer';
-              data = additional_data || {};
-              console.log("🔄 [DEBUG] Mapped reject_counter_offer");
+              data = { price: additional_data?.price };
+              console.log("🔄 [DEBUG] Mapped reject_counter_offer with price:", additional_data?.price);
             } else if (button_id === 'make_final_offer') {
               action = 'make_final_offer';
               data = additional_data || {};

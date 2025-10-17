@@ -501,6 +501,14 @@ Please respond to confirm your interest and availability for this campaign.`,
         influencer_id: conversation.influencer_id
       });
 
+      // Establish negotiation context variables once per handler
+      const baseNegotiationHistory = Array.isArray(conversation.negotiation_history)
+        ? conversation.negotiation_history
+        : [];
+      let currentRound = (typeof conversation.negotiation_round === 'number' && !Number.isNaN(conversation.negotiation_round))
+        ? conversation.negotiation_round
+        : baseNegotiationHistory.length;
+
       let newFlowState, newAwaitingRole, newMessage, auditMessage;
 
       switch (action) {
@@ -1204,7 +1212,9 @@ Please respond to confirm your interest and availability for this campaign.`,
 
         case "reject_counter_offer":
           // Brand owner rejects counter offer - loop back to influencer for new counter offer
-          const currentRound = conversation.negotiation_round || 1;
+          currentRound = (typeof conversation.negotiation_round === 'number' && !Number.isNaN(conversation.negotiation_round))
+            ? conversation.negotiation_round
+            : (baseNegotiationHistory.length || 0);
           const maxRounds = conversation.max_negotiation_rounds || 3;
           
           // No max rounds logic: always loop back for another counter if rejected
@@ -1214,7 +1224,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             newAwaitingRole = "influencer";
 
             // Update negotiation history
-            const negotiationHistory = conversation.negotiation_history || [];
+            // Use the variables already declared at the beginning of the method
             const newHistoryEntry = {
               round: currentRound,
               brand_owner_action: "rejected",
@@ -1222,7 +1232,7 @@ Please respond to confirm your interest and availability for this campaign.`,
               timestamp: new Date().toISOString(),
               action: "counter_offer_rejected"
             };
-            const updatedHistory = [...negotiationHistory, newHistoryEntry];
+            const updatedHistory = [...baseNegotiationHistory, newHistoryEntry];
 
             newMessage = {
               conversation_id: conversationId,
@@ -1567,6 +1577,14 @@ Please respond to confirm your interest and availability for this campaign.`,
         throw new Error("Conversation not found");
       }
 
+      // Establish negotiation context variables once per handler
+      const baseNegotiationHistory = Array.isArray(conversation.negotiation_history)
+        ? conversation.negotiation_history
+        : [];
+      let currentRound = (typeof conversation.negotiation_round === 'number' && !Number.isNaN(conversation.negotiation_round))
+        ? conversation.negotiation_round
+        : baseNegotiationHistory.length;
+
       let newFlowState, newAwaitingRole, newMessage, auditMessage;
 
       switch (action) {
@@ -1889,14 +1907,27 @@ Please respond to confirm your interest and availability for this campaign.`,
           // No negotiation rounds tracking
 
           // Update negotiation history
-          const negotiationHistory = conversation.negotiation_history || [];
+          // Use the variables already declared at the beginning of the method
           const newHistoryEntry = {
             round: currentRound,
             influencer_price: parseFloat(data.price),
             timestamp: new Date().toISOString(),
             action: "counter_offer"
           };
-          const updatedHistory = [...negotiationHistory, newHistoryEntry];
+          const updatedHistory = [...baseNegotiationHistory, newHistoryEntry];
+
+          // Persist negotiation round increment and history
+          try {
+            await supabaseAdmin
+              .from("conversations")
+              .update({
+                negotiation_round: currentRound + 1,
+                negotiation_history: updatedHistory
+              })
+              .eq("id", conversationId);
+          } catch (e) {
+            console.error("❌ [NEGOTIATION] Failed to persist negotiation round/history:", e);
+          }
 
           // Persist the counter offer price as requests.proposed_amount
           if (conversation.request_id) {
