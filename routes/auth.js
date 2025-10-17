@@ -22,6 +22,8 @@ router.post('/send-otp', validateSendOTP, AuthController.sendOTP);
 router.post('/send-registration-otp', validateSendOTP, AuthController.sendRegistrationOTP);
 router.post('/verify-otp', validateVerifyOTP, AuthController.verifyOTP);
 router.post('/refresh-token', AuthController.refreshToken);
+// PAN verification (temporarily public for testing)
+router.post('/verify-pan', AuthController.verifyPAN);
 
 // WhatsApp service status (for debugging)
 router.get('/whatsapp-status', (req, res) => {

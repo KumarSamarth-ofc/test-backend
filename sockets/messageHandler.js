@@ -159,8 +159,40 @@ class MessageHandler {
                     conversation_context: conversationContext
                 });
 
+                // Store notification in database and emit to receiver
+                console.log(`📡 [DEBUG] Storing and emitting notification to user_${receiverId}`);
+                
+                // Store notification in database
+                const notificationService = require('../services/notificationService');
+                notificationService.storeNotification({
+                    user_id: receiverId,
+                    type: 'message',
+                    title: `${senderName} sent you a message`,
+                    message: savedMessage.message,
+                    data: {
+                        conversation_context: conversationContext,
+                        payload: { 
+                            conversation_id: conversationId, 
+                            message_id: savedMessage.id, 
+                            sender_id: senderId 
+                        },
+                        conversation_id: conversationId,
+                        message: savedMessage,
+                        sender_id: senderId,
+                        receiver_id: receiverId
+                    },
+                    action_url: `/conversations/${conversationId}`
+                }).then(result => {
+                    if (result.success) {
+                        console.log(`✅ Notification stored successfully: ${result.notification.id}`);
+                    } else {
+                        console.error(`❌ Failed to store notification:`, result.error);
+                    }
+                }).catch(error => {
+                    console.error(`❌ Error storing notification:`, error);
+                });
+
                 // Emit notification to receiver with context
-                console.log(`📡 [DEBUG] Socket emitting notification to user_${receiverId}`);
                 this.io.to(`user_${receiverId}`).emit('notification', {
                     type: 'message',
                     data: {

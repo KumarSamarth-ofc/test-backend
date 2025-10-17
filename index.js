@@ -24,6 +24,8 @@ const fcmRoutes = require("./routes/fcm");
 const couponRoutes = require("./routes/coupons");
 const attachmentRoutes = require("./routes/attachments");
 const directStorageRoutes = require("./routes/directStorage");
+const adminPaymentRoutes = require("./routes/adminPayments");
+const notificationRoutes = require("./routes/notifications");
 
 const app = express();
 const server = http.createServer(app);
@@ -144,6 +146,38 @@ app.set("io", io);
 // Set socket for automated flow service
 const automatedFlowService = require("./utils/automatedFlowService");
 automatedFlowService.setIO(io);
+
+// Set socket for admin payment flow service
+const adminPaymentFlowService = require("./utils/adminPaymentFlowService");
+adminPaymentFlowService.setSocketIO(io);
+
+// Automatic expiry sweep (mark campaigns/bids as expired when timeline exceeded and no requests)
+(() => {
+  const ENABLE_EXPIRY_SWEEP = (process.env.ENABLE_EXPIRY_SWEEP || 'true').toLowerCase() === 'true';
+  const SWEEP_MINUTES = parseInt(process.env.EXPIRY_SWEEP_MINUTES || '30', 10);
+  if (!ENABLE_EXPIRY_SWEEP) {
+    console.log("⏳ [ExpirySweep] Disabled via ENABLE_EXPIRY_SWEEP env");
+    return;
+  }
+  const { supabaseAdmin } = require('./supabase/client');
+  const runSweep = async (reason = 'scheduled') => {
+    try {
+      const { data, error } = await supabaseAdmin.rpc('sweep_expired_campaigns_and_bids');
+      if (error) {
+        console.error(`❌ [ExpirySweep] Failed (${reason}):`, error);
+        return;
+      }
+      const result = Array.isArray(data) ? data[0] : data;
+      console.log(`✅ [ExpirySweep] Completed (${reason}) →`, result);
+    } catch (e) {
+      console.error(`❌ [ExpirySweep] Exception (${reason}):`, e);
+    }
+  };
+  // Run once on startup (delayed slightly to ensure DB is ready)
+  setTimeout(() => runSweep('startup'), 5000);
+  // Schedule periodic sweeps
+  setInterval(() => runSweep('interval'), SWEEP_MINUTES * 60 * 1000);
+})();
 
 // Test endpoint for FCM status (no auth required)
 app.get("/test-fcm", (req, res) => {
@@ -331,6 +365,8 @@ app.use("/api/fcm", fcmRoutes);
 app.use("/api/coupons", couponRoutes);
 app.use("/api/attachments", attachmentRoutes);
 app.use("/api/files", directStorageRoutes);
+app.use("/api/admin/payments", adminPaymentRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 // 404 handler for API routes
 app.use("/api/*", (req, res) => {

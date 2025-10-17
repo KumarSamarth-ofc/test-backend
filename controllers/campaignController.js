@@ -8,6 +8,24 @@ const automatedFlowService = require("../utils/automatedFlowService");
 
 class CampaignController {
   /**
+   * Helper function to ensure campaign titles are present
+   */
+  static ensureCampaignTitles(campaigns) {
+    if (!campaigns) return campaigns;
+    
+    const campaignsArray = Array.isArray(campaigns) ? campaigns : [campaigns];
+    
+    campaignsArray.forEach(campaign => {
+      if (!campaign.title) {
+        console.warn(`⚠️ Campaign ${campaign.id} has no title field`);
+        campaign.title = "Untitled Campaign";
+      }
+    });
+    
+    return campaigns;
+  }
+
+  /**
    * Create a new campaign
    */
   async createCampaign(req, res) {
@@ -153,21 +171,15 @@ class CampaignController {
       } = req.query;
 
       const offset = (page - 1) * limit;
-      let baseSelect = supabaseAdmin.from("campaigns").select(`
-                    *,
-                    created_by_user:users!campaigns_created_by_fkey (
-                        id,
-                        role
-                    ),
-                    requests_count:requests(count)
-                `);
+      
+      let baseSelect = supabaseAdmin.from("campaigns").select("*");
 
       // Generic filters
       if (min_budget) {
-        baseSelect = baseSelect.gte("min_budget", parseFloat(min_budget));
+        baseSelect = baseSelect.gte("budget", parseFloat(min_budget));
       }
       if (max_budget) {
-        baseSelect = baseSelect.lte("max_budget", parseFloat(max_budget));
+        baseSelect = baseSelect.lte("budget", parseFloat(max_budget));
       }
       if (search) {
         baseSelect = baseSelect.or(
@@ -210,14 +222,15 @@ class CampaignController {
               .status(500)
               .json({ success: false, message: "Failed to fetch campaigns" });
           }
+          const processedCampaigns = CampaignController.ensureCampaignTitles(campaigns || []);
           return res.json({
             success: true,
-            campaigns: campaigns || [],
+            campaigns: processedCampaigns,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
-              total: count || (campaigns || []).length,
-              pages: Math.ceil((count || (campaigns || []).length) / limit),
+              total: count || processedCampaigns.length,
+              pages: Math.ceil((count || processedCampaigns.length) / limit),
             },
           });
         } else if (
@@ -270,14 +283,15 @@ class CampaignController {
               .status(500)
               .json({ success: false, message: "Failed to fetch campaigns" });
           }
+          const processedCampaigns = CampaignController.ensureCampaignTitles(campaigns || []);
           return res.json({
             success: true,
-            campaigns: campaigns || [],
+            campaigns: processedCampaigns,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
-              total: (campaigns || []).length,
-              pages: Math.ceil((campaigns || []).length / limit),
+              total: processedCampaigns.length,
+              pages: Math.ceil(processedCampaigns.length / limit),
             },
           });
         } else {
@@ -295,14 +309,15 @@ class CampaignController {
           const filtered = (campaigns || []).filter(
             (c) => !interactedSet.has(c.id)
           );
+          const processedCampaigns = CampaignController.ensureCampaignTitles(filtered);
           return res.json({
             success: true,
-            campaigns: filtered,
+            campaigns: processedCampaigns,
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
-              total: filtered.length,
-              pages: Math.ceil(filtered.length / limit),
+              total: processedCampaigns.length,
+              pages: Math.ceil(processedCampaigns.length / limit),
             },
           });
         }
@@ -322,9 +337,24 @@ class CampaignController {
             .status(500)
             .json({ success: false, message: "Failed to fetch campaigns" });
         }
+        // Expired visibility: brand_owner sees by default; others only if include_expired=true
+        const includeExpired = String(req.query.include_expired || 'false') === 'true';
+        const now = new Date();
+        const withExpired = (campaigns || []).map(c => {
+          const requestsCount = 0; // Simplified for now
+          const isExpired = (c.status === 'open') && (!requestsCount || requestsCount === 0) && c.end_date && (new Date(c.end_date) < now);
+          return { ...c, __expired: isExpired };
+        });
+        let visible = withExpired.filter(c => true); // brand_owner sees all
+        // Sort: expired to last, then newest first
+        visible.sort((a, b) => {
+          if (a.__expired !== b.__expired) return a.__expired ? 1 : -1;
+          return new Date(b.created_at) - new Date(a.created_at);
+        });
+        const processedCampaigns = CampaignController.ensureCampaignTitles(visible);
         return res.json({
           success: true,
-          campaigns: campaigns,
+          campaigns: processedCampaigns,
           pagination: {
             page: parseInt(page),
             limit: parseInt(limit),
@@ -348,9 +378,23 @@ class CampaignController {
             .status(500)
             .json({ success: false, message: "Failed to fetch campaigns" });
         }
+        // Expired visibility for non-brand_owner
+        const includeExpired = String(req.query.include_expired || 'false') === 'true';
+        const now = new Date();
+        const withExpired = (campaigns || []).map(c => {
+          const requestsCount = 0; // Simplified for now
+          const isExpired = (c.status === 'open') && (!requestsCount || requestsCount === 0) && c.end_date && (new Date(c.end_date) < now);
+          return { ...c, __expired: isExpired };
+        });
+        let visible = withExpired.filter(c => includeExpired ? true : !c.__expired);
+        visible.sort((a, b) => {
+          if (a.__expired !== b.__expired) return a.__expired ? 1 : -1;
+          return new Date(b.created_at) - new Date(a.created_at);
+        });
+        const processedCampaigns = CampaignController.ensureCampaignTitles(visible);
         return res.json({
           success: true,
-          campaigns: campaigns,
+          campaigns: processedCampaigns,
           pagination: {
             page: parseInt(page),
             limit: parseInt(limit),
@@ -471,6 +515,10 @@ class CampaignController {
           });
         }
       }
+
+      // Ensure title is present in response
+      CampaignController.ensureCampaignTitles(campaign);
+      console.log(`📋 Campaign ${campaign.id} title: "${campaign.title}"`);
 
       res.json({
         success: true,
@@ -1009,8 +1057,8 @@ class CampaignController {
           console.log("🔄 [DEBUG] Mapped accept_counter_offer");
         } else if (buttonToMap === 'reject_counter_offer') {
           mappedAction = 'reject_counter_offer';
-          mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped reject_counter_offer");
+          mappedData = { price: additional_data?.price };
+          console.log("🔄 [DEBUG] Mapped reject_counter_offer with price:", additional_data?.price);
         } else if (buttonToMap === 'make_final_offer') {
           mappedAction = 'make_final_offer';
           mappedData = additional_data || {};
