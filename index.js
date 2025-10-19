@@ -88,6 +88,7 @@ app.get("/test-socket", (req, res) => {
   res.json(testMessage);
 });
 
+
 // Setup security middleware
 setupSecurityMiddleware(app);
 
@@ -100,6 +101,112 @@ app.get("/api/cors-test", (req, res) => {
     method: req.method,
     timestamp: new Date().toISOString(),
   });
+});
+
+// Socket notification test endpoint
+app.post("/api/test-socket-notification", async (req, res) => {
+  try {
+    const { user_id, title, message, notification_id } = req.body;
+    const io = app.get("io");
+    
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "user_id is required"
+      });
+    }
+    
+    if (!io) {
+      return res.status(500).json({
+        success: false,
+        message: "Socket.IO not available"
+      });
+    }
+    
+    // Check if user is online
+    const isOnline = messageHandler.isUserOnline(user_id);
+    const onlineUsersCount = messageHandler.getOnlineUsersCount();
+    
+    console.log(`📊 [TEST] User ${user_id} - Online: ${isOnline}, Total online users: ${onlineUsersCount}`);
+    
+    // Check if this is a force send request
+    const forceSend = req.body.force_send === true;
+    
+    // Store notification in database first (regardless of online status)
+    const notificationService = require('./services/notificationService');
+    const storeResult = await notificationService.storeNotification({
+      user_id: user_id,
+      type: 'message',
+      title: title || 'Test Notification',
+      message: message || 'This is a test notification',
+      data: {
+        type: 'test',
+        timestamp: new Date().toISOString(),
+        user_id: user_id,
+        test: true
+      },
+      priority: 'medium',
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    });
+
+    if (!storeResult.success) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to store notification in database",
+        error: storeResult.error
+      });
+    }
+
+    // Only send socket notification if user is online OR force send is requested
+    if (!isOnline && !forceSend) {
+      return res.json({
+        success: true,
+        message: "User is offline - notification stored in database only",
+        user_id: user_id,
+        is_online: false,
+        online_users_count: onlineUsersCount,
+        delivery_method: "database_only",
+        database_notification: storeResult.notification
+      });
+    }
+
+    const notificationData = {
+      type: 'test',
+      data: {
+        id: storeResult.notification.id,
+        title: title || 'Test Notification',
+        body: message || 'This is a test notification',
+        created_at: new Date().toISOString(),
+        test: true,
+        user_id: user_id
+      }
+    };
+    
+    // Send notification to specific user's room
+    io.to(`user_${user_id}`).emit('notification', notificationData);
+    
+    console.log(`📡 [TEST] Sent socket notification to user_${user_id}:`, notificationData);
+    console.log(`💾 [TEST] Stored notification in database:`, storeResult.notification.id);
+    
+    res.json({
+      success: true,
+      message: "Socket notification sent to online user",
+      user_id: user_id,
+      notification: notificationData,
+      database_notification: storeResult.notification,
+      is_online: true,
+      online_users_count: onlineUsersCount,
+      delivery_method: "socket"
+    });
+    
+  } catch (error) {
+    console.error('❌ Error in test-socket-notification:', error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: error.message
+    });
+  }
 });
 
 // Admin user check endpoint
@@ -386,6 +493,10 @@ app.use("*", (req, res) => {
 
 // Socket.IO setup
 const messageHandler = new MessageHandler(io);
+
+// Connect messageHandler to notificationService for online status checking
+const notificationService = require('./services/notificationService');
+notificationService.setMessageHandler(messageHandler);
 
 io.on("connection", (socket) => {
   console.log("🔌 [DEBUG] New client connected:", socket.id);

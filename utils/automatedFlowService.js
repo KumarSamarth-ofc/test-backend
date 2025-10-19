@@ -17,6 +17,47 @@ class AutomatedFlowService {
   }
 
   /**
+   * Calculate payment breakdown with commission (helper function)
+   */
+  async calculatePaymentBreakdown(agreedAmount) {
+    try {
+      // Get current commission settings
+      const { data: commissionSettings, error: commError } = await supabaseAdmin
+        .from("commission_settings")
+        .select("*")
+        .eq("is_active", true)
+        .order("effective_from", { ascending: false })
+        .limit(1)
+        .single();
+
+      if (commError || !commissionSettings) {
+        console.warn("⚠️ No commission settings found, using default 10%");
+        var commissionPercentage = 10.00;
+      } else {
+        var commissionPercentage = commissionSettings.commission_percentage;
+      }
+
+      const totalAmountPaise = Math.round(agreedAmount * 100);
+      const commissionAmountPaise = Math.round((totalAmountPaise * commissionPercentage) / 100);
+      const netAmountPaise = totalAmountPaise - commissionAmountPaise;
+      const advanceAmountPaise = Math.round(netAmountPaise * 0.30); // 30%
+      const finalAmountPaise = netAmountPaise - advanceAmountPaise; // 70%
+
+      return {
+        total_amount_paise: totalAmountPaise,
+        commission_amount_paise: commissionAmountPaise,
+        net_amount_paise: netAmountPaise,
+        advance_amount_paise: advanceAmountPaise,
+        final_amount_paise: finalAmountPaise,
+        commission_percentage: commissionPercentage
+      };
+    } catch (error) {
+      console.error("❌ Error calculating payment breakdown:", error);
+      throw error;
+    }
+  }
+
+  /**
    * Emit global conversation list updates
    */
   emitGlobalConversationUpdate(conversation, conversationId, updateData) {
@@ -632,11 +673,14 @@ Please respond to confirm your interest and availability for this campaign.`,
             }
           }
 
+          // Calculate payment breakdown for transparency
+          const paymentBreakdown = await this.calculatePaymentBreakdown(data.price);
+          
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `💰 **Price Offer**\n\nBrand owner has offered: **₹${data.price}**\n\nPlease review and respond to this offer.`,
+            message: `💰 **Price Offer**\n\nBrand owner has offered: **₹${data.price}**\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${paymentBreakdown.total_amount_paise / 100}\n• **Platform Commission (${paymentBreakdown.commission_percentage}%):** ₹${paymentBreakdown.commission_amount_paise / 100}\n• **Your Net Amount:** ₹${paymentBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${paymentBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${paymentBreakdown.final_amount_paise / 100} (70%)\n\n⚠️ **Note:** You will receive 90% of the total amount (₹${paymentBreakdown.net_amount_paise / 100}) after platform commission.\n\nPlease review and respond to this offer.`,
             message_type: "automated",
             action_required: true,
             action_data: {
@@ -672,7 +716,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: SYSTEM_USER_ID,
             receiver_id: conversation.brand_owner_id,
-            message: `✅ **Action Taken: Price Offer Sent**\n\nYou have offered ₹${data.price} to the influencer.`,
+            message: `✅ **Action Taken: Price Offer Sent**\n\nYou have offered ₹${data.price} to the influencer.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${paymentBreakdown.total_amount_paise / 100}\n• **Platform Commission (${paymentBreakdown.commission_percentage}%):** ₹${paymentBreakdown.commission_amount_paise / 100}\n• **Influencer Net Amount:** ₹${paymentBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${paymentBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${paymentBreakdown.final_amount_paise / 100} (70%)`,
             message_type: "audit",
             action_required: false,
           };
@@ -1289,6 +1333,9 @@ Please respond to confirm your interest and availability for this campaign.`,
           newFlowState = "influencer_final_response";
           newAwaitingRole = "influencer";
 
+          // Calculate payment breakdown for transparency
+          const finalOfferBreakdown = await this.calculatePaymentBreakdown(data.price);
+
           // Persist the final offer price as requests.proposed_amount
           if (conversation.request_id) {
             await supabaseAdmin
@@ -1342,7 +1389,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `💰 **Final Offer: ₹${data.price}**\n\nBrand owner has made a final offer. This is the last negotiation round.`,
+            message: `💰 **Final Offer: ₹${data.price}**\n\nBrand owner has made a final offer. This is the last negotiation round.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${finalOfferBreakdown.total_amount_paise / 100}\n• **Platform Commission (${finalOfferBreakdown.commission_percentage}%):** ₹${finalOfferBreakdown.commission_amount_paise / 100}\n• **Your Net Amount:** ₹${finalOfferBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${finalOfferBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${finalOfferBreakdown.final_amount_paise / 100} (70%)\n\n⚠️ **Note:** You will receive 90% of the total amount (₹${finalOfferBreakdown.net_amount_paise / 100}) after platform commission.`,
             message_type: "automated",
             action_required: true,
             action_data: {
@@ -1373,7 +1420,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: SYSTEM_USER_ID,
             receiver_id: conversation.brand_owner_id,
-            message: `✅ **Action Taken: Final Offer Made**\n\nYou have made a final offer of ₹${data.price}.`,
+            message: `✅ **Action Taken: Final Offer Made**\n\nYou have made a final offer of ₹${data.price}.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${finalOfferBreakdown.total_amount_paise / 100}\n• **Platform Commission (${finalOfferBreakdown.commission_percentage}%):** ₹${finalOfferBreakdown.commission_amount_paise / 100}\n• **Influencer Net Amount:** ₹${finalOfferBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${finalOfferBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${finalOfferBreakdown.final_amount_paise / 100} (70%)`,
             message_type: "audit",
             action_required: false,
           };
@@ -1900,6 +1947,9 @@ Please respond to confirm your interest and availability for this campaign.`,
               error: "Price is required for counter offer",
             };
           }
+
+          // Calculate payment breakdown for transparency
+          const counterOfferBreakdown = await this.calculatePaymentBreakdown(data.price);
           
           newFlowState = "brand_owner_price_response";
           newAwaitingRole = "brand_owner";
@@ -1982,7 +2032,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `💰 **Counter Offer: ₹${data.price}**\n\nInfluencer has made a counter offer. Please respond to this offer.`,
+            message: `💰 **Counter Offer: ₹${data.price}**\n\nInfluencer has made a counter offer.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${counterOfferBreakdown.total_amount_paise / 100}\n• **Platform Commission (${counterOfferBreakdown.commission_percentage}%):** ₹${counterOfferBreakdown.commission_amount_paise / 100}\n• **Influencer Net Amount:** ₹${counterOfferBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${counterOfferBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${counterOfferBreakdown.final_amount_paise / 100} (70%)\n\n⚠️ **Note:** Influencer will receive 90% of the total amount (₹${counterOfferBreakdown.net_amount_paise / 100}) after platform commission.\n\nPlease respond to this offer.`,
             message_type: "automated",
             action_required: true,
             action_data: {
@@ -2020,7 +2070,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: SYSTEM_USER_ID,
             receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Counter Offer Sent**\n\nYou have sent a counter offer of ₹${data.price}.`,
+            message: `✅ **Action Taken: Counter Offer Sent**\n\nYou have sent a counter offer of ₹${data.price}.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${counterOfferBreakdown.total_amount_paise / 100}\n• **Platform Commission (${counterOfferBreakdown.commission_percentage}%):** ₹${counterOfferBreakdown.commission_amount_paise / 100}\n• **Your Net Amount:** ₹${counterOfferBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${counterOfferBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${counterOfferBreakdown.final_amount_paise / 100} (70%)`,
             message_type: "audit",
             action_required: false,
           };
