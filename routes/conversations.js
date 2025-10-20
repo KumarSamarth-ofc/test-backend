@@ -1,10 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const authService = require("../utils/auth");
-const {
-  MessageController,
-  validateSendMessage,
-} = require("../controllers/messageController");
+const { MessageController, validateSendMessage } = require("../controllers/messageController");
+const { ConversationController } = require("../controllers/conversationController");
 
 // All routes require authentication
 router.use(authService.authenticateToken);
@@ -113,5 +111,17 @@ router.patch("/:conversation_id/state", async (req, res) => {
     });
   }
 });
+
+// Conversation metadata
+router.get("/:id", ConversationController.getConversation);
+
+// Conversation actions
+router.post("/:id/actions", ConversationController.performAction);
+
+// Admin-mediated payments (no escrow) - admin only via auth middleware role
+router.post("/:id/payments/receive", ConversationController.receivePayment);
+router.post("/:id/payments/release-advance", ConversationController.releaseAdvance);
+router.post("/:id/payments/release-final", ConversationController.releaseFinal);
+router.post("/:id/payments/refund-final", ConversationController.refundFinal);
 
 module.exports = router;
