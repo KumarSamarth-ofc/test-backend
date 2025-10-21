@@ -1658,7 +1658,7 @@ class BidController {
           sender_id: conversation.brand_owner_id,
           receiver_id: conversation.influencer_id,
           message: "🎉 **Payment Completed Successfully!**\n\nYour payment has been processed and the collaboration is now active. You can now communicate in real-time.",
-          message_type: "system",
+          message_type: "automated", // Fixed: Changed from "system" to "automated"
           action_required: false
         })
         .select()

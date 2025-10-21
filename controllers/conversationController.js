@@ -67,7 +67,7 @@ async function createAutomatedMessage({ conversationId, senderId, receiverId, te
     sender_id: senderId || null,
     receiver_id: receiverId || null,
     message: text,
-    message_type: "system",
+    message_type: "automated", // Fixed: Changed from "system" to "automated"
   };
   if (attachments && attachments.length > 0) {
     messagePayload.attachment_metadata = { attachments };

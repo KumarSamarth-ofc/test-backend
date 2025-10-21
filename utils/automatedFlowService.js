@@ -2886,7 +2886,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           sender_id: conversation.influencer_id,
           receiver_id: conversation.brand_owner_id,
           message: `📤 **Work Submitted**${isResubmission ? ` (Revision ${conversation.revision_count || 0})` : ''}\n\n**Deliverables:** ${submissionData.deliverables}\n\n**Description:** ${submissionData.description}\n\n${submissionData.submission_notes ? `**Notes:** ${submissionData.submission_notes}` : ''}`,
-          message_type: "system",
+          message_type: "automated", // Fixed: Changed from "system" to "automated"
           action_required: true,
           action_data: {
             title: "🎯 **Work Review Required**",
@@ -3128,7 +3128,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           sender_id: conversation.brand_owner_id,
           receiver_id: conversation.influencer_id,
           message: messageText,
-          message_type: "system",
+          message_type: "automated", // Fixed: Changed from "system" to "automated"
           action_required: actionData.buttons.length > 0,
           action_data: actionData
         })
