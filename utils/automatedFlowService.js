@@ -17,6 +17,47 @@ class AutomatedFlowService {
   }
 
   /**
+   * Calculate payment breakdown with commission (helper function)
+   */
+  async calculatePaymentBreakdown(agreedAmount) {
+    try {
+      // Get current commission settings
+      const { data: commissionSettings, error: commError } = await supabaseAdmin
+        .from("commission_settings")
+        .select("*")
+        .eq("is_active", true)
+        .order("effective_from", { ascending: false })
+        .limit(1)
+        .single();
+
+      if (commError || !commissionSettings) {
+        console.warn("⚠️ No commission settings found, using default 10%");
+        var commissionPercentage = 10.00;
+      } else {
+        var commissionPercentage = commissionSettings.commission_percentage;
+      }
+
+      const totalAmountPaise = Math.round(agreedAmount * 100);
+      const commissionAmountPaise = Math.round((totalAmountPaise * commissionPercentage) / 100);
+      const netAmountPaise = totalAmountPaise - commissionAmountPaise;
+      const advanceAmountPaise = Math.round(netAmountPaise * 0.30); // 30%
+      const finalAmountPaise = netAmountPaise - advanceAmountPaise; // 70%
+
+      return {
+        total_amount_paise: totalAmountPaise,
+        commission_amount_paise: commissionAmountPaise,
+        net_amount_paise: netAmountPaise,
+        advance_amount_paise: advanceAmountPaise,
+        final_amount_paise: finalAmountPaise,
+        commission_percentage: commissionPercentage
+      };
+    } catch (error) {
+      console.error("❌ Error calculating payment breakdown:", error);
+      throw error;
+    }
+  }
+
+  /**
    * Emit global conversation list updates
    */
   emitGlobalConversationUpdate(conversation, conversationId, updateData) {
@@ -632,11 +673,14 @@ Please respond to confirm your interest and availability for this campaign.`,
             }
           }
 
+          // Calculate payment breakdown for transparency
+          const paymentBreakdown = await this.calculatePaymentBreakdown(data.price);
+          
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `💰 **Price Offer**\n\nBrand owner has offered: **₹${data.price}**\n\nPlease review and respond to this offer.`,
+            message: `💰 **Price Offer**\n\nBrand owner has offered: **₹${data.price}**\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${paymentBreakdown.total_amount_paise / 100}\n• **Platform Commission (${paymentBreakdown.commission_percentage}%):** ₹${paymentBreakdown.commission_amount_paise / 100}\n• **Your Net Amount:** ₹${paymentBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${paymentBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${paymentBreakdown.final_amount_paise / 100} (70%)\n\n⚠️ **Note:** You will receive 90% of the total amount (₹${paymentBreakdown.net_amount_paise / 100}) after platform commission.\n\nPlease review and respond to this offer.`,
             message_type: "automated",
             action_required: true,
             action_data: {
@@ -672,7 +716,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: SYSTEM_USER_ID,
             receiver_id: conversation.brand_owner_id,
-            message: `✅ **Action Taken: Price Offer Sent**\n\nYou have offered ₹${data.price} to the influencer.`,
+            message: `✅ **Action Taken: Price Offer Sent**\n\nYou have offered ₹${data.price} to the influencer.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${paymentBreakdown.total_amount_paise / 100}\n• **Platform Commission (${paymentBreakdown.commission_percentage}%):** ₹${paymentBreakdown.commission_amount_paise / 100}\n• **Influencer Net Amount:** ₹${paymentBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${paymentBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${paymentBreakdown.final_amount_paise / 100} (70%)`,
             message_type: "audit",
             action_required: false,
           };
@@ -1289,6 +1333,9 @@ Please respond to confirm your interest and availability for this campaign.`,
           newFlowState = "influencer_final_response";
           newAwaitingRole = "influencer";
 
+          // Calculate payment breakdown for transparency
+          const finalOfferBreakdown = await this.calculatePaymentBreakdown(data.price);
+
           // Persist the final offer price as requests.proposed_amount
           if (conversation.request_id) {
             await supabaseAdmin
@@ -1342,7 +1389,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `💰 **Final Offer: ₹${data.price}**\n\nBrand owner has made a final offer. This is the last negotiation round.`,
+            message: `💰 **Final Offer: ₹${data.price}**\n\nBrand owner has made a final offer. This is the last negotiation round.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${finalOfferBreakdown.total_amount_paise / 100}\n• **Platform Commission (${finalOfferBreakdown.commission_percentage}%):** ₹${finalOfferBreakdown.commission_amount_paise / 100}\n• **Your Net Amount:** ₹${finalOfferBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${finalOfferBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${finalOfferBreakdown.final_amount_paise / 100} (70%)\n\n⚠️ **Note:** You will receive 90% of the total amount (₹${finalOfferBreakdown.net_amount_paise / 100}) after platform commission.`,
             message_type: "automated",
             action_required: true,
             action_data: {
@@ -1373,7 +1420,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: SYSTEM_USER_ID,
             receiver_id: conversation.brand_owner_id,
-            message: `✅ **Action Taken: Final Offer Made**\n\nYou have made a final offer of ₹${data.price}.`,
+            message: `✅ **Action Taken: Final Offer Made**\n\nYou have made a final offer of ₹${data.price}.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${finalOfferBreakdown.total_amount_paise / 100}\n• **Platform Commission (${finalOfferBreakdown.commission_percentage}%):** ₹${finalOfferBreakdown.commission_amount_paise / 100}\n• **Influencer Net Amount:** ₹${finalOfferBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${finalOfferBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${finalOfferBreakdown.final_amount_paise / 100} (70%)`,
             message_type: "audit",
             action_required: false,
           };
@@ -1900,6 +1947,9 @@ Please respond to confirm your interest and availability for this campaign.`,
               error: "Price is required for counter offer",
             };
           }
+
+          // Calculate payment breakdown for transparency
+          const counterOfferBreakdown = await this.calculatePaymentBreakdown(data.price);
           
           newFlowState = "brand_owner_price_response";
           newAwaitingRole = "brand_owner";
@@ -1982,7 +2032,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `💰 **Counter Offer: ₹${data.price}**\n\nInfluencer has made a counter offer. Please respond to this offer.`,
+            message: `💰 **Counter Offer: ₹${data.price}**\n\nInfluencer has made a counter offer.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${counterOfferBreakdown.total_amount_paise / 100}\n• **Platform Commission (${counterOfferBreakdown.commission_percentage}%):** ₹${counterOfferBreakdown.commission_amount_paise / 100}\n• **Influencer Net Amount:** ₹${counterOfferBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${counterOfferBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${counterOfferBreakdown.final_amount_paise / 100} (70%)\n\n⚠️ **Note:** Influencer will receive 90% of the total amount (₹${counterOfferBreakdown.net_amount_paise / 100}) after platform commission.\n\nPlease respond to this offer.`,
             message_type: "automated",
             action_required: true,
             action_data: {
@@ -2020,7 +2070,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: SYSTEM_USER_ID,
             receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Counter Offer Sent**\n\nYou have sent a counter offer of ₹${data.price}.`,
+            message: `✅ **Action Taken: Counter Offer Sent**\n\nYou have sent a counter offer of ₹${data.price}.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${counterOfferBreakdown.total_amount_paise / 100}\n• **Platform Commission (${counterOfferBreakdown.commission_percentage}%):** ₹${counterOfferBreakdown.commission_amount_paise / 100}\n• **Your Net Amount:** ₹${counterOfferBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${counterOfferBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${counterOfferBreakdown.final_amount_paise / 100} (70%)`,
             message_type: "audit",
             action_required: false,
           };
@@ -2836,7 +2886,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           sender_id: conversation.influencer_id,
           receiver_id: conversation.brand_owner_id,
           message: `📤 **Work Submitted**${isResubmission ? ` (Revision ${conversation.revision_count || 0})` : ''}\n\n**Deliverables:** ${submissionData.deliverables}\n\n**Description:** ${submissionData.description}\n\n${submissionData.submission_notes ? `**Notes:** ${submissionData.submission_notes}` : ''}`,
-          message_type: "system",
+          message_type: "automated", // Fixed: Changed from "system" to "automated"
           action_required: true,
           action_data: {
             title: "🎯 **Work Review Required**",
@@ -3078,7 +3128,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           sender_id: conversation.brand_owner_id,
           receiver_id: conversation.influencer_id,
           message: messageText,
-          message_type: "system",
+          message_type: "automated", // Fixed: Changed from "system" to "automated"
           action_required: actionData.buttons.length > 0,
           action_data: actionData
         })
@@ -3121,6 +3171,604 @@ Please respond to confirm your interest and availability for this campaign.`,
         success: false,
         error: error.message
       };
+    }
+  }
+
+  /**
+   * Handle admin actions in automated flow
+   */
+  async handleAdminAction(conversationId, action, data = {}) {
+    try {
+      const conversation = await this.getConversation(conversationId);
+      
+      switch (action) {
+        case 'receive_brand_owner_payment':
+          return await this.receiveBrandOwnerPayment(conversationId, data);
+        case 'release_advance':
+          return await this.releaseAdvance(conversationId, data);
+        case 'release_final':
+          return await this.releaseFinal(conversationId, data);
+        case 'refund_final':
+          return await this.refundFinal(conversationId, data);
+        case 'force_close':
+          return await this.forceCloseConversation(conversationId, data);
+        default:
+          throw new Error(`Unknown admin action: ${action}`);
+      }
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Receive brand owner payment (admin action)
+   */
+  async receiveBrandOwnerPayment(conversationId, data) {
+    try {
+      const { amount, currency = "INR", reference, attachments = [], notes, commission_percent } = data;
+      
+      if (!amount || amount <= 0) {
+        throw new Error("Valid amount required");
+      }
+
+      // Track brand owner payment to admin (for audit)
+      const payload = {
+        conversation_id: conversationId,
+        direction: "in",
+        type: "credit",
+        status: "completed",
+        amount: amount,
+        amount_paise: Math.round(Number(amount) * 100),
+        notes: notes || `Payment received for conversation ${conversationId}`,
+        payment_stage: "received",
+        admin_payment_tracking_id: reference || null,
+      };
+
+      const { data: txn, error: txnErr } = await supabaseAdmin
+        .from("transactions")
+        .insert(payload)
+        .select()
+        .single();
+      
+      if (txnErr) {
+        throw new Error(`Transaction failed: ${txnErr.message}`);
+      }
+
+      // Create automated message with optional screenshot
+      const { data: message, error: messageError } = await supabaseAdmin
+        .from("messages")
+        .insert({
+          conversation_id: conversationId,
+          sender_id: SYSTEM_USER_ID,
+          receiver_id: null,
+          message: `Admin recorded payment from brand owner: ₹${amount}${commission_percent ? ` (commission ${commission_percent}%)` : ""}`,
+          message_type: "system_payment_update",
+          media_url: attachments.length > 0 ? attachments[0].url : null,
+          attachment_metadata: attachments,
+          action_required: false,
+          metadata: {
+            payment_action: 'receive_payment',
+            amount: amount,
+            commission_percent: commission_percent,
+            reference: reference
+          }
+        })
+        .select()
+        .single();
+
+      if (messageError) {
+        console.error('Error creating automated message for payment receive:', messageError);
+      }
+
+      // Emit WebSocket events
+      if (this.io) {
+        this.io.to(`conversation_${conversationId}`).emit('new_message', {
+          conversation_id: conversationId,
+          message: message
+        });
+      }
+
+      return {
+        success: true,
+        conversation: await this.getConversation(conversationId),
+        message: message,
+        audit_message: null,
+        transaction: txn
+      };
+    } catch (error) {
+      console.error('Error in receiveBrandOwnerPayment:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Release advance payment (admin action)
+   */
+  async releaseAdvance(conversationId, data) {
+    try {
+      const { amount, currency = "INR", payout_reference, attachments = [], notes, commission_percent } = data;
+      
+      if (!amount || amount <= 0) {
+        throw new Error("Valid amount required");
+      }
+
+      const conversation = await this.getConversation(conversationId);
+
+      // Record payout to influencer
+      const payout = {
+        conversation_id: conversationId,
+        direction: "out",
+        type: "debit",
+        status: "completed",
+        amount: amount,
+        amount_paise: Math.round(Number(amount) * 100),
+        notes: notes || `Advance released to influencer for conversation ${conversationId}`,
+        payment_stage: "advance",
+        admin_payment_tracking_id: payout_reference || null,
+        receiver_id: conversation.influencer_id,
+        sender_id: SYSTEM_USER_ID,
+      };
+
+      const { data: txn, error: txnErr } = await supabaseAdmin
+        .from("transactions")
+        .insert(payout)
+        .select()
+        .single();
+      
+      if (txnErr) {
+        throw new Error(`Transaction failed: ${txnErr.message}`);
+      }
+
+      // Update conversation state to work_in_progress
+      const { error: updateError } = await supabaseAdmin
+        .from("conversations")
+        .update({
+          flow_state: "work_in_progress",
+          awaiting_role: "influencer",
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", conversationId);
+
+      if (updateError) {
+        throw new Error(`Failed to update conversation state: ${updateError.message}`);
+      }
+
+      // Create automated message
+      const { data: message, error: messageError } = await supabaseAdmin
+        .from("messages")
+        .insert({
+          conversation_id: conversationId,
+          sender_id: SYSTEM_USER_ID,
+          receiver_id: conversation.influencer_id,
+          message: `✅ **Advance Payment Released!**\n\nAdmin has released an advance payment of ₹${amount} to the influencer. The conversation is now in **Work In Progress** state.`,
+          message_type: "system_payment_update",
+          media_url: attachments.length > 0 ? attachments[0].url : null,
+          attachment_metadata: attachments,
+          action_required: false,
+          metadata: {
+            payment_action: 'release_advance',
+            amount: amount,
+            payout_reference: payout_reference,
+            commission_percent: commission_percent
+          }
+        })
+        .select()
+        .single();
+
+      if (messageError) {
+        console.error('Error creating automated message for advance release:', messageError);
+      }
+
+      // Emit WebSocket events
+      if (this.io) {
+        this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+          conversation_id: conversationId,
+          previous_state: conversation.flow_state,
+          new_state: "work_in_progress",
+          awaiting_role: "influencer",
+          reason: "release_advance",
+          timestamp: new Date().toISOString()
+        });
+
+        this.io.to(`conversation_${conversationId}`).emit('new_message', {
+          conversation_id: conversationId,
+          message: message
+        });
+
+        // Notify both users about the payment
+        this.io.to(`user_${conversation.brand_owner_id}`).emit('notification', {
+          type: 'payment_update',
+          data: { conversation_id: conversationId, message: `Advance payment of ₹${amount} released to influencer.` }
+        });
+        this.io.to(`user_${conversation.influencer_id}`).emit('notification', {
+          type: 'payment_update',
+          data: { conversation_id: conversationId, message: `You received an advance payment of ₹${amount}. Start working!` }
+        });
+      }
+
+      const updatedConversation = await this.getConversation(conversationId);
+
+      return {
+        success: true,
+        conversation: updatedConversation,
+        message: message,
+        audit_message: null,
+        transaction: txn
+      };
+    } catch (error) {
+      console.error('Error in releaseAdvance:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Release final payment (admin action)
+   */
+  async releaseFinal(conversationId, data) {
+    try {
+      const { amount, currency = "INR", payout_reference, attachments = [], notes, commission_percent } = data;
+      
+      if (!amount || amount <= 0) {
+        throw new Error("Valid amount required");
+      }
+
+      const conversation = await this.getConversation(conversationId);
+      
+      if (conversation.flow_state !== "work_approved") {
+        throw new Error("Final can be released only after work_approved");
+      }
+
+      // Record payout to influencer
+      const payout = {
+        conversation_id: conversationId,
+        direction: "out",
+        type: "debit",
+        status: "completed",
+        amount: amount,
+        amount_paise: Math.round(Number(amount) * 100),
+        notes: notes || `Final payment released to influencer for conversation ${conversationId}`,
+        payment_stage: "final",
+        admin_payment_tracking_id: payout_reference || null,
+        receiver_id: conversation.influencer_id,
+        sender_id: SYSTEM_USER_ID,
+      };
+
+      const { data: txn, error: txnErr } = await supabaseAdmin
+        .from("transactions")
+        .insert(payout)
+        .select()
+        .single();
+      
+      if (txnErr) {
+        throw new Error(`Transaction failed: ${txnErr.message}`);
+      }
+
+      // Move state to closed
+      const { error: updateError } = await supabaseAdmin
+        .from("conversations")
+        .update({
+          flow_state: "closed",
+          awaiting_role: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", conversationId);
+
+      if (updateError) {
+        throw new Error(`Failed to update conversation state: ${updateError.message}`);
+      }
+
+      // Create automated message
+      const { data: message, error: messageError } = await supabaseAdmin
+        .from("messages")
+        .insert({
+          conversation_id: conversationId,
+          sender_id: SYSTEM_USER_ID,
+          receiver_id: conversation.influencer_id,
+          message: `🎉 **Final Payment Released!**\n\nAdmin has released the final payment of ₹${amount} to the influencer. The conversation is now **Closed**.`,
+          message_type: "system_payment_update",
+          media_url: attachments.length > 0 ? attachments[0].url : null,
+          attachment_metadata: attachments,
+          action_required: false,
+          metadata: {
+            payment_action: 'release_final',
+            amount: amount,
+            payout_reference: payout_reference,
+            commission_percent: commission_percent
+          }
+        })
+        .select()
+        .single();
+
+      if (messageError) {
+        console.error('Error creating automated message for final release:', messageError);
+      }
+
+      // Emit WebSocket events
+      if (this.io) {
+        this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+          conversation_id: conversationId,
+          previous_state: conversation.flow_state,
+          new_state: "closed",
+          awaiting_role: null,
+          reason: "release_final",
+          timestamp: new Date().toISOString()
+        });
+
+        this.io.to(`conversation_${conversationId}`).emit('new_message', {
+          conversation_id: conversationId,
+          message: message
+        });
+
+        // Notify both users about the payment
+        this.io.to(`user_${conversation.brand_owner_id}`).emit('notification', {
+          type: 'payment_update',
+          data: { conversation_id: conversationId, message: `Final payment of ₹${amount} released to influencer.` }
+        });
+        this.io.to(`user_${conversation.influencer_id}`).emit('notification', {
+          type: 'payment_update',
+          data: { conversation_id: conversationId, message: `You received the final payment of ₹${amount}. Great work!` }
+        });
+      }
+
+      const updatedConversation = await this.getConversation(conversationId);
+
+      return {
+        success: true,
+        conversation: updatedConversation,
+        message: message,
+        audit_message: null,
+        transaction: txn
+      };
+    } catch (error) {
+      console.error('Error in releaseFinal:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Refund final payment (admin action)
+   */
+  async refundFinal(conversationId, data) {
+    try {
+      const { amount, currency = "INR", refund_reference, attachments = [], notes, commission_percent } = data;
+      
+      if (!amount || amount <= 0) {
+        throw new Error("Valid amount required");
+      }
+
+      const conversation = await this.getConversation(conversationId);
+
+      // Record refund to brand owner
+      const refund = {
+        conversation_id: conversationId,
+        direction: "out",
+        type: "debit",
+        status: "completed",
+        amount: amount,
+        amount_paise: Math.round(Number(amount) * 100),
+        notes: notes || `Refund processed for conversation ${conversationId}`,
+        payment_stage: "refund",
+        admin_payment_tracking_id: refund_reference || null,
+        receiver_id: conversation.brand_owner_id,
+        sender_id: SYSTEM_USER_ID,
+      };
+
+      const { data: txn, error: txnErr } = await supabaseAdmin
+        .from("transactions")
+        .insert(refund)
+        .select()
+        .single();
+      
+      if (txnErr) {
+        throw new Error(`Transaction failed: ${txnErr.message}`);
+      }
+
+      // Move state to closed
+      const { error: updateError } = await supabaseAdmin
+        .from("conversations")
+        .update({
+          flow_state: "closed",
+          awaiting_role: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", conversationId);
+
+      if (updateError) {
+        throw new Error(`Failed to update conversation state: ${updateError.message}`);
+      }
+
+      // Create automated message
+      const { data: message, error: messageError } = await supabaseAdmin
+        .from("messages")
+        .insert({
+          conversation_id: conversationId,
+          sender_id: SYSTEM_USER_ID,
+          receiver_id: conversation.brand_owner_id,
+          message: `💰 **Refund Processed!**\n\nAdmin has processed a refund of ₹${amount} to the brand owner. The conversation is now **Closed**.`,
+          message_type: "system_payment_update",
+          media_url: attachments.length > 0 ? attachments[0].url : null,
+          attachment_metadata: attachments,
+          action_required: false,
+          metadata: {
+            payment_action: 'refund_final',
+            amount: amount,
+            refund_reference: refund_reference,
+            commission_percent: commission_percent
+          }
+        })
+        .select()
+        .single();
+
+      if (messageError) {
+        console.error('Error creating automated message for refund:', messageError);
+      }
+
+      // Emit WebSocket events
+      if (this.io) {
+        this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+          conversation_id: conversationId,
+          previous_state: conversation.flow_state,
+          new_state: "closed",
+          awaiting_role: null,
+          reason: "refund_final",
+          timestamp: new Date().toISOString()
+        });
+
+        this.io.to(`conversation_${conversationId}`).emit('new_message', {
+          conversation_id: conversationId,
+          message: message
+        });
+
+        // Notify both users about the refund
+        this.io.to(`user_${conversation.brand_owner_id}`).emit('notification', {
+          type: 'payment_update',
+          data: { conversation_id: conversationId, message: `You received a refund of ₹${amount}.` }
+        });
+        this.io.to(`user_${conversation.influencer_id}`).emit('notification', {
+          type: 'payment_update',
+          data: { conversation_id: conversationId, message: `A refund of ₹${amount} was processed to the brand owner.` }
+        });
+      }
+
+      const updatedConversation = await this.getConversation(conversationId);
+
+      return {
+        success: true,
+        conversation: updatedConversation,
+        message: message,
+        audit_message: null,
+        transaction: txn
+      };
+    } catch (error) {
+      console.error('Error in refundFinal:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Force close conversation (admin action)
+   */
+  async forceCloseConversation(conversationId, data) {
+    try {
+      const { reason, notes } = data;
+      const conversation = await this.getConversation(conversationId);
+
+      // Move state to closed
+      const { error: updateError } = await supabaseAdmin
+        .from("conversations")
+        .update({
+          flow_state: "closed",
+          awaiting_role: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", conversationId);
+
+      if (updateError) {
+        throw new Error(`Failed to update conversation state: ${updateError.message}`);
+      }
+
+      // Create automated message
+      const { data: message, error: messageError } = await supabaseAdmin
+        .from("messages")
+        .insert({
+          conversation_id: conversationId,
+          sender_id: SYSTEM_USER_ID,
+          receiver_id: null,
+          message: `🔒 **Conversation Closed by Admin**\n\n${reason || 'Admin has closed this conversation.'}${notes ? `\n\nNote: ${notes}` : ''}`,
+          message_type: "system_payment_update",
+          action_required: false,
+          metadata: {
+            payment_action: 'force_close',
+            reason: reason,
+            notes: notes
+          }
+        })
+        .select()
+        .single();
+
+      if (messageError) {
+        console.error('Error creating automated message for force close:', messageError);
+      }
+
+      // Emit WebSocket events
+      if (this.io) {
+        this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+          conversation_id: conversationId,
+          previous_state: conversation.flow_state,
+          new_state: "closed",
+          awaiting_role: null,
+          reason: "force_close",
+          timestamp: new Date().toISOString()
+        });
+
+        this.io.to(`conversation_${conversationId}`).emit('new_message', {
+          conversation_id: conversationId,
+          message: message
+        });
+
+        // Notify both users
+        this.io.to(`user_${conversation.brand_owner_id}`).emit('notification', {
+          type: 'conversation_closed',
+          data: { conversation_id: conversationId, message: 'Conversation closed by admin.' }
+        });
+        this.io.to(`user_${conversation.influencer_id}`).emit('notification', {
+          type: 'conversation_closed',
+          data: { conversation_id: conversationId, message: 'Conversation closed by admin.' }
+        });
+      }
+
+      const updatedConversation = await this.getConversation(conversationId);
+
+      return {
+        success: true,
+        conversation: updatedConversation,
+        message: message,
+        audit_message: null
+      };
+    } catch (error) {
+      console.error('Error in forceCloseConversation:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Unified conversation action handler
+   */
+  async handleConversationAction(conversationId, action, data = {}, userRole, userId) {
+    try {
+      // Validate role permissions
+      const roleActions = {
+        'influencer': ['submit_work', 'resubmit_work', 'accept_price', 'reject_price', 'negotiate_price'],
+        'brand_owner': ['request_revision', 'approve_work', 'accept_price', 'reject_price', 'negotiate_price'],
+        'admin': ['receive_brand_owner_payment', 'release_advance', 'release_final', 'refund_final', 'force_close']
+      };
+
+      if (!roleActions[userRole]?.includes(action)) {
+        throw new Error(`Role ${userRole} cannot perform action ${action}`);
+      }
+
+      // Get conversation and validate state
+      const conversation = await this.getConversation(conversationId);
+      
+      // Route to appropriate handler
+      let result;
+      switch (userRole) {
+        case 'influencer':
+          result = await this.handleInfluencerAction(conversationId, action, data);
+          break;
+        case 'brand_owner':
+          result = await this.handleBrandOwnerAction(conversationId, action, data);
+          break;
+        case 'admin':
+          result = await this.handleAdminAction(conversationId, action, data);
+          break;
+        default:
+          throw new Error(`Unknown role: ${userRole}`);
+      }
+
+      return result;
+    } catch (error) {
+      return { success: false, error: error.message };
     }
   }
 }

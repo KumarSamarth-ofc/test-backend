@@ -18,4 +18,7 @@ router.get('/', authService.authenticateToken, authService.requireRole('admin'),
 router.post('/block', authService.authenticateToken, authService.requireRole('admin'), reportController.blockUser);
 router.post('/unblock', authService.authenticateToken, authService.requireRole('admin'), reportController.unblockUser);
 
+// Admin: update report status
+router.post('/:id/actions', authService.authenticateToken, authService.requireRole('admin'), reportController.updateReportStatus);
+
 module.exports = router;

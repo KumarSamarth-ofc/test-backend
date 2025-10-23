@@ -943,12 +943,15 @@ class BidController {
       if (result.success) {
         const io = req.app.get("io");
         if (io) {
-          // Emit conversation_updated event
-          io.to(`conversation_${conversation_id}`).emit("conversation_updated", {
+          // Emit conversation_state_changed event (standardized)
+          io.to(`conversation_${conversation_id}`).emit("conversation_state_changed", {
             conversation_id: conversation_id,
-            flow_state: result.conversation.flow_state,
+            previous_state: conversation.flow_state,
+            new_state: result.conversation.flow_state,
             awaiting_role: result.conversation.awaiting_role,
-            chat_status: result.conversation.chat_status
+            chat_status: result.conversation.chat_status,
+            reason: mappedAction,
+            timestamp: new Date().toISOString()
           });
 
           // Emit new_message events for each message created
@@ -968,7 +971,15 @@ class BidController {
         }
       }
 
-      res.json(result);
+      // ✅ Return the complete result structure for automated flow (matching CampaignController)
+      res.json({
+        success: true,
+        conversation: result.conversation,
+        message: result.message,
+        audit_message: result.audit_message, // Include audit message for sender
+        flow_state: result.flow_state,
+        awaiting_role: result.awaiting_role,
+      });
     } catch (error) {
       console.error("❌ Error handling brand owner action:", error);
       res.status(500).json({
@@ -1101,12 +1112,15 @@ class BidController {
       if (result.success) {
         const io = req.app.get("io");
         if (io) {
-          // Emit conversation_updated event
-          io.to(`conversation_${conversation_id}`).emit("conversation_updated", {
+          // Emit conversation_state_changed event (standardized)
+          io.to(`conversation_${conversation_id}`).emit("conversation_state_changed", {
             conversation_id: conversation_id,
-            flow_state: result.conversation.flow_state,
+            previous_state: conversation.flow_state,
+            new_state: result.conversation.flow_state,
             awaiting_role: result.conversation.awaiting_role,
-            chat_status: result.conversation.chat_status
+            chat_status: result.conversation.chat_status,
+            reason: mappedAction,
+            timestamp: new Date().toISOString()
           });
 
           // Emit new_message events for each message created
@@ -1126,7 +1140,15 @@ class BidController {
         }
       }
 
-      res.json(result);
+      // ✅ Return the complete result structure for automated flow (matching CampaignController)
+      res.json({
+        success: true,
+        conversation: result.conversation,
+        message: result.message,
+        audit_message: result.audit_message, // Include audit message for sender
+        flow_state: result.flow_state,
+        awaiting_role: result.awaiting_role,
+      });
     } catch (error) {
       console.error("❌ Error handling influencer action:", error);
       res.status(500).json({
@@ -1636,7 +1658,7 @@ class BidController {
           sender_id: conversation.brand_owner_id,
           receiver_id: conversation.influencer_id,
           message: "🎉 **Payment Completed Successfully!**\n\nYour payment has been processed and the collaboration is now active. You can now communicate in real-time.",
-          message_type: "system",
+          message_type: "automated", // Fixed: Changed from "system" to "automated"
           action_required: false
         })
         .select()

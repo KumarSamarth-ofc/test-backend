@@ -1,6 +1,87 @@
 const { supabaseAdmin } = require("../supabase/client");
 
 class NotificationService {
+  constructor() {
+    this.messageHandler = null; // Will be set by the main app
+  }
+
+  /**
+   * Set the message handler instance for online status checking
+   */
+  setMessageHandler(messageHandler) {
+    this.messageHandler = messageHandler;
+  }
+
+  /**
+   * Check if user is online and should receive real-time notifications
+   */
+  isUserOnline(userId) {
+    if (!this.messageHandler) {
+      console.warn('⚠️ MessageHandler not set, assuming user is offline');
+      return false;
+    }
+    return this.messageHandler.isUserOnline(userId);
+  }
+
+  /**
+   * Store notification and determine delivery method based on user online status
+   */
+  async storeAndDeliverNotification(notificationData, options = {}) {
+    try {
+      const {
+        user_id,
+        type,
+        title,
+        message,
+        data = {},
+        action_url = null,
+        expires_at = null,
+        priority = 'medium',
+        force_delivery = false // Override online status check
+      } = notificationData;
+
+      // Store notification in database first
+      const storeResult = await this.storeNotification({
+        user_id,
+        type,
+        title,
+        message,
+        data,
+        action_url,
+        expires_at,
+        priority
+      });
+
+      if (!storeResult.success) {
+        return storeResult;
+      }
+
+      const notification = storeResult.notification;
+      const isOnline = this.isUserOnline(user_id);
+
+      // Determine delivery method based on online status
+      const deliveryInfo = {
+        user_id,
+        is_online: isOnline,
+        notification_id: notification.id,
+        delivery_method: isOnline ? 'socket' : 'fcm',
+        should_send_socket: isOnline || force_delivery,
+        should_send_fcm: !isOnline || force_delivery
+      };
+
+      console.log(`📊 [NOTIFICATION] User ${user_id} - Online: ${isOnline}, Delivery: ${deliveryInfo.delivery_method}`);
+
+      return {
+        success: true,
+        notification,
+        delivery_info: deliveryInfo
+      };
+
+    } catch (error) {
+      console.error('❌ Error in storeAndDeliverNotification:', error);
+      return { success: false, error: error.message };
+    }
+  }
   /**
    * Store a notification in the database
    */

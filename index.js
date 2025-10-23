@@ -88,6 +88,7 @@ app.get("/test-socket", (req, res) => {
   res.json(testMessage);
 });
 
+
 // Setup security middleware
 setupSecurityMiddleware(app);
 
@@ -100,6 +101,266 @@ app.get("/api/cors-test", (req, res) => {
     method: req.method,
     timestamp: new Date().toISOString(),
   });
+});
+
+// Socket notification test endpoint
+app.post("/api/test-socket-notification", async (req, res) => {
+  try {
+    const { user_id, title, message, notification_id } = req.body;
+    const io = app.get("io");
+    
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "user_id is required"
+      });
+    }
+    
+    if (!io) {
+      return res.status(500).json({
+        success: false,
+        message: "Socket.IO not available"
+      });
+    }
+    
+    // Check if user is online
+    const isOnline = messageHandler.isUserOnline(user_id);
+    const onlineUsersCount = messageHandler.getOnlineUsersCount();
+    
+    console.log(`📊 [TEST] User ${user_id} - Online: ${isOnline}, Total online users: ${onlineUsersCount}`);
+    
+    // Check if this is a force send request
+    const forceSend = req.body.force_send === true;
+    
+    // Store notification in database first (regardless of online status)
+    const notificationService = require('./services/notificationService');
+    const storeResult = await notificationService.storeNotification({
+      user_id: user_id,
+      type: 'message',
+      title: title || 'Test Notification',
+      message: message || 'This is a test notification',
+      data: {
+        notification_type: 'test',
+        timestamp: new Date().toISOString(),
+        user_id: user_id,
+        test: true
+      },
+      priority: 'medium',
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    });
+
+    if (!storeResult.success) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to store notification in database",
+        error: storeResult.error
+      });
+    }
+
+    // Only send socket notification if user is online OR force send is requested
+    if (!isOnline && !forceSend) {
+      return res.json({
+        success: true,
+        message: "User is offline - notification stored in database only",
+        user_id: user_id,
+        is_online: false,
+        online_users_count: onlineUsersCount,
+        delivery_method: "database_only",
+        database_notification: storeResult.notification
+      });
+    }
+
+    const notificationData = {
+      type: 'test',
+      data: {
+        id: storeResult.notification.id,
+        title: title || 'Test Notification',
+        body: message || 'This is a test notification',
+        created_at: new Date().toISOString(),
+        test: true,
+        user_id: user_id
+      }
+    };
+    
+    // Send notification to specific user's room
+    io.to(`user_${user_id}`).emit('notification', notificationData);
+    
+    console.log(`📡 [TEST] Sent socket notification to user_${user_id}:`, notificationData);
+    console.log(`💾 [TEST] Stored notification in database:`, storeResult.notification.id);
+    
+    res.json({
+      success: true,
+      message: "Socket notification sent to online user",
+      user_id: user_id,
+      notification: notificationData,
+      database_notification: storeResult.notification,
+      is_online: true,
+      online_users_count: onlineUsersCount,
+      delivery_method: "socket"
+    });
+    
+  } catch (error) {
+    console.error('❌ Error in test-socket-notification:', error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: error.message
+    });
+  }
+});
+
+// Send test notification to all active socket users
+app.post("/api/test-socket-notification-all", async (req, res) => {
+  try {
+    const { title, message } = req.body;
+    const io = app.get("io");
+    
+    if (!io) {
+      return res.status(500).json({
+        success: false,
+        message: "Socket.IO not available"
+      });
+    }
+    
+    // Get all online users
+    const onlineUsers = messageHandler.getOnlineUsersWithSockets();
+    const onlineUsersCount = messageHandler.getOnlineUsersCount();
+    
+    console.log(`📊 [TEST-ALL] Found ${onlineUsersCount} online users:`, onlineUsers.map(u => u.userId));
+    
+    if (onlineUsersCount === 0) {
+      return res.json({
+        success: true,
+        message: "No active socket users found",
+        online_users_count: 0,
+        notifications_sent: 0,
+        delivery_method: "none"
+      });
+    }
+    
+    const notificationService = require('./services/notificationService');
+    const results = [];
+    let successCount = 0;
+    let errorCount = 0;
+    
+    // Send notification to each online user
+    for (const user of onlineUsers) {
+      try {
+        // Store notification in database
+        const storeResult = await notificationService.storeNotification({
+          user_id: user.userId,
+          type: 'message',
+          title: title || 'Test Notification to All Users',
+          message: message || 'This is a test notification sent to all active users',
+          data: {
+            notification_type: 'test_all',
+            timestamp: new Date().toISOString(),
+            user_id: user.userId,
+            test: true,
+            sent_to_all: true
+          },
+          priority: 'medium',
+          expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+        });
+
+        if (storeResult.success) {
+          const notificationData = {
+            type: 'test_all',
+            data: {
+              id: storeResult.notification.id,
+              title: title || 'Test Notification to All Users',
+              body: message || 'This is a test notification sent to all active users',
+              created_at: new Date().toISOString(),
+              test: true,
+              user_id: user.userId,
+              sent_to_all: true
+            }
+          };
+          
+          // Send socket notification
+          io.to(user.room).emit('notification', notificationData);
+          
+          results.push({
+            user_id: user.userId,
+            socket_id: user.socketId,
+            success: true,
+            notification_id: storeResult.notification.id,
+            delivery_method: 'socket'
+          });
+          
+          successCount++;
+          console.log(`📡 [TEST-ALL] Sent notification to user_${user.userId} (${user.socketId})`);
+        } else {
+          results.push({
+            user_id: user.userId,
+            socket_id: user.socketId,
+            success: false,
+            error: storeResult.error,
+            delivery_method: 'failed'
+          });
+          errorCount++;
+        }
+      } catch (error) {
+        console.error(`❌ [TEST-ALL] Error sending to user_${user.userId}:`, error);
+        results.push({
+          user_id: user.userId,
+          socket_id: user.socketId,
+          success: false,
+          error: error.message,
+          delivery_method: 'failed'
+        });
+        errorCount++;
+      }
+    }
+    
+    console.log(`📊 [TEST-ALL] Completed: ${successCount} successful, ${errorCount} failed`);
+    
+    res.json({
+      success: true,
+      message: `Test notifications sent to ${successCount} active users`,
+      online_users_count: onlineUsersCount,
+      notifications_sent: successCount,
+      notifications_failed: errorCount,
+      delivery_method: "socket",
+      results: results,
+      summary: {
+        total_users: onlineUsersCount,
+        successful: successCount,
+        failed: errorCount,
+        success_rate: onlineUsersCount > 0 ? ((successCount / onlineUsersCount) * 100).toFixed(2) + '%' : '0%'
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error in test-socket-notification-all:', error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: error.message
+    });
+  }
+});
+
+// Get online users status endpoint
+app.get("/api/online-users", (req, res) => {
+  try {
+    const onlineUsers = messageHandler.getOnlineUsersWithSockets();
+    const onlineUsersCount = messageHandler.getOnlineUsersCount();
+    
+    res.json({
+      success: true,
+      online_users_count: onlineUsersCount,
+      online_users: onlineUsers,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error getting online users:', error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: error.message
+    });
+  }
 });
 
 // Admin user check endpoint
@@ -386,6 +647,10 @@ app.use("*", (req, res) => {
 
 // Socket.IO setup
 const messageHandler = new MessageHandler(io);
+
+// Connect messageHandler to notificationService for online status checking
+const notificationService = require('./services/notificationService');
+notificationService.setMessageHandler(messageHandler);
 
 io.on("connection", (socket) => {
   console.log("🔌 [DEBUG] New client connected:", socket.id);

@@ -59,35 +59,47 @@ router.get("/:conversation_identifier", async (req, res) => {
   try {
     const { conversation_identifier } = req.params;
     const { page = 1, limit = 50 } = req.query;
+    const userId = req.user.id; // Get authenticated user ID
 
     console.log(
-      `🔍 Frontend requested conversation with identifier: ${conversation_identifier}`
+      `🔍 Frontend requested conversation with identifier: ${conversation_identifier} for user: ${userId}`
     );
 
-    // Try to find conversation by the identifier
-    // This could be a slug, name, or other identifier
+    // Try to find conversation by the identifier WITH USER ACCESS CONTROL
     const { data: conversation, error: convError } =
       await require("../supabase/client")
         .supabaseAdmin.from("conversations")
         .select("id, brand_owner_id, influencer_id")
-        .or(`id.eq.${conversation_identifier}`)
+        .eq("id", conversation_identifier) // Use eq instead of or for exact match
+        .or(`brand_owner_id.eq.${userId},influencer_id.eq.${userId}`) // SECURITY: Only conversations user has access to
         .single();
 
     if (convError || !conversation) {
       console.log(
-        `❌ Conversation not found for identifier: ${conversation_identifier}`
+        `❌ Conversation not found or access denied for identifier: ${conversation_identifier}, user: ${userId}`
       );
       return res.status(404).json({
         success: false,
-        message: "Conversation not found",
+        message: "Conversation not found or access denied",
         suggestion:
           "Use /api/messages/conversations/:conversation_id/messages for valid conversation IDs",
       });
     }
 
+    // Verify user has access to this conversation (double-check)
+    if (conversation.brand_owner_id !== userId && conversation.influencer_id !== userId) {
+      console.log(
+        `❌ Access denied: User ${userId} not authorized for conversation ${conversation.id}`
+      );
+      return res.status(403).json({
+        success: false,
+        message: "Access denied to this conversation",
+      });
+    }
+
     // If found, redirect to the proper messages endpoint
     console.log(
-      `✅ Found conversation ${conversation.id}, redirecting to messages endpoint`
+      `✅ Found conversation ${conversation.id}, user ${userId} has access, redirecting to messages endpoint`
     );
 
     // Call the getMessages method directly

@@ -477,6 +477,28 @@ class MessageHandler {
     }
 
     /**
+     * Get list of all online users
+     */
+    getOnlineUsers() {
+        return Array.from(this.onlineUsers.values());
+    }
+
+    /**
+     * Get online users with socket info
+     */
+    getOnlineUsersWithSockets() {
+        const users = [];
+        for (const [socketId, userId] of this.onlineUsers) {
+            users.push({
+                socketId,
+                userId,
+                room: `user_${userId}`
+            });
+        }
+        return users;
+    }
+
+    /**
      * Emit conversation state change event
      */
     emitConversationStateChange(conversationId, stateChange) {
