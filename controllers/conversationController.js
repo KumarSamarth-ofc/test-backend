@@ -82,11 +82,9 @@ async function createAutomatedMessage({ conversationId, senderId, receiverId, te
 }
 
 // Basic state transition guard logic
+// Work submission actions (submit_work, request_revision, approve_work) are handled by automatedFlowService
 function canTransition(from, action) {
   const table = {
-    submit_work: ["work_in_progress", "work_revision_requested"],
-    request_revision: ["work_submitted"],
-    approve_work: ["work_submitted"],
     close: ["work_approved"],
   };
   const allowed = table[action] || [];
@@ -129,13 +127,8 @@ class ConversationController {
 
       const conv = await fetchConversation(id);
 
-      // Role guards for all actions
-      if (action === "submit_work" && req.user.role !== "influencer") {
-        return res.status(403).json({ success: false, error: "Only influencer can submit work" });
-      }
-      if ((action === "request_revision" || action === "approve_work") && req.user.role !== "brand_owner") {
-        return res.status(403).json({ success: false, error: "Only brand owner can perform this action" });
-      }
+      // Role guards for actions handled by this controller
+      // Work submission actions (submit_work, request_revision, approve_work) are handled by automatedFlowService
       if ((action === "accept_price" || action === "reject_price" || action === "negotiate_price") && req.user.role !== "brand_owner") {
         return res.status(403).json({ success: false, error: "Only brand owner can perform this action" });
       }
@@ -150,41 +143,13 @@ class ConversationController {
       let awaitingRole = conv.awaiting_role;
       let createdMessage = null;
 
-      if (action === "submit_work") {
-        // Create work submission message (attachments optional)
-        createdMessage = await createAutomatedMessage({
-          conversationId: id,
-          senderId: userId,
-          receiverId: conv.brand_owner_id,
-          text: payload.message || "Work submitted",
-          attachments: payload.attachments || [],
+      // Work submission actions are now handled by automatedFlowService via button-click endpoint
+      // This ensures consistency with the existing automated flow system
+      if (action === "submit_work" || action === "request_revision" || action === "approve_work") {
+        return res.status(400).json({ 
+          success: false, 
+          error: `Action '${action}' should be called via /api/messages/conversations/:conversation_id/button-click endpoint for automated flow consistency` 
         });
-        newState = "work_submitted";
-        awaitingRole = "brand_owner";
-      }
-
-      if (action === "request_revision") {
-        createdMessage = await createAutomatedMessage({
-          conversationId: id,
-          senderId: userId,
-          receiverId: conv.influencer_id,
-          text: payload.reason || "Revision requested",
-          attachments: payload.attachments || [],
-        });
-        newState = "work_revision_requested";
-        awaitingRole = "influencer";
-      }
-
-      if (action === "approve_work") {
-        createdMessage = await createAutomatedMessage({
-          conversationId: id,
-          senderId: userId,
-          receiverId: conv.influencer_id,
-          text: payload.note || "Work approved by brand owner",
-          attachments: payload.attachments || [],
-        });
-        newState = "work_approved";
-        awaitingRole = null;
       }
 
       if (action === "close") {

@@ -230,6 +230,7 @@ class FCMService {
       }
 
       const message = {
+        // Both notification and data for compatibility
         notification: {
           title: notification.title,
           body: notification.body,
@@ -237,7 +238,10 @@ class FCMService {
         },
         data: {
           ...notification.data,
-          click_action: notification.clickAction || 'FLUTTER_NOTIFICATION_CLICK'
+          click_action: notification.clickAction || 'FLUTTER_NOTIFICATION_CLICK',
+          // Add notification data for iOS background handling
+          title: notification.title,
+          body: notification.body
         },
         android: {
           priority: 'high',
@@ -249,12 +253,24 @@ class FCMService {
           }
         },
         apns: {
+          headers: {
+            'apns-priority': '10',
+            'apns-push-type': 'alert'
+          },
           payload: {
             aps: {
+              alert: {
+                title: notification.title,
+                body: notification.body
+              },
               sound: 'default',
               badge: notification.badge || 1,
-              category: 'MESSAGE_CATEGORY'
-            }
+              category: 'MESSAGE_CATEGORY',
+              'mutable-content': 1,
+              'content-available': 1
+            },
+            // Add custom data for iOS
+            ...notification.data
           }
         },
         webpush: {

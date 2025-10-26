@@ -49,7 +49,15 @@ class AutomatedFlowService {
         net_amount_paise: netAmountPaise,
         advance_amount_paise: advanceAmountPaise,
         final_amount_paise: finalAmountPaise,
-        commission_percentage: commissionPercentage
+        commission_percentage: commissionPercentage,
+        // Add formatted display strings
+        display: {
+          total: `₹${(totalAmountPaise / 100).toFixed(2)}`,
+          commission: `₹${(commissionAmountPaise / 100).toFixed(2)} (${commissionPercentage}%)`,
+          net_to_influencer: `₹${(netAmountPaise / 100).toFixed(2)}`,
+          advance: `₹${(advanceAmountPaise / 100).toFixed(2)} (30%)`,
+          final: `₹${(finalAmountPaise / 100).toFixed(2)} (70%)`
+        }
       };
     } catch (error) {
       console.error("❌ Error calculating payment breakdown:", error);
@@ -674,13 +682,21 @@ Please respond to confirm your interest and availability for this campaign.`,
           }
 
           // Calculate payment breakdown for transparency
-          const paymentBreakdown = await this.calculatePaymentBreakdown(data.price);
+          const priceBreakdown = await this.calculatePaymentBreakdown(data.price);
           
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `💰 **Price Offer**\n\nBrand owner has offered: **₹${data.price}**\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${paymentBreakdown.total_amount_paise / 100}\n• **Platform Commission (${paymentBreakdown.commission_percentage}%):** ₹${paymentBreakdown.commission_amount_paise / 100}\n• **Your Net Amount:** ₹${paymentBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${paymentBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${paymentBreakdown.final_amount_paise / 100} (70%)\n\n⚠️ **Note:** You will receive 90% of the total amount (₹${paymentBreakdown.net_amount_paise / 100}) after platform commission.\n\nPlease review and respond to this offer.`,
+            message: `💰 **Price Offer: ₹${data.price}**\n\n` +
+              `📊 **Payment Breakdown:**\n` +
+              `• Total Amount: ${priceBreakdown.display.total}\n` +
+              `• Platform Fee: ${priceBreakdown.display.commission}\n` +
+              `• You'll Receive: ${priceBreakdown.display.net_to_influencer}\n\n` +
+              `💳 **Payment Schedule:**\n` +
+              `• Advance (30%): ${priceBreakdown.display.advance}\n` +
+              `• Final (70%): ${priceBreakdown.display.final}\n\n` +
+              `Please review and respond.`,
             message_type: "automated",
             action_required: true,
             action_data: {
@@ -706,6 +722,16 @@ Please respond to confirm your interest and availability for this campaign.`,
                   action: "negotiate_price",
                 },
               ],
+              // Add payment breakdown
+              payment_breakdown: {
+                total_amount: priceBreakdown.total_amount_paise,
+                commission_amount: priceBreakdown.commission_amount_paise,
+                commission_percentage: priceBreakdown.commission_percentage,
+                net_amount: priceBreakdown.net_amount_paise,
+                advance_amount: priceBreakdown.advance_amount_paise,
+                final_amount: priceBreakdown.final_amount_paise,
+                display: priceBreakdown.display
+              },
               flow_state: "influencer_price_response",
               message_type: "influencer_price_response",
               visible_to: "influencer",
@@ -867,11 +893,22 @@ Please respond to confirm your interest and availability for this campaign.`,
             }
           }
 
+          // Calculate payment breakdown for transparency
+          const negotiatedBreakdown = await this.calculatePaymentBreakdown(data.price);
+
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `💰 **Negotiated Price Offer**\n\nBrand owner has offered a new price: **₹${data.price}**`,
+            message: `💰 **Negotiated Price Offer: ₹${data.price}**\n\n` +
+              `📊 **Payment Breakdown:**\n` +
+              `• Total Amount: ${negotiatedBreakdown.display.total}\n` +
+              `• Platform Fee: ${negotiatedBreakdown.display.commission}\n` +
+              `• You'll Receive: ${negotiatedBreakdown.display.net_to_influencer}\n\n` +
+              `💳 **Payment Schedule:**\n` +
+              `• Advance (30%): ${negotiatedBreakdown.display.advance}\n` +
+              `• Final (70%): ${negotiatedBreakdown.display.final}\n\n` +
+              `Please review and respond.`,
             message_type: "automated",
             action_required: true,
             action_data: {
@@ -897,6 +934,16 @@ Please respond to confirm your interest and availability for this campaign.`,
                   action: "continue_negotiate",
                 },
               ],
+              // Add payment breakdown
+              payment_breakdown: {
+                total_amount: priceBreakdown.total_amount_paise,
+                commission_amount: priceBreakdown.commission_amount_paise,
+                commission_percentage: priceBreakdown.commission_percentage,
+                net_amount: priceBreakdown.net_amount_paise,
+                advance_amount: priceBreakdown.advance_amount_paise,
+                final_amount: priceBreakdown.final_amount_paise,
+                display: priceBreakdown.display
+              },
               flow_state: "influencer_final_response",
               message_type: "influencer_final_price_response",
               visible_to: "influencer",
@@ -1038,6 +1085,9 @@ Please respond to confirm your interest and availability for this campaign.`,
           const paymentAmountPaise = Math.round(paymentAmount * 100);
           console.log("💰 [DEBUG] Payment amount in paise:", paymentAmountPaise);
 
+          // Calculate payment breakdown for transparency
+          const paymentBreakdown = await this.calculatePaymentBreakdown(paymentAmount);
+
           // Create Razorpay order
           const Razorpay = require('razorpay');
           const keyId = process.env.RAZORPAY_KEY_ID;
@@ -1125,7 +1175,15 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `💳 **Payment Required**\n\nPlease complete the payment of ₹${paymentAmount} to proceed with the collaboration.`,
+            message: `💳 **Payment Required: ₹${paymentAmount}**\n\n` +
+              `📊 **Payment Breakdown:**\n` +
+              `• Total Amount: ${paymentBreakdown.display.total}\n` +
+              `• Platform Fee: ${paymentBreakdown.display.commission}\n` +
+              `• Influencer Net: ${paymentBreakdown.display.net_to_influencer}\n\n` +
+              `💳 **Payment Schedule:**\n` +
+              `• Advance (30%): ${paymentBreakdown.display.advance}\n` +
+              `• Final (70%): ${paymentBreakdown.display.final}\n\n` +
+              `Please complete the payment to proceed with the collaboration.`,
             message_type: "brand_owner_payment",
             action_required: true,
             action_data: {
@@ -1159,7 +1217,17 @@ Please respond to confirm your interest and availability for this campaign.`,
                   action: "proceed_to_payment",
                   style: "primary"
                 }
-              ]
+              ],
+              // Add payment breakdown
+              payment_breakdown: {
+                total_amount: paymentBreakdown.total_amount_paise,
+                commission_amount: paymentBreakdown.commission_amount_paise,
+                commission_percentage: paymentBreakdown.commission_percentage,
+                net_amount: paymentBreakdown.net_amount_paise,
+                advance_amount: paymentBreakdown.advance_amount_paise,
+                final_amount: paymentBreakdown.final_amount_paise,
+                display: paymentBreakdown.display
+              }
             }
           };
           break;
@@ -1389,7 +1457,15 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `💰 **Final Offer: ₹${data.price}**\n\nBrand owner has made a final offer. This is the last negotiation round.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${finalOfferBreakdown.total_amount_paise / 100}\n• **Platform Commission (${finalOfferBreakdown.commission_percentage}%):** ₹${finalOfferBreakdown.commission_amount_paise / 100}\n• **Your Net Amount:** ₹${finalOfferBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${finalOfferBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${finalOfferBreakdown.final_amount_paise / 100} (70%)\n\n⚠️ **Note:** You will receive 90% of the total amount (₹${finalOfferBreakdown.net_amount_paise / 100}) after platform commission.`,
+            message: `💰 **Final Offer: ₹${data.price}**\n\n` +
+              `📊 **Payment Breakdown:**\n` +
+              `• Total Amount: ${finalOfferBreakdown.display.total}\n` +
+              `• Platform Fee: ${finalOfferBreakdown.display.commission}\n` +
+              `• You'll Receive: ${finalOfferBreakdown.display.net_to_influencer}\n\n` +
+              `💳 **Payment Schedule:**\n` +
+              `• Advance (30%): ${finalOfferBreakdown.display.advance}\n` +
+              `• Final (70%): ${finalOfferBreakdown.display.final}\n\n` +
+              `This is the final offer. Please respond.`,
             message_type: "automated",
             action_required: true,
             action_data: {
@@ -1410,6 +1486,16 @@ Please respond to confirm your interest and availability for this campaign.`,
                   action: "reject_final_offer",
                 },
               ],
+              // Add payment breakdown
+              payment_breakdown: {
+                total_amount: finalOfferBreakdown.total_amount_paise,
+                commission_amount: finalOfferBreakdown.commission_amount_paise,
+                commission_percentage: finalOfferBreakdown.commission_percentage,
+                net_amount: finalOfferBreakdown.net_amount_paise,
+                advance_amount: finalOfferBreakdown.advance_amount_paise,
+                final_amount: finalOfferBreakdown.final_amount_paise,
+                display: finalOfferBreakdown.display
+              },
               flow_state: "influencer_final_response",
               message_type: "influencer_final_response",
               visible_to: "influencer",
@@ -1424,6 +1510,126 @@ Please respond to confirm your interest and availability for this campaign.`,
             message_type: "audit",
             action_required: false,
           };
+          break;
+
+        case "approve_work":
+          // Brand owner approves work
+          newFlowState = "admin_final_payment_pending";
+          newAwaitingRole = "admin"; // Admin needs to release final payment
+          
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.brand_owner_id,
+            receiver_id: conversation.influencer_id,
+            message: `✅ **Work Approved!**\n\nExcellent work! The collaboration has been completed successfully.${data.feedback ? `\n\n**Feedback:** ${data.feedback}` : ''}\n\nThe final payment will be processed by our admin team.`,
+            message_type: "automated",
+            action_required: false,
+          };
+
+          auditMessage = {
+            conversation_id: conversationId,
+            sender_id: SYSTEM_USER_ID,
+            receiver_id: conversation.brand_owner_id,
+            message: `✅ **Action Taken: Work Approved**\n\nYou have approved the submitted work. The final payment will be processed by admin.`,
+            message_type: "audit",
+            action_required: false,
+          };
+
+          // Update conversation with approval status
+          await supabaseAdmin
+            .from("conversations")
+            .update({
+              flow_state: newFlowState,
+              awaiting_role: newAwaitingRole,
+              chat_status: "automated", // Set to automated to show waiting status
+              flow_data: {
+                ...conversation.flow_data,
+                work_status: "approved",
+                approval_date: new Date().toISOString(),
+                approval_feedback: data.feedback || null
+              }
+            })
+            .eq("id", conversationId);
+          break;
+
+        case "request_revision":
+          // Brand owner requests revision
+          const currentRevisionCount = conversation.flow_data?.revision_count || 0;
+          const maxRevisions = conversation.flow_data?.max_revisions || 3;
+          const newRevisionCount = currentRevisionCount + 1;
+          
+          newFlowState = "work_in_progress";
+          newAwaitingRole = "influencer";
+          
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.brand_owner_id,
+            receiver_id: conversation.influencer_id,
+            message: `🔄 **Revision Requested**\n\nPlease make the following changes to your work:\n\n${data.feedback || data.revision_notes || 'Please review and improve the submitted work.'}\n\n**Revision:** ${newRevisionCount}/${maxRevisions}\n\nPlease resubmit your work after making the requested changes.`,
+            message_type: "automated",
+            action_required: false,
+          };
+
+          auditMessage = {
+            conversation_id: conversationId,
+            sender_id: SYSTEM_USER_ID,
+            receiver_id: conversation.brand_owner_id,
+            message: `✅ **Action Taken: Revision Requested**\n\nYou have requested revision ${newRevisionCount}/${maxRevisions} of the submitted work.`,
+            message_type: "audit",
+            action_required: false,
+          };
+
+          // Update conversation with revision request and change chat_status back to real_time
+          await supabaseAdmin
+            .from("conversations")
+            .update({
+              flow_data: {
+                ...conversation.flow_data,
+                work_status: "revision_requested",
+                revision_count: newRevisionCount,
+                revision_feedback: data.feedback || data.revision_notes || null
+              },
+              chat_status: "real_time" // Back to free chat for revision discussion
+            })
+            .eq("id", conversationId);
+          break;
+
+        case "reject_final_work":
+          // Brand owner rejects work (final rejection)
+          newFlowState = "work_rejected";
+          newAwaitingRole = null;
+          
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.brand_owner_id,
+            receiver_id: conversation.influencer_id,
+            message: `❌ **Work Rejected (Final)**\n\nUnfortunately, the work does not meet the requirements after ${conversation.flow_data?.revision_count || 0} revision(s).\n\n${data.feedback || data.rejection_reason || 'The work does not meet the project requirements.'}\n\nThe collaboration has been terminated.`,
+            message_type: "automated",
+            action_required: false,
+          };
+
+          auditMessage = {
+            conversation_id: conversationId,
+            sender_id: SYSTEM_USER_ID,
+            receiver_id: conversation.brand_owner_id,
+            message: `✅ **Action Taken: Work Rejected (Final)**\n\nYou have rejected the work after ${conversation.flow_data?.revision_count || 0} revision(s).`,
+            message_type: "audit",
+            action_required: false,
+          };
+
+          // Update conversation with rejection status
+          await supabaseAdmin
+            .from("conversations")
+            .update({
+              flow_data: {
+                ...conversation.flow_data,
+                work_status: "rejected",
+                rejection_date: new Date().toISOString(),
+                rejection_reason: data.feedback || data.rejection_reason || null
+              },
+              chat_status: "closed"
+            })
+            .eq("id", conversationId);
           break;
 
         default:
@@ -1504,13 +1710,41 @@ Please respond to confirm your interest and availability for this campaign.`,
         throw new Error(`Failed to create messages: ${messageError.message}`);
       }
 
+      // Set current_action_data based on the action and flow state
+      let currentActionData = {};
+      
+      if (action === "proceed_to_payment") {
+        currentActionData = newMessage.action_data || {};
+      } else if (action === "approve_work") {
+        // Show waiting status for both influencer and brand owner
+        currentActionData = {
+          title: "⏳ Waiting for Admin Payment",
+          subtitle: "Work has been approved. Admin will process the final payment.",
+          visible_to: "both", // Both influencer and brand owner should see this
+          flow_state: newFlowState,
+          message_type: "automated",
+          awaiting_role: newAwaitingRole,
+          status_message: "Final payment will be processed by our admin team shortly."
+        };
+      } else if (action === "request_revision") {
+        // Show revision request status
+        currentActionData = {
+          title: "🔄 Revision Requested",
+          subtitle: "Please review the feedback and resubmit your work.",
+          visible_to: "influencer",
+          flow_state: newFlowState,
+          message_type: "automated",
+          awaiting_role: newAwaitingRole
+        };
+      }
+
       const result = {
         success: true,
         conversation: {
           id: conversationId,
           flow_state: newFlowState,
           awaiting_role: newAwaitingRole,
-          current_action_data: action === "proceed_to_payment" ? newMessage.action_data : {},
+          current_action_data: currentActionData,
         },
         message: createdMessages[0],
         audit_message: auditMessage ? createdMessages[1] : null,
@@ -1551,6 +1785,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             flow_state: newFlowState,
             awaiting_role: newAwaitingRole,
             chat_status: 'automated',
+            current_action_data: result.conversation.current_action_data,
             updated_at: new Date().toISOString()
           });
 
@@ -1587,6 +1822,15 @@ Please respond to confirm your interest and availability for this campaign.`,
               }
             });
           }
+
+          // Emit global conversation list updates
+          this.emitGlobalConversationUpdate(conversation, conversationId, {
+            flow_state: newFlowState,
+            awaiting_role: newAwaitingRole,
+            chat_status: 'automated',
+            current_action_data: result.conversation.current_action_data,
+            action: 'state_changed'
+          });
 
           console.log("📡 [DEBUG] WebSocket events emitted for conversation:", conversationId);
         } catch (socketError) {
@@ -1776,22 +2020,22 @@ Please respond to confirm your interest and availability for this campaign.`,
           newAwaitingRole = "brand_owner";
 
           // Determine agreed price: prefer requests.proposed_amount if present
-          let agreedPrice = parseFloat(data.price) || 0;
-          if (!agreedPrice && conversation.request_id) {
+          let finalAgreedPrice = parseFloat(data.price) || 0;
+          if (!finalAgreedPrice && conversation.request_id) {
             const { data: reqForAccept } = await supabaseAdmin
               .from("requests")
               .select("proposed_amount")
               .eq("id", conversation.request_id)
               .single();
             if (reqForAccept?.proposed_amount) {
-              agreedPrice = parseFloat(reqForAccept.proposed_amount);
+              finalAgreedPrice = parseFloat(reqForAccept.proposed_amount);
             }
           }
 
           // Store the agreed price in flow_data for later retrieval
           const updatedFlowData = {
             ...conversation.flow_data,
-            agreed_amount: agreedPrice,
+            agreed_amount: finalAgreedPrice,
             agreement_timestamp: new Date().toISOString(),
             negotiation_completed: true
           };
@@ -1806,7 +2050,7 @@ Please respond to confirm your interest and availability for this campaign.`,
               .single();
             const finalAmount = (reqRow?.proposed_amount && parseFloat(reqRow.proposed_amount) > 0)
               ? parseFloat(reqRow.proposed_amount)
-              : agreedPrice;
+              : finalAgreedPrice;
             await supabaseAdmin
               .from("requests")
               .update({
@@ -1816,11 +2060,22 @@ Please respond to confirm your interest and availability for this campaign.`,
               .eq("id", conversation.request_id);
           }
 
+          // Calculate payment breakdown for transparency
+          const acceptBreakdown = await this.calculatePaymentBreakdown(finalAgreedPrice);
+
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `✅ **Price Offer Accepted**\n\nInfluencer has agreed to the offer of ₹${data.price || 'the proposed amount'}. Please proceed with payment to complete the collaboration.`,
+            message: `✅ **Price Offer Accepted: ₹${finalAgreedPrice}**\n\n` +
+              `📊 **Payment Breakdown:**\n` +
+              `• Total Amount: ${acceptBreakdown.display.total}\n` +
+              `• Platform Fee: ${acceptBreakdown.display.commission}\n` +
+              `• Net Amount: ${acceptBreakdown.display.net_to_influencer}\n\n` +
+              `💳 **Payment Schedule:**\n` +
+              `• Advance (30%): ${acceptBreakdown.display.advance}\n` +
+              `• Final (70%): ${acceptBreakdown.display.final}\n\n` +
+              `Please proceed with payment to complete the collaboration.`,
             message_type: "automated",
             action_required: true,
             action_data: {
@@ -2032,7 +2287,15 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `💰 **Counter Offer: ₹${data.price}**\n\nInfluencer has made a counter offer.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${counterOfferBreakdown.total_amount_paise / 100}\n• **Platform Commission (${counterOfferBreakdown.commission_percentage}%):** ₹${counterOfferBreakdown.commission_amount_paise / 100}\n• **Influencer Net Amount:** ₹${counterOfferBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${counterOfferBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${counterOfferBreakdown.final_amount_paise / 100} (70%)\n\n⚠️ **Note:** Influencer will receive 90% of the total amount (₹${counterOfferBreakdown.net_amount_paise / 100}) after platform commission.\n\nPlease respond to this offer.`,
+            message: `💰 **Counter Offer: ₹${data.price}**\n\n` +
+              `📊 **Payment Breakdown:**\n` +
+              `• Total Amount: ${counterOfferBreakdown.display.total}\n` +
+              `• Platform Fee: ${counterOfferBreakdown.display.commission}\n` +
+              `• Influencer Net: ${counterOfferBreakdown.display.net_to_influencer}\n\n` +
+              `💳 **Payment Schedule:**\n` +
+              `• Advance (30%): ${counterOfferBreakdown.display.advance}\n` +
+              `• Final (70%): ${counterOfferBreakdown.display.final}\n\n` +
+              `Please respond to this offer.`,
             message_type: "automated",
             action_required: true,
             action_data: {
@@ -2060,6 +2323,16 @@ Please respond to confirm your interest and availability for this campaign.`,
                   action: "make_final_offer",
                 },
               ],
+              // Add payment breakdown
+              payment_breakdown: {
+                total_amount: counterOfferBreakdown.total_amount_paise,
+                commission_amount: counterOfferBreakdown.commission_amount_paise,
+                commission_percentage: counterOfferBreakdown.commission_percentage,
+                net_amount: counterOfferBreakdown.net_amount_paise,
+                advance_amount: counterOfferBreakdown.advance_amount_paise,
+                final_amount: counterOfferBreakdown.final_amount_paise,
+                display: counterOfferBreakdown.display
+              },
               flow_state: "brand_owner_price_response",
               message_type: "brand_owner_counter_response",
               visible_to: "brand_owner",
@@ -2089,11 +2362,23 @@ Please respond to confirm your interest and availability for this campaign.`,
           newFlowState = "payment_pending";
           newAwaitingRole = "brand_owner";
 
+          // Calculate payment breakdown for transparency
+          const finalPrice = data.price ? parseFloat(data.price) : 0;
+          const finalOfferBreakdown = await this.calculatePaymentBreakdown(finalPrice);
+
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `✅ **Final Offer Accepted**\n\nInfluencer has accepted your final offer of ₹${data.price}. Please proceed with payment to complete the collaboration.`,
+            message: `✅ **Final Offer Accepted: ₹${finalPrice}**\n\n` +
+              `📊 **Payment Breakdown:**\n` +
+              `• Total Amount: ${finalOfferBreakdown.display.total}\n` +
+              `• Platform Fee: ${finalOfferBreakdown.display.commission}\n` +
+              `• Net Amount: ${finalOfferBreakdown.display.net_to_influencer}\n\n` +
+              `💳 **Payment Schedule:**\n` +
+              `• Advance (30%): ${finalOfferBreakdown.display.advance}\n` +
+              `• Final (70%): ${finalOfferBreakdown.display.final}\n\n` +
+              `Please proceed with payment to complete the collaboration.`,
             message_type: "automated",
             action_required: true,
             action_data: {
@@ -2204,11 +2489,23 @@ Please respond to confirm your interest and availability for this campaign.`,
             }
           }
 
+          // Calculate payment breakdown for transparency
+          const negotiatedPrice = data.price ? parseFloat(data.price) : 0;
+          const negotiatedPaymentBreakdown = await this.calculatePaymentBreakdown(negotiatedPrice);
+
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `✅ **Price Offer Accepted**\n\nInfluencer has agreed to the negotiated offer. Please proceed with payment to complete the collaboration.`,
+            message: `✅ **Negotiated Price Accepted: ₹${negotiatedPrice}**\n\n` +
+              `📊 **Payment Breakdown:**\n` +
+              `• Total Amount: ${negotiatedPaymentBreakdown.display.total}\n` +
+              `• Platform Fee: ${negotiatedPaymentBreakdown.display.commission}\n` +
+              `• Net Amount: ${negotiatedPaymentBreakdown.display.net_to_influencer}\n\n` +
+              `💳 **Payment Schedule:**\n` +
+              `• Advance (30%): ${negotiatedPaymentBreakdown.display.advance}\n` +
+              `• Final (70%): ${negotiatedPaymentBreakdown.display.final}\n\n` +
+              `Please proceed with payment to complete the collaboration.`,
             message_type: "automated",
             action_required: true,
             action_data: {
@@ -2309,6 +2606,104 @@ Please respond to confirm your interest and availability for this campaign.`,
             message_type: "audit",
             action_required: false,
           };
+          break;
+
+        case "submit_work":
+        case "resubmit_work":
+          // Influencer submits work (initial or resubmission after revision)
+          const isResubmission = action === "resubmit_work";
+          const currentRevisionCount = conversation.flow_data?.revision_count || 0;
+          const maxRevisions = conversation.flow_data?.max_revisions || 3;
+          
+          newFlowState = "work_submitted";
+          newAwaitingRole = "brand_owner";
+
+          // Prepare work submission data
+          const workSubmissionData = {
+            deliverables: data.deliverables || data.message || "Work submitted",
+            description: data.description || data.message || "Work completed as requested",
+            submission_notes: data.submission_notes || data.notes || "",
+            submitted_at: new Date().toISOString(),
+            attachments: data.attachments || [],
+            revision_number: isResubmission ? currentRevisionCount : 0
+          };
+
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.influencer_id,
+            receiver_id: conversation.brand_owner_id,
+            message: `📤 **Work Submitted**${isResubmission ? ` (Revision ${currentRevisionCount})` : ''}\n\n**Description:** ${workSubmissionData.description}\n\n${workSubmissionData.submission_notes ? `**Notes:** ${workSubmissionData.submission_notes}\n\n` : ''}${workSubmissionData.attachments && workSubmissionData.attachments.length > 0 ? `**Attachments:** ${workSubmissionData.attachments.length} file(s)\n\n` : ''}Please review the submitted work and provide your feedback.`,
+            message_type: "automated",
+            action_required: true,
+            attachment_metadata: workSubmissionData.attachments && workSubmissionData.attachments.length > 0 ? workSubmissionData.attachments : null,
+            action_data: {
+              title: "🎯 **Work Review Required**",
+              subtitle: "Please review the submitted work and provide feedback:",
+              work_submission: workSubmissionData,
+              buttons: (() => {
+                const buttons = [
+                  {
+                    id: "approve_work",
+                    text: "Approve Work",
+                    action: "approve_work",
+                    style: "success"
+                  }
+                ];
+
+                // Check if this is final revision
+                const isFinalRevision = currentRevisionCount >= (maxRevisions - 1);
+
+                if (isFinalRevision) {
+                  buttons.push({
+                    id: "reject_final_work",
+                    text: "Reject Work (Final)",
+                    action: "reject_final_work",
+                    style: "danger"
+                  });
+                } else {
+                  buttons.push({
+                    id: "request_revision",
+                    text: "Request Revision",
+                    action: "request_revision",
+                    style: "warning"
+                  });
+                }
+
+                return buttons;
+              })(),
+              flow_state: "work_submitted",
+              message_type: "work_review",
+              visible_to: "brand_owner",
+            },
+          };
+
+          auditMessage = {
+            conversation_id: conversationId,
+            sender_id: SYSTEM_USER_ID,
+            receiver_id: conversation.influencer_id,
+            message: `✅ **Action Taken: Work Submitted**\n\nYou have submitted your work${isResubmission ? ` (Revision ${currentRevisionCount})` : ''} for review.`,
+            message_type: "audit",
+            action_required: false,
+          };
+
+          // Update conversation with work submission data and change chat_status to automated
+          const { error: workUpdateError } = await supabaseAdmin
+            .from("conversations")
+            .update({
+              // Store work submission data in flow_data since work_submission column doesn't exist
+              flow_data: {
+                ...conversation.flow_data,
+                work_submission: workSubmissionData,
+                submission_date: new Date().toISOString(),
+                work_status: "submitted"
+              },
+              chat_status: "automated" // Change from real_time to automated
+            })
+            .eq("id", conversationId);
+            
+          if (workUpdateError) {
+            throw new Error(`Failed to update conversation: ${workUpdateError.message}`);
+          }
           break;
 
         default:
@@ -2483,12 +2878,42 @@ Please respond to confirm your interest and availability for this campaign.`,
         });
       }
 
+      // Set current_action_data based on the action and flow state
+      let currentActionData = {};
+      
+      if (action === "submit_work" || action === "resubmit_work") {
+        // Show work submission status for brand owner
+        currentActionData = {
+          title: "📋 Work Submitted for Review",
+          subtitle: "Please review the submitted work and take action.",
+          visible_to: "brand_owner",
+          flow_state: newFlowState,
+          message_type: "automated",
+          awaiting_role: newAwaitingRole,
+          buttons: [
+            {
+              id: "approve_work",
+              text: "Approve Work",
+              action: "approve_work",
+              style: "success"
+            },
+            {
+              id: "request_revision",
+              text: "Request Revision",
+              action: "request_revision",
+              style: "warning"
+            }
+          ]
+        };
+      }
+
       const result = {
         success: true,
         conversation: {
           id: conversationId,
           flow_state: newFlowState,
           awaiting_role: newAwaitingRole,
+          current_action_data: currentActionData,
         },
         message: createdMessages[0],
         audit_message: auditMessage ? createdMessages[1] : null,
@@ -2503,6 +2928,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             flow_state: newFlowState,
             awaiting_role: newAwaitingRole,
             chat_status: 'automated',
+            current_action_data: result.conversation.current_action_data,
             updated_at: new Date().toISOString()
           });
 
@@ -2545,6 +2971,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             flow_state: newFlowState,
             awaiting_role: newAwaitingRole,
             chat_status: 'automated',
+            current_action_data: result.conversation.current_action_data,
             action: 'state_changed'
           });
 
@@ -2601,12 +3028,23 @@ Please respond to confirm your interest and availability for this campaign.`,
         );
       }
 
+      // Calculate payment breakdown for transparency
+      const paymentBreakdown = await this.calculatePaymentBreakdown(paymentData.amount);
+
       // Create payment confirmation message
       const confirmationMessage = {
         conversation_id: conversationId,
         sender_id: SYSTEM_USER_ID,
         receiver_id: conversation.brand_owner_id,
-        message: `✅ **Payment Completed Successfully**\n\nPayment of ₹${paymentData.amount} has been processed. The collaboration is now active and work can begin.`,
+        message: `✅ **Payment Completed Successfully: ₹${paymentData.amount}**\n\n` +
+          `📊 **Payment Breakdown:**\n` +
+          `• Total Amount: ${paymentBreakdown.display.total}\n` +
+          `• Platform Fee: ${paymentBreakdown.display.commission}\n` +
+          `• Influencer Net: ${paymentBreakdown.display.net_to_influencer}\n\n` +
+          `💳 **Payment Schedule:**\n` +
+          `• Advance (30%): ${paymentBreakdown.display.advance}\n` +
+          `• Final (70%): ${paymentBreakdown.display.final}\n\n` +
+          `The collaboration is now active and work can begin.`,
         message_type: "automated",
         action_required: false,
       };
@@ -3414,8 +3852,8 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       const conversation = await this.getConversation(conversationId);
       
-      if (conversation.flow_state !== "work_approved") {
-        throw new Error("Final can be released only after work_approved");
+      if (conversation.flow_state !== "admin_final_payment_pending") {
+        throw new Error("Final can be released only after work is approved and awaiting admin payment");
       }
 
       // Record payout to influencer
@@ -3443,11 +3881,11 @@ Please respond to confirm your interest and availability for this campaign.`,
         throw new Error(`Transaction failed: ${txnErr.message}`);
       }
 
-      // Move state to closed
+      // Move state to admin_final_payment_complete first, then to closed
       const { error: updateError } = await supabaseAdmin
         .from("conversations")
         .update({
-          flow_state: "closed",
+          flow_state: "admin_final_payment_complete",
           awaiting_role: null,
           updated_at: new Date().toISOString()
         })
@@ -3481,6 +3919,19 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       if (messageError) {
         console.error('Error creating automated message for final release:', messageError);
+      }
+
+      // Now transition to closed state
+      const { error: closeError } = await supabaseAdmin
+        .from("conversations")
+        .update({
+          flow_state: "closed",
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", conversationId);
+
+      if (closeError) {
+        console.error('Error transitioning to closed state:', closeError);
       }
 
       // Emit WebSocket events
