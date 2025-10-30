@@ -1300,40 +1300,10 @@ class BidController {
         });
       }
 
-      // Use enhanced balance service to add funds properly
-      
+      // Escrow only at verify-time (no wallet credit here). Wallet credit happens on admin release.
       const enhancedBalanceService = require('../utils/enhancedBalanceService');
-      
-      // First check if wallet exists
-      const walletCheckResult = await enhancedBalanceService.getWalletBalance(conversation.influencer_id);
-      
-      const addFundsResult = await enhancedBalanceService.addFunds(
-        conversation.influencer_id,
-        paymentAmount,
-        {
-          conversation_id: conversation_id,
-          razorpay_order_id: razorpay_order_id,
-          razorpay_payment_id: razorpay_payment_id,
-          conversation_type: conversation.campaign_id ? "campaign" : "bid",
-          brand_owner_id: conversation.brand_owner_id,
-          bid_id: conversation.bid_id,
-          campaign_id: conversation.campaign_id,
-          notes: `Payment received for ${conversation.campaign_id ? 'campaign' : 'bid'} collaboration`
-        }
-      );
-
-      if (!addFundsResult.success) {
-        return res.status(500).json({
-          success: false,
-          message: "Failed to add funds to wallet",
-          debug: {
-            error: addFundsResult.error,
-            influencer_id: conversation.influencer_id,
-            payment_amount: paymentAmount,
-            conversation_id: conversation_id
-          }
-        });
-      }
+      // Ensure wallet exists
+      await enhancedBalanceService.getWalletBalance(conversation.influencer_id);
 
       // Upsert payment order: update if order already exists
       const { data: existingOrder } = await supabaseAdmin
@@ -1451,37 +1421,7 @@ class BidController {
         walletId = newWallet.id;
       }
 
-      // Refresh wallet to get current balances, then add to frozen balance (escrow)
-      const { data: curWallet, error: curWalletErr } = await supabaseAdmin
-        .from("wallets")
-        .select("id, balance, balance_paise, frozen_balance_paise")
-        .eq("id", walletId)
-        .single();
-      if (curWalletErr) {
-      }
-      
-      // Add payment to available balance first, then move to escrow
-      const currentBalancePaise = Number(curWallet?.balance_paise || 0);
-      const currentFrozenPaise = Number(curWallet?.frozen_balance_paise || 0);
-      
-      // First add to available balance
-      const newBalancePaise = currentBalancePaise + paymentAmount;
-      // Then move to frozen balance (escrow)
-      const newFrozenPaise = currentFrozenPaise + paymentAmount;
-      const newAvailableBalance = newBalancePaise - paymentAmount; // Remove from available
-      
-      const { error: walletUpdateErr } = await supabaseAdmin
-        .from("wallets")
-        .update({ 
-          balance_paise: newAvailableBalance,
-          frozen_balance_paise: newFrozenPaise,
-          balance: newAvailableBalance / 100, // Keep old balance field for compatibility
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", walletId);
-      if (walletUpdateErr) {
-        // Do not fail the flow; continue
-      }
+      // No available balance change here; funds are considered held and frozen via escrow
 
       // Credit transaction already created by enhancedBalanceService.addFunds()
       // Only create the escrow freeze transaction
@@ -1604,32 +1544,22 @@ class BidController {
         .select()
         .single();
 
-      // Emit realtime events
+      // Emit realtime events (final contract)
       const io = req.app.get("io");
       if (io) {
-        io.to(`conversation_${conversation_id}`).emit("conversation_updated", {
+        // State change to room:<conversationId>
+        io.to(`room:${conversation_id}`).emit('conversation_state_changed', {
           conversation_id: conversation_id,
-          flow_state: "work_in_progress",
-          awaiting_role: null,
-          chat_status: "real_time",
-          payment_completed: true
+          flow_state: 'work_in_progress',
+          awaiting_role: updatedConversation.awaiting_role,
+          chat_status: 'real_time',
+          current_action_data: {},
+          updated_at: new Date().toISOString()
         });
 
-        // Emit payment status update event
-        io.to(`conversation_${conversation_id}`).emit("payment_status_update", {
-          conversation_id: conversation_id,
-          status: "completed",
-          message: "Payment has been successfully processed",
-          flow_state: "work_in_progress",
-          chat_status: "real_time"
-        });
-
-        // Emit new_message event
+        // Optional system message
         if (successMessage) {
-          io.to(`conversation_${conversation_id}`).emit("new_message", {
-            conversation_id: conversation_id,
-            message: successMessage
-          });
+          io.to(`room:${conversation_id}`).emit('chat:new', { message: successMessage });
         }
 
         // Send individual notifications to both users
@@ -1651,6 +1581,22 @@ class BidController {
             flow_state: "work_in_progress",
             chat_status: "real_time"
           }
+        });
+
+        // Conversation list updates for both users
+        io.to(`user_${conversation.brand_owner_id}`).emit('conversation_list_updated', {
+          conversation_id: conversation_id,
+          action: 'state_changed',
+          flow_state: 'work_in_progress',
+          chat_status: 'real_time',
+          timestamp: new Date().toISOString()
+        });
+        io.to(`user_${conversation.influencer_id}`).emit('conversation_list_updated', {
+          conversation_id: conversation_id,
+          action: 'state_changed',
+          flow_state: 'work_in_progress',
+          chat_status: 'real_time',
+          timestamp: new Date().toISOString()
         });
       }
 
@@ -1674,16 +1620,6 @@ class BidController {
           razorpay_order_id: razorpay_order_id,
           amount: paymentAmount,
           currency: "INR"
-        },
-        wallet_updates: {
-          brand_owner: {
-            balance_paise: 0, // Brand owner's balance would be updated separately
-            frozen_balance_paise: 0
-          },
-          influencer: {
-            balance_paise: newBalance,
-            frozen_balance_paise: paymentAmount
-          }
         }
       });
 

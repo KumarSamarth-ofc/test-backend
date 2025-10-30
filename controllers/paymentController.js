@@ -115,10 +115,13 @@ class PaymentController {
         });
       }
 
+      // Razorpay receipt must be <= 40 chars
+      const rawReceipt = `req_${request_id}_${Date.now()}`;
+      const safeReceipt = rawReceipt.substring(0, 40);
       const orderOptions = {
         amount: Math.round(Number(payable) * 100),
         currency: currency || "INR",
-        receipt: `req_${request_id}_${Date.now()}`,
+        receipt: safeReceipt,
         notes: {
           ...notes,
           request_id,

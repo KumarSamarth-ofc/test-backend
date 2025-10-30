@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require("../supabase/client");
+const socketEmitter = require("../services/socketEmitter");
 
 // System user ID for automated messages
 const SYSTEM_USER_ID =
@@ -14,6 +15,21 @@ class AutomatedFlowService {
    */
   setIO(io) {
     this.io = io;
+  }
+
+  /**
+   * Helper to emit automated message via socket
+   */
+  emitAutomatedMessage(conversationId, message, reason = 'automated') {
+    try {
+      console.log(`🤖 [AUTO] chat:automated -> room:${conversationId} msg:${message?.id || 'n/a'} reason:${reason}`);
+      socketEmitter.emitToConversation(conversationId, 'chat:automated', {
+        message,
+        reason
+      });
+    } catch (error) {
+      console.error('Failed to emit automated message:', error);
+    }
   }
 
   /**
@@ -73,13 +89,14 @@ class AutomatedFlowService {
 
     try {
       // Emit to both users' global update rooms
-      this.io.to(`global_${conversation.brand_owner_id}`).emit('conversation_list_updated', {
+      console.log(`🗂️ [LIST] conversation_list_updated -> users:${conversation.brand_owner_id},${conversation.influencer_id} action:${updateData?.action || 'state_changed'} conv:${conversationId}`);
+      this.io.to(`user_${conversation.brand_owner_id}`).emit('conversation_list_updated', {
         conversation_id: conversationId,
         ...updateData,
         timestamp: new Date().toISOString()
       });
 
-      this.io.to(`global_${conversation.influencer_id}`).emit('conversation_list_updated', {
+      this.io.to(`user_${conversation.influencer_id}`).emit('conversation_list_updated', {
         conversation_id: conversationId,
         ...updateData,
         timestamp: new Date().toISOString()
@@ -264,17 +281,7 @@ class AutomatedFlowService {
         },
       };
 
-      // Create audit message for brand owner
-      const auditMessage = {
-        conversation_id: conversation.id,
-        sender_id: SYSTEM_USER_ID,
-        receiver_id: bid.created_by,
-        message: `✅ **Connection Request Sent**\n\nYou have sent a connection request to **${influencer.name}** for your bid **"${bid.title}"**. The influencer will now review and respond to your request.`,
-        message_type: "audit",
-        action_required: false,
-      };
-
-      // Insert only the initial actionable message (no audit messages)
+      // Insert only the initial actionable message
       const messagesToInsert = [initialMessage];
       const { data: messages, error: messageError } = await supabaseAdmin
         .from("messages")
@@ -286,6 +293,11 @@ class AutomatedFlowService {
         throw new Error(
           `Failed to create initial message: ${messageError.message}`
         );
+      }
+
+      // Emit socket event for new message
+      if (messages && messages[0]) {
+        this.emitAutomatedMessage(conversation.id, messages[0]);
       }
 
       // Send FCM notification to influencer
@@ -314,7 +326,6 @@ class AutomatedFlowService {
         success: true,
         conversation: conversation,
         message: messages[0], // Initial message
-        audit_message: messages[1], // Audit message
         flow_state: "influencer_responding", // Already in influencer_responding state
         awaiting_role: "influencer", // Influencer needs to respond
         is_existing: false,
@@ -446,28 +457,10 @@ Please respond to confirm your interest and availability for this campaign.`,
         is_automated: true,
       };
 
-      // Create audit message
-      const auditMessage = {
-        conversation_id: conversation.id,
-        sender_id: SYSTEM_USER_ID,
-        receiver_id: campaign.created_by,
-        message: `📋 **Campaign Connection Audit**
-
-- Campaign: ${campaign.title} (ID: ${campaignId})
-- Brand Owner: ${campaign.users.name}
-- Influencer: ${influencer.name}
-- Connection established at: ${new Date().toISOString()}
-- Flow State: influencer_responding
-- Awaiting: influencer response`,
-        message_type: "audit",
-        action_required: false,
-        is_automated: true,
-      };
-
-      const messagesToInsert = [initialMessage];
+      // Insert initial message
       const { data: messages, error: messageError } = await supabaseAdmin
         .from("messages")
-        .insert(messagesToInsert)
+        .insert([initialMessage])
         .select();
 
       if (messageError) {
@@ -477,13 +470,18 @@ Please respond to confirm your interest and availability for this campaign.`,
         );
       }
 
+      // Emit socket event for new message
+      if (messages && messages[0]) {
+        this.emitAutomatedMessage(conversation.id, messages[0]);
+      }
+
       // Send FCM notification to influencer
       const fcmService = require('../services/fcmService');
       fcmService.sendFlowStateNotification(
         conversation.id, 
         influencerId, 
         "influencer_responding",
-        "You have a new campaign connection request"
+        "You have a new campaign connection"
       ).then(result => {
         if (result.success) {
           console.log(`✅ FCM notification sent to influencer: ${result.sent} successful, ${result.failed} failed`);
@@ -502,10 +500,9 @@ Please respond to confirm your interest and availability for this campaign.`,
       return {
         success: true,
         conversation: conversation,
-        message: messages[0], // Initial message
-        audit_message: messages[1], // Audit message
-        flow_state: "influencer_responding", // Already in influencer_responding state
-        awaiting_role: "influencer", // Influencer needs to respond
+        message: messages[0],
+        flow_state: "influencer_responding",
+        awaiting_role: "influencer",
         is_existing: false,
         status_message: "New campaign conversation created successfully",
       };
@@ -516,11 +513,33 @@ Please respond to confirm your interest and availability for this campaign.`,
   }
 
   /**
+   * Helper to get conversation by ID
+   */
+  async getConversation(conversationId) {
+    try {
+      const { data: conversation, error } = await supabaseAdmin
+        .from("conversations")
+        .select("*")
+        .eq("id", conversationId)
+        .single();
+
+      if (error || !conversation) {
+        throw new Error("Conversation not found");
+      }
+
+      return conversation;
+    } catch (error) {
+      console.error("❌ Failed to get conversation:", error);
+      throw error;
+    }
+  }
+
+  /**
    * Handle brand owner actions in the automated flow
    */
   async handleBrandOwnerAction(conversationId, action, data = {}) {
     try {
-      
+      // Get conversation details
       const { data: conversation, error: convError } = await supabaseAdmin
         .from("conversations")
         .select("*")
@@ -531,614 +550,261 @@ Please respond to confirm your interest and availability for this campaign.`,
         throw new Error("Conversation not found");
       }
 
-      // Establish negotiation context variables once per handler
-      const baseNegotiationHistory = Array.isArray(conversation.negotiation_history)
-        ? conversation.negotiation_history
-        : [];
-      let currentRound = (typeof conversation.negotiation_round === 'number' && !Number.isNaN(conversation.negotiation_round))
-        ? conversation.negotiation_round
-        : baseNegotiationHistory.length;
-
-      let newFlowState, newAwaitingRole, newMessage, auditMessage;
+      let newFlowState, newAwaitingRole, newMessage;
 
       switch (action) {
-        case "connect":
-          // This action is no longer needed - connection is sent immediately on initialization
-          // Return error indicating this action is not valid
-          throw new Error(
-            "Connect action is not needed. Connection request is sent automatically when conversation is initialized."
-          );
-          break;
-
-        case "send_project_details":
-          // Brand owner sends project details
-          newFlowState = "influencer_reviewing";
+        case "accept_negotiation":
+          // Brand owner accepts negotiation; influencer can now send negotiated price
+          newFlowState = "influencer_negotiation_input";
           newAwaitingRole = "influencer";
+
+          // Append to negotiation history
+          const acceptNegHistory = Array.isArray(conversation.negotiation_history) ? conversation.negotiation_history : [];
+          acceptNegHistory.push({ event: "negotiation_accepted", by: "brand_owner", at: new Date().toISOString() });
+          await supabaseAdmin
+            .from("conversations")
+            .update({ negotiation_history: acceptNegHistory })
+            .eq("id", conversationId);
 
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `📋 **Project Details & Requirements**\n\n${data.details}\n\nPlease review the requirements and respond.`,
+            message: "✅ Negotiation Accepted\n\nPlease propose your new price.",
             message_type: "automated",
             action_required: true,
             action_data: {
-              title: "🎯 **Project Review**",
-              subtitle:
-                "Review the project requirements and choose your response:",
+              title: "💬 Propose New Price",
+              subtitle: "Enter your negotiated price to continue.",
+              input_field: { id: "negotiated_price", type: "number", placeholder: "Enter price in ₹", required: true, min: 0 },
+              submit_button: { text: "Send Negotiated Price", style: "success" },
+              flow_state: "influencer_negotiation_input",
+              message_type: "influencer_negotiation_input",
+              visible_to: "influencer"
+            }
+          };
+          break;
+
+        case "reject_negotiation":
+          // Brand owner rejects negotiation; go back to price response or close based on preference
+          newFlowState = "influencer_price_response";
+          newAwaitingRole = "influencer";
+
+          const rejectNegHistory = Array.isArray(conversation.negotiation_history) ? conversation.negotiation_history : [];
+          rejectNegHistory.push({ event: "negotiation_rejected", by: "brand_owner", at: new Date().toISOString() });
+              await supabaseAdmin
+                .from("conversations")
+            .update({ negotiation_history: rejectNegHistory })
+                .eq("id", conversationId);
+          
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.brand_owner_id,
+            receiver_id: conversation.influencer_id,
+            message: "❌ Negotiation Rejected\n\nYou can accept the original price or try a counter again.",
+            message_type: "automated",
+            action_required: true,
+            action_data: {
+              title: "Respond to Price",
+              subtitle: "Choose how to proceed.",
               buttons: [
-                {
-                  id: "accept_project",
-                  text: "Accept Project Requirements",
-                  style: "success",
-                  action: "accept_project",
+                { id: "accept_price", text: "Accept Price", style: "success", action: "accept_price", data: { price: conversation.flow_data?.price_offer } },
+                { id: "negotiate_price", text: "Negotiate", style: "warning", action: "negotiate_price" },
+                { id: "reject_price", text: "Reject", style: "danger", action: "reject_price", data: { price: conversation.flow_data?.price_offer } }
+              ],
+              flow_state: "influencer_price_response",
+              message_type: "influencer_price_response",
+              visible_to: "influencer"
+            }
+          };
+          break;
+        case "send_project_details":
+          // Brand owner sends project details - influencer needs to review and accept/reject
+          newFlowState = "influencer_reviewing";
+            newAwaitingRole = "influencer";
+            
+          const projectDetails = data.details || data.project_details || "";
+
+          // Store project details in flow_data
+          const updatedFlowData = {
+            ...(conversation.flow_data || {}),
+            project_details: projectDetails,
+            project_details_submitted_at: new Date().toISOString()
+          };
+
+            newMessage = {
+              conversation_id: conversationId,
+              sender_id: conversation.brand_owner_id,
+              receiver_id: conversation.influencer_id,
+            message: `📋 **Project Details**\n\n${projectDetails}\n\nPlease review the project details and confirm if you're interested in proceeding.`,
+              message_type: "automated",
+              action_required: true,
+              action_data: {
+              title: "📋 **Review Project Details**",
+              subtitle: "Please review the project details above and decide:",
+                buttons: [
+                  {
+                  id: "accept_project_details",
+                  text: "Accept Project",
+                    style: "success",
+                  action: "accept_project_details",
                 },
                 {
-                  id: "deny_project",
-                  text: "Deny Project Requirements",
+                  id: "reject_project_details",
+                  text: "Reject Project",
                   style: "danger",
-                  action: "deny_project",
+                  action: "reject_project_details",
                 },
               ],
               flow_state: "influencer_reviewing",
-              message_type: "influencer_project_response",
-              visible_to: "influencer",
-            },
-          };
+              message_type: "influencer_project_review",
+                visible_to: "influencer",
+              },
+            };
 
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.brand_owner_id,
-            message: `✅ **Action Taken: Project Details Sent**\n\nYou have sent the project details and requirements to the influencer.`,
-            message_type: "audit",
-            action_required: false,
-          };
+          // Update flow_data with project details
+          await supabaseAdmin
+            .from("conversations")
+            .update({ flow_data: updatedFlowData })
+            .eq("id", conversationId);
           break;
 
         case "send_price_offer":
           // Brand owner sends price offer
-          
-          if (!data.price || data.price === undefined) {
-            return {
-              success: false,
-              error: "Price is required for price offer",
-            };
-          }
-          
           newFlowState = "influencer_price_response";
           newAwaitingRole = "influencer";
 
-          // Persist the offered price as requests.proposed_amount
-          if (conversation.request_id) {
-            await supabaseAdmin
-              .from("requests")
-              .update({
-                proposed_amount: data.price ? parseFloat(data.price) : null,
-                status: "negotiating"
-              })
-              .eq("id", conversation.request_id);
-          } else {
-            // Fallback: upsert request by bid_id + influencer_id
-            const { data: reqRow } = await supabaseAdmin
-              .from("requests")
-              .select("id")
-              .eq("bid_id", conversation.bid_id)
-              .eq("influencer_id", conversation.influencer_id)
-              .single();
-            if (reqRow) {
-              await supabaseAdmin
-                .from("requests")
-                .update({
-                  proposed_amount: data.price ? parseFloat(data.price) : null,
-                  status: "negotiating"
-                })
-                .eq("id", reqRow.id);
-              await supabaseAdmin
-                .from("conversations")
-                .update({ request_id: reqRow.id })
-                .eq("id", conversationId);
-            } else {
-              const { data: newReq } = await supabaseAdmin
-                .from("requests")
-                .insert({
-                  bid_id: conversation.bid_id,
-                  influencer_id: conversation.influencer_id,
-                  status: "negotiating",
-                  proposed_amount: data.price ? parseFloat(data.price) : null
-                })
-                .select()
-                .single();
-              if (newReq) {
-                await supabaseAdmin
-                  .from("conversations")
-                  .update({ request_id: newReq.id })
-                  .eq("id", conversationId);
-              }
-            }
-          }
+          const priceOffer = data.price ? parseFloat(data.price) : null;
 
-          // Calculate payment breakdown for transparency
-          const priceBreakdown = await this.calculatePaymentBreakdown(data.price);
-          
+          // Update flow_data with price offer
+          const priceFlowData = {
+            ...(conversation.flow_data || {}),
+            price_offer: priceOffer,
+            price_offer_submitted_at: new Date().toISOString()
+          };
+
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `💰 **Price Offer: ₹${data.price}**\n\n` +
-              `📊 **Payment Breakdown:**\n` +
-              `• Total Amount: ${priceBreakdown.display.total}\n` +
-              `• Platform Fee: ${priceBreakdown.display.commission}\n` +
-              `• You'll Receive: ${priceBreakdown.display.net_to_influencer}\n\n` +
-              `💳 **Payment Schedule:**\n` +
-              `• Advance (30%): ${priceBreakdown.display.advance}\n` +
-              `• Final (70%): ${priceBreakdown.display.final}\n\n` +
-              `Please review and respond.`,
+            message: `💰 **Price Offer: ₹${priceOffer}**\n\nBrand owner has proposed ₹${priceOffer} for this project. Please review and respond.`,
             message_type: "automated",
             action_required: true,
             action_data: {
-              title: "🎯 **Price Offer Response**",
-              subtitle: "Choose how you'd like to respond to this price offer:",
+              title: "💬 **Respond to Price Offer**",
+              subtitle: `Price offered: ₹${priceOffer}`,
               buttons: [
                 {
                   id: "accept_price",
-                  text: "Accept Offer",
+                  text: "Accept Price",
                   style: "success",
                   action: "accept_price",
-                },
-                {
-                  id: "reject_price",
-                  text: "Reject Offer",
-                  style: "danger",
-                  action: "reject_price",
+                  data: { price: priceOffer },
                 },
                 {
                   id: "negotiate_price",
-                  text: "Negotiate Price",
+                  text: "Negotiate",
                   style: "warning",
-                  action: "negotiate_price",
+                  action: "negotiate_price"
                 },
+                {
+                  id: "reject_price",
+                  text: "Reject Price",
+                  style: "danger",
+                  action: "reject_price",
+                  data: { price: priceOffer },
+                }
               ],
-              // Add payment breakdown
-              payment_breakdown: {
-                total_amount: priceBreakdown.total_amount_paise,
-                commission_amount: priceBreakdown.commission_amount_paise,
-                commission_percentage: priceBreakdown.commission_percentage,
-                net_amount: priceBreakdown.net_amount_paise,
-                advance_amount: priceBreakdown.advance_amount_paise,
-                final_amount: priceBreakdown.final_amount_paise,
-                display: priceBreakdown.display
-              },
               flow_state: "influencer_price_response",
               message_type: "influencer_price_response",
               visible_to: "influencer",
             },
           };
 
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.brand_owner_id,
-            message: `✅ **Action Taken: Price Offer Sent**\n\nYou have offered ₹${data.price} to the influencer.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${priceBreakdown.total_amount_paise / 100}\n• **Platform Commission (${priceBreakdown.commission_percentage}%):** ₹${priceBreakdown.commission_amount_paise / 100}\n• **Influencer Net Amount:** ₹${priceBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${priceBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${priceBreakdown.final_amount_paise / 100} (70%)`,
-            message_type: "audit",
-            action_required: false,
-          };
-          break;
-
-        case "handle_negotiation":
-          // Brand owner handles negotiation
-          // More robust comparison
-          const actionValue = data.action?.toString()?.trim()?.toLowerCase();
-          if (actionValue === "agree") {
-            newFlowState = "influencer_price_input";
-            newAwaitingRole = "influencer";
-            
-            // Fallback: if database doesn't support influencer_price_input yet, use influencer_price_response
-
-            newMessage = {
-              conversation_id: conversationId,
-              sender_id: conversation.brand_owner_id,
-              receiver_id: conversation.influencer_id,
-              message: `🤝 **Negotiation Accepted**\n\nBrand owner has agreed to negotiate. Please set your counter offer.`,
-              message_type: "automated",
-              action_required: true,
-              action_data: {
-                title: "💰 **Set Your Counter Offer**",
-                subtitle: `What's your counter offer for this project?`,
-                input_field: {
-                  id: "counter_price",
-                  type: "number",
-                  placeholder: "Enter your counter offer amount",
-                  required: true,
-                  min: 1,
-                },
-                buttons: [
-                  {
-                    id: "send_counter_offer",
-                    text: "Send Counter Offer",
-                    style: "success",
-                    action: "send_counter_offer",
-                  },
-                ],
-                flow_state: "influencer_price_input", // Will be updated to influencer_price_response if fallback occurs
-                message_type: "influencer_counter_offer",
-                visible_to: "influencer",
-              },
-            };
-
-            auditMessage = {
-              conversation_id: conversationId,
-              sender_id: SYSTEM_USER_ID,
-              receiver_id: conversation.brand_owner_id,
-              message: `✅ **Action Taken: Negotiation Accepted**\n\nYou have agreed to negotiate. Please wait for the influencer's counter offer.`,
-              message_type: "audit",
-              action_required: false,
-            };
-          } else {
-            // Reject negotiation
-            newFlowState = "chat_closed";
-            newAwaitingRole = null;
-
-            newMessage = {
-              conversation_id: conversationId,
-              sender_id: conversation.brand_owner_id,
-              receiver_id: conversation.influencer_id,
-              message: `❌ **Negotiation Rejected**\n\nBrand owner has rejected the negotiation request. The chat is now closed.`,
-              message_type: "automated",
-              action_required: false,
-            };
-
-            auditMessage = {
-              conversation_id: conversationId,
-              sender_id: SYSTEM_USER_ID,
-              receiver_id: conversation.brand_owner_id,
-              message: `✅ **Action Taken: Negotiation Rejected**\n\nYou have rejected the negotiation request.`,
-              message_type: "audit",
-              action_required: false,
-            };
-          }
-          break;
-
-        case "send_negotiated_price":
-          // Brand owner sends negotiated price
-          newFlowState = "influencer_final_response";
-          newAwaitingRole = "influencer";
-
-          // Persist the negotiated price as requests.proposed_amount
-          if (conversation.request_id) {
+          // Update flow_data with price offer and update request if exists
+            if (conversation.request_id) {
             await supabaseAdmin
-              .from("requests")
+                .from("requests")
               .update({
-                proposed_amount: data.price ? parseFloat(data.price) : null,
-                status: "negotiating"
+                proposed_amount: priceOffer,
               })
               .eq("id", conversation.request_id);
-          } else {
-            // Fallback: upsert request by bid_id + influencer_id
-            const { data: reqRow } = await supabaseAdmin
-              .from("requests")
-              .select("id")
-              .eq("bid_id", conversation.bid_id)
-              .eq("influencer_id", conversation.influencer_id)
-              .single();
-            if (reqRow) {
-              await supabaseAdmin
-                .from("requests")
-                .update({
-                  proposed_amount: data.price ? parseFloat(data.price) : null,
-                  status: "negotiating"
-                })
-                .eq("id", reqRow.id);
-              await supabaseAdmin
-                .from("conversations")
-                .update({ request_id: reqRow.id })
-                .eq("id", conversationId);
-            } else {
-              const { data: newReq } = await supabaseAdmin
-                .from("requests")
-                .insert({
-                  bid_id: conversation.bid_id,
-                  influencer_id: conversation.influencer_id,
-                  status: "negotiating",
-                  proposed_amount: data.price ? parseFloat(data.price) : null
-                })
-                .select()
-                .single();
-              if (newReq) {
-                await supabaseAdmin
-                  .from("conversations")
-                  .update({ request_id: newReq.id })
-                  .eq("id", conversationId);
-              }
-            }
           }
 
-          // Calculate payment breakdown for transparency
-          const negotiatedBreakdown = await this.calculatePaymentBreakdown(data.price);
-
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.brand_owner_id,
-            receiver_id: conversation.influencer_id,
-            message: `💰 **Negotiated Price Offer: ₹${data.price}**\n\n` +
-              `📊 **Payment Breakdown:**\n` +
-              `• Total Amount: ${negotiatedBreakdown.display.total}\n` +
-              `• Platform Fee: ${negotiatedBreakdown.display.commission}\n` +
-              `• You'll Receive: ${negotiatedBreakdown.display.net_to_influencer}\n\n` +
-              `💳 **Payment Schedule:**\n` +
-              `• Advance (30%): ${negotiatedBreakdown.display.advance}\n` +
-              `• Final (70%): ${negotiatedBreakdown.display.final}\n\n` +
-              `Please review and respond.`,
-            message_type: "automated",
-            action_required: true,
-            action_data: {
-              title: "🎯 **Final Price Response**",
-              subtitle: "Choose how you'd like to respond to this offer:",
-              buttons: [
-                {
-                  id: "accept_negotiated_price",
-                  text: "Accept Offer",
-                  style: "success",
-                  action: "accept_negotiated_price",
-                },
-                {
-                  id: "reject_negotiated_price",
-                  text: "Reject Offer",
-                  style: "danger",
-                  action: "reject_negotiated_price",
-                },
-                {
-                  id: "continue_negotiate",
-                  text: "Continue Negotiating",
-                  style: "warning",
-                  action: "continue_negotiate",
-                },
-              ],
-              // Add payment breakdown
-              payment_breakdown: {
-                total_amount: priceBreakdown.total_amount_paise,
-                commission_amount: priceBreakdown.commission_amount_paise,
-                commission_percentage: priceBreakdown.commission_percentage,
-                net_amount: priceBreakdown.net_amount_paise,
-                advance_amount: priceBreakdown.advance_amount_paise,
-                final_amount: priceBreakdown.final_amount_paise,
-                display: priceBreakdown.display
-              },
-              flow_state: "influencer_final_response",
-              message_type: "influencer_final_price_response",
-              visible_to: "influencer",
-            },
-          };
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.brand_owner_id,
-            message: `✅ **Action Taken: Negotiated Price Sent**\n\nYou have sent a new price offer: ₹${data.price}`,
-            message_type: "audit",
-            action_required: false,
-          };
-          break;
+                  await supabaseAdmin
+                    .from("conversations")
+            .update({ flow_data: priceFlowData })
+                    .eq("id", conversationId);
+                  break;
 
         case "proceed_to_payment":
-          // Brand owner proceeds to payment
+          // Brand owner proceeds to payment - create Razorpay order
           newFlowState = "payment_pending";
           newAwaitingRole = "brand_owner";
 
-          // Get the amount from various sources
-          let paymentAmount = data.amount || 0;
+          const paymentAmount = data.price || conversation.flow_data?.agreed_price || conversation.flow_data?.negotiated_price || 0;
           
-          if (paymentAmount <= 0) {
-            
-            // First try to get amount from linked request
-            if (conversation.request_id) {
-              const { data: request } = await supabaseAdmin
-                .from("requests")
-                .select("proposed_amount, final_agreed_amount")
-                .eq("id", conversation.request_id)
-                .single();
-              // Check final_agreed_amount first, then fall back to proposed_amount
-              if (request?.final_agreed_amount && parseFloat(request.final_agreed_amount) > 0) {
-                paymentAmount = parseFloat(request.final_agreed_amount);
-              } else if (request?.proposed_amount && parseFloat(request.proposed_amount) > 0) {
-                paymentAmount = parseFloat(request.proposed_amount);
-              }
-            }
-            // If no linked request, attempt to find one by bid_id + influencer_id or campaign_id + influencer_id
-            if (paymentAmount <= 0 && conversation.influencer_id) {
-              let requestQuery = supabaseAdmin
-                .from("requests")
-                .select("id, proposed_amount, final_agreed_amount, bid_id, campaign_id")
-                .eq("influencer_id", conversation.influencer_id)
-                .order("updated_at", { ascending: false })
-                .limit(1);
-              
-              if (conversation.bid_id) {
-                requestQuery = requestQuery.eq("bid_id", conversation.bid_id);
-              } else if (conversation.campaign_id) {
-                requestQuery = requestQuery.eq("campaign_id", conversation.campaign_id);
-              }
-              
-              const { data: reqByPair } = await requestQuery.single();
-              if (reqByPair) {
-                // Check final_agreed_amount first, then fall back to proposed_amount
-                if (reqByPair.final_agreed_amount && parseFloat(reqByPair.final_agreed_amount) > 0) {
-                  paymentAmount = parseFloat(reqByPair.final_agreed_amount);
-                } else if (reqByPair.proposed_amount && parseFloat(reqByPair.proposed_amount) > 0) {
-                  paymentAmount = parseFloat(reqByPair.proposed_amount);
-                }
-                // Also backfill conversation.request_id for future
-                if (reqByPair.id) {
-                  await supabaseAdmin
-                    .from("conversations")
-                    .update({ request_id: reqByPair.id })
-                    .eq("id", conversationId);
-                }
-              }
-            }
-            // Fall back to conversation flow_data agreed_amount
-            if (paymentAmount <= 0 && conversation.flow_data && conversation.flow_data.agreed_amount) {
-              paymentAmount = conversation.flow_data.agreed_amount;
-            }
-            // Try to get amount from recent price negotiation messages
-            if (paymentAmount <= 0) {
-              const { data: priceMessages } = await supabaseAdmin
-                .from("messages")
-                .select("message, action_data")
-                .eq("conversation_id", conversationId)
-                .in("message_type", ["influencer_price_response", "brand_owner_pricing_input", "brand_owner_negotiation_response"])
-                .order("created_at", { ascending: false })
-                .limit(5);
-              
-              // Look for price in recent messages
-              for (const msg of priceMessages || []) {
-                const priceMatch = msg.message?.match(/₹(\d+(?:\.\d{2})?)/);
-                if (priceMatch) {
-                  paymentAmount = parseFloat(priceMatch[1]);
-                  break;
-                }
-                // Also check action_data for price
-                if (msg.action_data && msg.action_data.price) {
-                  paymentAmount = parseFloat(msg.action_data.price);
-                  break;
-                }
-              }
-            }
-            
-            // Final fallback: check conversation flow_data for agreed amount
-            if (paymentAmount <= 0 && conversation.flow_data?.agreed_amount) {
-              paymentAmount = parseFloat(conversation.flow_data.agreed_amount);
-            }
-          }
-          
-          if (paymentAmount <= 0) {
-            throw new Error('Payment amount is required. Ensure requests.proposed_amount/final_agreed_amount is set, or pass data.amount');
-          }
-          // Convert to paise for database storage
-          const paymentAmountPaise = Math.round(paymentAmount * 100);
-
-          // Calculate payment breakdown for transparency
+          // Calculate payment breakdown
           const paymentBreakdown = await this.calculatePaymentBreakdown(paymentAmount);
 
-          // Create Razorpay order
-          const Razorpay = require('razorpay');
-          const keyId = process.env.RAZORPAY_KEY_ID;
-          const keySecret = process.env.RAZORPAY_KEY_SECRET;
-          if (!keyId || !keySecret) {
-            throw new Error("Payment gateway configuration missing. Please set Razorpay keys.");
-          }
-          const razorpay = new Razorpay({ key_id: keyId, key_secret: keySecret });
-
-          let razorpayOrder;
-          try {
-            const shortReceipt = `ord_${String(conversationId).slice(0,8)}_${Math.floor(Date.now()/1000)}`;
-            razorpayOrder = await razorpay.orders.create({
-              amount: paymentAmountPaise,
-              currency: 'INR',
-              receipt: shortReceipt,
-              notes: {
-                conversation_id: conversationId,
-                conversation_type: conversation.campaign_id ? "campaign" : "bid",
-                brand_owner_id: conversation.brand_owner_id,
-                influencer_id: conversation.influencer_id,
-                payment_type: 'bid_campaign_collaboration'
-              }
+          // Create Razorpay order for frontend to use
+          let razorpayOrder = null;
+          const Razorpay = require("razorpay");
+          
+          if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+            const razorpay = new Razorpay({
+              key_id: process.env.RAZORPAY_KEY_ID,
+              key_secret: process.env.RAZORPAY_KEY_SECRET,
             });
-          } catch (rpErr) {
-            throw new Error(`Payment order creation failed at gateway: ${rpErr?.message || rpErr}`);
-          }
 
-          // Track brand owner payment (debit) before creating payment order
-          const enhancedBalanceService = require('./enhancedBalanceService');
-          const brandOwnerDebitResult = await enhancedBalanceService.trackBrandOwnerPayment(
-            conversation.brand_owner_id,
-            paymentAmountPaise,
-            conversationId,
-            {
-              razorpay_order_id: razorpayOrder.id,
-              conversation_type: conversation.campaign_id ? "campaign" : "bid",
-              influencer_id: conversation.influencer_id,
-              notes: `Payment initiated for ${conversation.campaign_id ? 'campaign' : 'bid'} collaboration`
+            try {
+              // Razorpay receipt must be <= 40 chars
+              const rawReceipt = `conv_${conversationId}_${Date.now()}`;
+              const safeReceipt = rawReceipt.substring(0, 40);
+              const orderOptions = {
+                amount: paymentBreakdown.total_amount_paise,
+                currency: "INR",
+                receipt: safeReceipt,
+                notes: {
+                  conversation_id: conversationId,
+                  brand_owner_id: conversation.brand_owner_id,
+                  influencer_id: conversation.influencer_id,
+                  source_type: conversation.campaign_id ? "campaign" : conversation.bid_id ? "bid" : "direct",
+                  request_id: conversation.request_id || null,
+                },
+              };
+
+              razorpayOrder = await razorpay.orders.create(orderOptions);
+              
+              // Store order ID in flow_data for later reference
+              const orderFlowData = {
+                ...(conversation.flow_data || {}),
+                razorpay_order_id: razorpayOrder.id,
+                payment_order_created_at: new Date().toISOString()
+              };
+              
+              await supabaseAdmin
+                .from("conversations")
+                .update({ flow_data: orderFlowData })
+                .eq("id", conversationId);
+              
+            } catch (orderError) {
+              console.error("❌ Failed to create Razorpay order:", orderError);
+              // Don't throw - allow flow to continue, frontend can retry
             }
-          );
-
-          if (!brandOwnerDebitResult.success) {
-            // Continue anyway as payment order creation is more critical
-          } else {
           }
 
-          // Create payment order in database
-          const { data: paymentOrder, error: orderError } = await supabaseAdmin
-            .from("payment_orders")
-            .insert({
-              conversation_id: conversationId,
-              amount_paise: paymentAmountPaise,
-              currency: "INR",
-              status: "created",
-              razorpay_order_id: razorpayOrder.id,
-              metadata: {
-                conversation_type: conversation.campaign_id ? "campaign" : "bid",
-                brand_owner_id: conversation.brand_owner_id,
-                influencer_id: conversation.influencer_id,
-                razorpay_receipt: razorpayOrder.receipt,
-                brand_owner_debit_transaction_id: brandOwnerDebitResult.success ? brandOwnerDebitResult.transaction.id : null
-              }
-            })
-            .select()
-            .single();
-
-          if (orderError) {
-            throw new Error(`Failed to create payment order: ${orderError.message}`);
-          }
-
+          // Create a visible message instructing to pay now, include order details in action_data
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `💳 **Payment Required: ₹${paymentAmount}**\n\n` +
-              `📊 **Payment Breakdown:**\n` +
-              `• Total Amount: ${paymentBreakdown.display.total}\n` +
-              `• Platform Fee: ${paymentBreakdown.display.commission}\n` +
-              `• Influencer Net: ${paymentBreakdown.display.net_to_influencer}\n\n` +
-              `💳 **Payment Schedule:**\n` +
-              `• Advance (30%): ${paymentBreakdown.display.advance}\n` +
-              `• Final (70%): ${paymentBreakdown.display.final}\n\n` +
-              `Please complete the payment to proceed with the collaboration.`,
-            message_type: "brand_owner_payment",
+            message: `💳 **Payment Order Created**\n\nPayment details:\n• Amount: ${paymentBreakdown.display.total}\n• Platform Fee: ${paymentBreakdown.display.commission}\n• Net to Influencer: ${paymentBreakdown.display.net_to_influencer}`,
+            message_type: "automated",
             action_required: true,
             action_data: {
-              title: "🎯 **Payment Required**",
-              subtitle: "Complete the payment to finalize the collaboration:",
-              flow_state: "payment_pending",
-              visible_to: "brand_owner",
-              message_type: "brand_owner_payment",
-              payment_order: {
-                razorpay_config: {
-                  order_id: razorpayOrder.id,
-                  amount: paymentAmountPaise,
-                  currency: "INR",
-                  key_id: process.env.RAZORPAY_KEY_ID,
-                  name: "Stoory Platform",
-                  description: "Payment for Campaign Collaboration",
-                  prefill: {
-                    name: "Brand Owner",
-                    email: "brand@example.com",
-                    contact: "9876543210"
-                  },
-                  theme: {
-                    color: "#3B82F6"
-                  }
-                }
-              },
-              buttons: [
-                {
-                  id: "pay_now",
-                  text: "Pay Now",
-                  action: "proceed_to_payment",
-                  style: "primary"
-                }
-              ],
-              // Add payment breakdown
+              title: "💳 **Complete Payment**",
+              subtitle: razorpayOrder ? "Click Pay Now to process payment with Razorpay" : "Payment service unavailable",
               payment_breakdown: {
                 total_amount: paymentBreakdown.total_amount_paise,
                 commission_amount: paymentBreakdown.commission_amount_paise,
@@ -1147,22 +813,40 @@ Please respond to confirm your interest and availability for this campaign.`,
                 advance_amount: paymentBreakdown.advance_amount_paise,
                 final_amount: paymentBreakdown.final_amount_paise,
                 display: paymentBreakdown.display
-              }
-            }
+              },
+              razorpay_order: razorpayOrder ? {
+                id: razorpayOrder.id,
+                amount: razorpayOrder.amount,
+                currency: razorpayOrder.currency,
+                receipt: razorpayOrder.receipt,
+                key_id: process.env.RAZORPAY_KEY_ID
+              } : null,
+              // Frontend can auto-trigger SDK when it sees razorpay_order, or show an explicit Pay Now button
+              buttons: razorpayOrder ? [
+                { id: "pay_now", text: "Pay Now", style: "success", action: "proceed_to_payment" }
+              ] : [],
+              auto_trigger_payment: razorpayOrder ? true : false,
+              flow_state: "payment_pending",
+              message_type: "brand_owner_payment",
+              visible_to: "brand_owner",
+            },
           };
           break;
 
-        case "accept_counter_offer":
-          // Brand owner accepts counter offer
+        case "accept_negotiated_price":
+          // Brand owner accepts negotiated price → finalize and proceed to payment
           newFlowState = "payment_pending";
           newAwaitingRole = "brand_owner";
+
+          // Determine agreed price
+          const agreedFromNegotiation = data.price ? parseFloat(data.price) : (conversation.flow_data?.negotiated_price || null);
 
           // Update the final agreed amount in requests table
           if (conversation.request_id) {
             await supabaseAdmin
               .from("requests")
               .update({
-                final_agreed_amount: data.price ? parseFloat(data.price) : null,
+                final_agreed_amount: agreedFromNegotiation,
                 status: "finalized"
               })
               .eq("id", conversation.request_id);
@@ -1178,7 +862,7 @@ Please respond to confirm your interest and availability for this campaign.`,
               await supabaseAdmin
                 .from("requests")
                 .update({
-                  final_agreed_amount: data.price ? parseFloat(data.price) : null,
+                  final_agreed_amount: agreedFromNegotiation,
                   status: "finalized"
                 })
                 .eq("id", reqRow.id);
@@ -1193,8 +877,8 @@ Please respond to confirm your interest and availability for this campaign.`,
                   bid_id: conversation.bid_id,
                   influencer_id: conversation.influencer_id,
                   status: "finalized",
-                  proposed_amount: data.price ? parseFloat(data.price) : null,
-                  final_agreed_amount: data.price ? parseFloat(data.price) : null
+                  proposed_amount: agreedFromNegotiation,
+                  final_agreed_amount: agreedFromNegotiation
                 })
                 .select()
                 .single();
@@ -1211,307 +895,46 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
             receiver_id: conversation.influencer_id,
-            message: `✅ **Counter Offer Accepted**\n\nBrand owner has accepted your counter offer of ₹${data.price}. Please proceed with payment to complete the collaboration.`,
+            message: `✅ **Negotiated Price Accepted**\n\nBrand owner has accepted your negotiated price of ₹${agreedFromNegotiation}. Please proceed with payment to complete the collaboration.`,
             message_type: "automated",
             action_required: true,
             action_data: {
               title: "🎯 **Payment Required**",
-              subtitle: `Accepted amount: ₹${data.price}`,
+              subtitle: `Accepted amount: ₹${agreedFromNegotiation}`,
               buttons: [
-                {
-                  id: "proceed_to_payment",
-                  text: "Proceed to Payment",
-                  style: "success",
-                  action: "proceed_to_payment",
-                  data: { amount: data.price },
-                },
+                { id: "proceed_to_payment", text: "Proceed to Payment", style: "success", action: "proceed_to_payment", data: { amount: agreedFromNegotiation } }
               ],
               flow_state: "payment_pending",
               message_type: "brand_owner_payment",
               visible_to: "brand_owner",
             },
           };
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.brand_owner_id,
-            message: `✅ **Action Taken: Counter Offer Accepted**\n\nYou have accepted the counter offer of ₹${data.price}.`,
-            message_type: "audit",
-            action_required: false,
-          };
           break;
 
-        case "reject_counter_offer":
-          // Brand owner rejects counter offer - loop back to influencer for new counter offer
-          currentRound = (typeof conversation.negotiation_round === 'number' && !Number.isNaN(conversation.negotiation_round))
-            ? conversation.negotiation_round
-            : (baseNegotiationHistory.length || 0);
-          const maxRounds = conversation.max_negotiation_rounds || 3;
-          
-          // No max rounds logic: always loop back for another counter if rejected
-          {
-            // Still within limits, loop back to influencer for new counter offer
-            newFlowState = "influencer_price_input";
+        case "reject_negotiated_price":
+          // Brand owner rejects negotiated price; allow influencer to try again
+          newFlowState = "influencer_negotiation_input";
             newAwaitingRole = "influencer";
 
-            // Update negotiation history
-            // Use the variables already declared at the beginning of the method
-            const newHistoryEntry = {
-              round: currentRound,
-              brand_owner_action: "rejected",
-              rejected_price: parseFloat(data.price),
-              timestamp: new Date().toISOString(),
-              action: "counter_offer_rejected"
-            };
-            const updatedHistory = [...baseNegotiationHistory, newHistoryEntry];
+          const rejectedNegPrice = data.price ? parseFloat(data.price) : (conversation.flow_data?.negotiated_price || null);
 
             newMessage = {
               conversation_id: conversationId,
               sender_id: conversation.brand_owner_id,
               receiver_id: conversation.influencer_id,
-              message: `❌ **Counter Offer Rejected**\n\nBrand owner has rejected your counter offer of ₹${data.price}. You can make another counter offer.`,
+            message: `❌ **Negotiated Price Rejected**\n\nBrand owner rejected the negotiated price of ₹${rejectedNegPrice}. Please propose another amount.`,
               message_type: "automated",
               action_required: true,
               action_data: {
-                title: "💰 **Make Another Counter Offer**",
-                subtitle: `Your previous offer was rejected. What's your new counter offer?`,
-                input_field: {
-                  id: "counter_price",
-                  type: "number",
-                  placeholder: "Enter your new counter offer amount",
-                  required: true,
-                  min: 1,
-                },
-                buttons: [
-                  {
-                    id: "send_counter_offer",
-                    text: "Send Counter Offer",
-                    style: "success",
-                    action: "send_counter_offer",
-                  },
-                ],
-                flow_state: "influencer_price_input",
-                message_type: "influencer_counter_offer",
-                visible_to: "influencer",
-              },
-            };
-
-            auditMessage = {
-              conversation_id: conversationId,
-              sender_id: SYSTEM_USER_ID,
-              receiver_id: conversation.brand_owner_id,
-              message: `✅ **Action Taken: Counter Offer Rejected**\n\nYou have rejected the counter offer. The influencer can make another offer.`,
-              message_type: "audit",
-              action_required: false,
-            };
-
-            // Update conversation with negotiation history
-            await supabaseAdmin
-              .from("conversations")
-              .update({
-                negotiation_history: updatedHistory
-              })
-              .eq("id", conversationId);
-          }
-          break;
-
-        case "make_final_offer":
-          // Brand owner makes final offer
-          newFlowState = "influencer_final_response";
-          newAwaitingRole = "influencer";
-
-          // Calculate payment breakdown for transparency
-          const finalOfferBreakdown = await this.calculatePaymentBreakdown(data.price);
-
-          // Persist the final offer price as requests.proposed_amount
-          if (conversation.request_id) {
-            await supabaseAdmin
-              .from("requests")
-              .update({
-                proposed_amount: data.price ? parseFloat(data.price) : null,
-                status: "negotiating"
-              })
-              .eq("id", conversation.request_id);
-          } else {
-            // Fallback: upsert request by bid_id + influencer_id
-            const { data: reqRow } = await supabaseAdmin
-              .from("requests")
-              .select("id")
-              .eq("bid_id", conversation.bid_id)
-              .eq("influencer_id", conversation.influencer_id)
-              .single();
-            if (reqRow) {
-              await supabaseAdmin
-                .from("requests")
-                .update({
-                  proposed_amount: data.price ? parseFloat(data.price) : null,
-                  status: "negotiating"
-                })
-                .eq("id", reqRow.id);
-              await supabaseAdmin
-                .from("conversations")
-                .update({ request_id: reqRow.id })
-                .eq("id", conversationId);
-            } else {
-              const { data: newReq } = await supabaseAdmin
-                .from("requests")
-                .insert({
-                  bid_id: conversation.bid_id,
-                  influencer_id: conversation.influencer_id,
-                  status: "negotiating",
-                  proposed_amount: data.price ? parseFloat(data.price) : null
-                })
-                .select()
-                .single();
-              if (newReq) {
-                await supabaseAdmin
-                  .from("conversations")
-                  .update({ request_id: newReq.id })
-                  .eq("id", conversationId);
-              }
+              title: "💬 Propose New Price",
+              subtitle: "Enter a different negotiated price.",
+              input_field: { id: "negotiated_price", type: "number", placeholder: "Enter price in ₹", required: true, min: 0 },
+              submit_button: { text: "Send Negotiated Price", style: "success" },
+              flow_state: "influencer_negotiation_input",
+              message_type: "influencer_negotiation_input",
+              visible_to: "influencer"
             }
-          }
-
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.brand_owner_id,
-            receiver_id: conversation.influencer_id,
-            message: `💰 **Final Offer: ₹${data.price}**\n\n` +
-              `📊 **Payment Breakdown:**\n` +
-              `• Total Amount: ${finalOfferBreakdown.display.total}\n` +
-              `• Platform Fee: ${finalOfferBreakdown.display.commission}\n` +
-              `• You'll Receive: ${finalOfferBreakdown.display.net_to_influencer}\n\n` +
-              `💳 **Payment Schedule:**\n` +
-              `• Advance (30%): ${finalOfferBreakdown.display.advance}\n` +
-              `• Final (70%): ${finalOfferBreakdown.display.final}\n\n` +
-              `This is the final offer. Please respond.`,
-            message_type: "automated",
-            action_required: true,
-            action_data: {
-              title: "🎯 **Final Offer Response**",
-              subtitle: `Brand owner's final offer: ₹${data.price}`,
-              buttons: [
-                {
-                  id: "accept_final_offer",
-                  text: "Accept Final Offer",
-                  style: "success",
-                  action: "accept_final_offer",
-                  data: { price: data.price },
-                },
-                {
-                  id: "reject_final_offer",
-                  text: "Reject Final Offer",
-                  style: "danger",
-                  action: "reject_final_offer",
-                },
-              ],
-              // Add payment breakdown
-              payment_breakdown: {
-                total_amount: finalOfferBreakdown.total_amount_paise,
-                commission_amount: finalOfferBreakdown.commission_amount_paise,
-                commission_percentage: finalOfferBreakdown.commission_percentage,
-                net_amount: finalOfferBreakdown.net_amount_paise,
-                advance_amount: finalOfferBreakdown.advance_amount_paise,
-                final_amount: finalOfferBreakdown.final_amount_paise,
-                display: finalOfferBreakdown.display
-              },
-              flow_state: "influencer_final_response",
-              message_type: "influencer_final_response",
-              visible_to: "influencer",
-            },
           };
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.brand_owner_id,
-            message: `✅ **Action Taken: Final Offer Made**\n\nYou have made a final offer of ₹${data.price}.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${finalOfferBreakdown.total_amount_paise / 100}\n• **Platform Commission (${finalOfferBreakdown.commission_percentage}%):** ₹${finalOfferBreakdown.commission_amount_paise / 100}\n• **Influencer Net Amount:** ₹${finalOfferBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${finalOfferBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${finalOfferBreakdown.final_amount_paise / 100} (70%)`,
-            message_type: "audit",
-            action_required: false,
-          };
-          break;
-
-        case "approve_work":
-          // Brand owner approves work
-          newFlowState = "admin_final_payment_pending";
-          newAwaitingRole = "admin"; // Admin needs to release final payment
-          
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.brand_owner_id,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Work Approved!**\n\nExcellent work! The collaboration has been completed successfully.${data.feedback ? `\n\n**Feedback:** ${data.feedback}` : ''}\n\nThe final payment will be processed by our admin team.`,
-            message_type: "automated",
-            action_required: false,
-          };
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.brand_owner_id,
-            message: `✅ **Action Taken: Work Approved**\n\nYou have approved the submitted work. The final payment will be processed by admin.`,
-            message_type: "audit",
-            action_required: false,
-          };
-
-          // Update conversation with approval status
-          await supabaseAdmin
-            .from("conversations")
-            .update({
-              flow_state: newFlowState,
-              awaiting_role: newAwaitingRole,
-              chat_status: "automated", // Set to automated to show waiting status
-              flow_data: {
-                ...conversation.flow_data,
-                work_status: "approved",
-                approval_date: new Date().toISOString(),
-                approval_feedback: data.feedback || null
-              }
-            })
-            .eq("id", conversationId);
-          break;
-
-        case "request_revision":
-          // Brand owner requests revision
-          const currentRevisionCount = conversation.flow_data?.revision_count || 0;
-          const maxRevisions = conversation.flow_data?.max_revisions || 3;
-          const newRevisionCount = currentRevisionCount + 1;
-          
-          newFlowState = "work_in_progress";
-          newAwaitingRole = "influencer";
-          
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.brand_owner_id,
-            receiver_id: conversation.influencer_id,
-            message: `🔄 **Revision Requested**\n\nPlease make the following changes to your work:\n\n${data.feedback || data.revision_notes || 'Please review and improve the submitted work.'}\n\n**Revision:** ${newRevisionCount}/${maxRevisions}\n\nPlease resubmit your work after making the requested changes.`,
-            message_type: "automated",
-            action_required: false,
-          };
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.brand_owner_id,
-            message: `✅ **Action Taken: Revision Requested**\n\nYou have requested revision ${newRevisionCount}/${maxRevisions} of the submitted work.`,
-            message_type: "audit",
-            action_required: false,
-          };
-
-          // Update conversation with revision request and change chat_status back to real_time
-          await supabaseAdmin
-            .from("conversations")
-            .update({
-              flow_data: {
-                ...conversation.flow_data,
-                work_status: "revision_requested",
-                revision_count: newRevisionCount,
-                revision_feedback: data.feedback || data.revision_notes || null
-              },
-              chat_status: "real_time" // Back to free chat for revision discussion
-            })
-            .eq("id", conversationId);
           break;
 
         case "reject_final_work":
@@ -1528,25 +951,11 @@ Please respond to confirm your interest and availability for this campaign.`,
             action_required: false,
           };
 
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.brand_owner_id,
-            message: `✅ **Action Taken: Work Rejected (Final)**\n\nYou have rejected the work after ${conversation.flow_data?.revision_count || 0} revision(s).`,
-            message_type: "audit",
-            action_required: false,
-          };
-
-          // Update conversation with rejection status
+          // Update conversation to closed state
           await supabaseAdmin
             .from("conversations")
             .update({
-              flow_data: {
-                ...conversation.flow_data,
-                work_status: "rejected",
-                rejection_date: new Date().toISOString(),
-                rejection_reason: data.feedback || data.rejection_reason || null
-              },
+              flow_state: "work_rejected",
               chat_status: "closed"
             })
             .eq("id", conversationId);
@@ -1563,8 +972,14 @@ Please respond to confirm your interest and availability for this campaign.`,
       };
 
       // For proceed_to_payment, also update current_action_data with payment order
-      if (action === "proceed_to_payment" && newMessage.action_data) {
-        updateData.current_action_data = newMessage.action_data;
+      if (action === "proceed_to_payment" && newMessage && newMessage.action_data) {
+        // Normalize keys for frontend (both snake_case and camelCase)
+        const a = { ...newMessage.action_data };
+        if (a.razorpay_order && !a.razorpayOrder) a.razorpayOrder = a.razorpay_order;
+        if (a.auto_trigger_payment !== undefined && a.autoTriggerPayment === undefined) {
+          a.autoTriggerPayment = a.auto_trigger_payment;
+        }
+        updateData.current_action_data = a;
       }
 
       // Stop updating negotiation_round; negotiations can continue indefinitely
@@ -1614,24 +1029,37 @@ Please respond to confirm your interest and availability for this campaign.`,
         console.log("✅ [DEBUG] Conversation updated successfully");
       }
 
-      // Create messages
-      const messagesToCreate = [newMessage];
-      // No audit messages should be created
+      // Create messages (if any)
+      let createdMessages = [];
+      if (newMessage) {
+        const { data: msgs, error: messageError } = await supabaseAdmin
+          .from("messages")
+          .insert([newMessage])
+          .select();
 
-      const { data: createdMessages, error: messageError } = await supabaseAdmin
-        .from("messages")
-        .insert(messagesToCreate)
-        .select();
+        if (messageError) {
+          throw new Error(`Failed to create messages: ${messageError.message}`);
+        }
+        createdMessages = msgs || [];
+      }
 
-      if (messageError) {
-        throw new Error(`Failed to create messages: ${messageError.message}`);
+      // Emit socket events for new messages
+      if (createdMessages && createdMessages.length > 0) {
+        createdMessages.forEach(msg => {
+          this.emitAutomatedMessage(conversationId, msg);
+        });
       }
 
       // Set current_action_data based on the action and flow state
       let currentActionData = {};
       
-      if (action === "proceed_to_payment") {
-        currentActionData = newMessage.action_data || {};
+      if (action === "proceed_to_payment" && newMessage && newMessage.action_data) {
+        const a = { ...newMessage.action_data };
+        if (a.razorpay_order && !a.razorpayOrder) a.razorpayOrder = a.razorpay_order;
+        if (a.auto_trigger_payment !== undefined && a.autoTriggerPayment === undefined) {
+          a.autoTriggerPayment = a.auto_trigger_payment;
+        }
+        currentActionData = a;
       } else if (action === "approve_work") {
         // Show waiting status for both influencer and brand owner
         currentActionData = {
@@ -1664,7 +1092,6 @@ Please respond to confirm your interest and availability for this campaign.`,
           current_action_data: currentActionData,
         },
         message: createdMessages[0],
-        audit_message: auditMessage ? createdMessages[1] : null,
       };
 
       // Send FCM notification to the target user
@@ -1685,7 +1112,8 @@ Please respond to confirm your interest and availability for this campaign.`,
       if (this.io) {
         try {
           // Emit conversation state change
-          this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+          console.log(`🔀 [STATE] conversation_state_changed -> room:${conversationId} flow:${newFlowState} awaiting:${newAwaitingRole}`);
+          this.io.to(`room:${conversationId}`).emit('conversation_state_changed', {
             conversation_id: conversationId,
             flow_state: newFlowState,
             awaiting_role: newAwaitingRole,
@@ -1694,38 +1122,10 @@ Please respond to confirm your interest and availability for this campaign.`,
             updated_at: new Date().toISOString()
           });
 
-          // Emit new message to conversation room
+          // Emit new message to conversation room (chat:new)
           if (result.message) {
-            this.io.to(`conversation_${conversationId}`).emit('new_message', {
-              conversation_id: conversationId,
-              message: result.message,
-              conversation_context: {
-                id: conversationId,
-                chat_status: 'automated',
-                flow_state: newFlowState,
-                awaiting_role: newAwaitingRole,
-                conversation_type: conversation.campaign_id ? 'campaign' : conversation.bid_id ? 'bid' : 'direct',
-                automation_enabled: true,
-                current_action_data: result.conversation.current_action_data
-              }
-            });
-          }
-
-          // Emit audit message if exists
-          if (result.audit_message) {
-            this.io.to(`conversation_${conversationId}`).emit('new_message', {
-              conversation_id: conversationId,
-              message: result.audit_message,
-              conversation_context: {
-                id: conversationId,
-                chat_status: 'automated',
-                flow_state: newFlowState,
-                awaiting_role: newAwaitingRole,
-                conversation_type: conversation.campaign_id ? 'campaign' : conversation.bid_id ? 'bid' : 'direct',
-                automation_enabled: true,
-                current_action_data: result.conversation.current_action_data
-              }
-            });
+            console.log(`➡️ [EMIT] chat:new -> room:${conversationId} msg:${result.message.id}`);
+            this.io.to(`room:${conversationId}`).emit('chat:new', { message: result.message });
           }
 
           // Emit global conversation list updates
@@ -1778,6 +1178,44 @@ Please respond to confirm your interest and availability for this campaign.`,
       let newFlowState, newAwaitingRole, newMessage, auditMessage;
 
       switch (action) {
+        case "negotiate_price":
+          // Influencer requests negotiation; brand owner decides to accept/reject
+          newFlowState = "brand_owner_negotiation";
+          newAwaitingRole = "brand_owner";
+
+          // Append to negotiation history
+          const negotiationHistoryInit = Array.isArray(conversation.negotiation_history) ? conversation.negotiation_history : [];
+          const negotiationStart = {
+            event: "negotiate_price_requested",
+            by: "influencer",
+            at: new Date().toISOString()
+          };
+
+          await supabaseAdmin
+            .from("conversations")
+            .update({ negotiation_history: [...negotiationHistoryInit, negotiationStart] })
+            .eq("id", conversationId);
+
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.influencer_id,
+            receiver_id: conversation.brand_owner_id,
+            message: "🤝 Negotiation Requested\n\nInfluencer wants to negotiate the price. Do you want to proceed?",
+            message_type: "automated",
+            action_required: true,
+            action_data: {
+              title: "🤝 Negotiation Request",
+              subtitle: "Accept to let influencer propose a new amount.",
+              buttons: [
+                { id: "accept_negotiation", text: "Accept Negotiation", style: "success", action: "accept_negotiation" },
+                { id: "reject_negotiation", text: "Reject Negotiation", style: "danger", action: "reject_negotiation" }
+              ],
+              flow_state: "brand_owner_negotiation",
+              message_type: "brand_owner_negotiation_request",
+              visible_to: "brand_owner"
+            }
+          };
+          break;
         case "accept":
         case "accept_connection":
           // Influencer accepts connection
@@ -1811,44 +1249,10 @@ Please respond to confirm your interest and availability for this campaign.`,
               visible_to: "brand_owner",
             },
           };
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Connection Accepted**\n\nYou have accepted the connection request from the brand owner.`,
-            message_type: "audit",
-            action_required: false,
-          };
           break;
 
-        case "reject":
-        case "reject_connection":
-          // Influencer rejects connection
-          newFlowState = "chat_closed";
-          newAwaitingRole = null;
-
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.influencer_id,
-            receiver_id: conversation.brand_owner_id,
-            message: `❌ **Connection Rejected**\n\nInfluencer has rejected your connection request. The chat is now closed.`,
-            message_type: "automated",
-            action_required: false,
-          };
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Connection Rejected**\n\nYou have rejected the connection request from the brand owner.`,
-            message_type: "audit",
-            action_required: false,
-          };
-          break;
-
-        case "accept_project":
-          // Influencer accepts project requirements
+        case "accept_project_details":
+          // Influencer accepts the project details - now brand owner can provide price
           newFlowState = "brand_owner_pricing";
           newAwaitingRole = "brand_owner";
 
@@ -1856,18 +1260,18 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `✅ **Project Requirements Accepted**\n\nInfluencer has accepted the project requirements. Please provide your price offer.`,
+            message: `✅ **Project Accepted**\n\nInfluencer has accepted the project details. Please provide your price offer.`,
             message_type: "automated",
             action_required: true,
             action_data: {
-              title: "🎯 **Price Offer Input**",
-              subtitle: "Enter the offering price for this project:",
+              title: "💰 **Price Offer**",
+              subtitle: "Enter your proposed price for this project:",
               input_field: {
                 id: "price_offer",
                 type: "number",
-                placeholder: "Enter price amount in INR",
+                placeholder: "Enter price in ₹",
                 required: true,
-                min: 1,
+                min: 0,
               },
               submit_button: {
                 text: "Send Price Offer",
@@ -1878,541 +1282,86 @@ Please respond to confirm your interest and availability for this campaign.`,
               visible_to: "brand_owner",
             },
           };
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Project Requirements Accepted**\n\nYou have accepted the project requirements from the brand owner.`,
-            message_type: "audit",
-            action_required: false,
-          };
           break;
 
-        case "deny_project":
-          // Influencer denies project requirements
-          newFlowState = "chat_closed";
+        case "reject_project_details":
+          // Influencer rejects the project details - conversation ends
+          newFlowState = "project_rejected";
           newAwaitingRole = null;
 
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `❌ **Project Requirements Denied**\n\nInfluencer has denied the project requirements. The chat is now closed.`,
+            message: `❌ **Project Rejected**\n\nInfluencer has rejected the project details. The collaboration will not proceed.${data.rejection_reason ? `\n\nReason: ${data.rejection_reason}` : ''}`,
             message_type: "automated",
             action_required: false,
           };
 
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Project Requirements Denied**\n\nYou have denied the project requirements from the brand owner.`,
-            message_type: "audit",
-            action_required: false,
-          };
-          break;
-
-        case "accept_price":
-          // Influencer accepts price offer
-          newFlowState = "payment_pending";
-          newAwaitingRole = "brand_owner";
-
-          // Determine agreed price: prefer requests.proposed_amount if present
-          let finalAgreedPrice = parseFloat(data.price) || 0;
-          if (!finalAgreedPrice && conversation.request_id) {
-            const { data: reqForAccept } = await supabaseAdmin
-              .from("requests")
-              .select("proposed_amount")
-              .eq("id", conversation.request_id)
-              .single();
-            if (reqForAccept?.proposed_amount) {
-              finalAgreedPrice = parseFloat(reqForAccept.proposed_amount);
-            }
-          }
-
-          // Store the agreed price in flow_data for later retrieval
-          const updatedFlowData = {
-            ...conversation.flow_data,
-            agreed_amount: finalAgreedPrice,
-            agreement_timestamp: new Date().toISOString(),
-            negotiation_completed: true
-          };
-
-          // If a request exists, move proposed_amount to final_agreed_amount when accepted
-          if (conversation.request_id) {
-            // Read proposed_amount first
-            const { data: reqRow } = await supabaseAdmin
-              .from("requests")
-              .select("proposed_amount")
-              .eq("id", conversation.request_id)
-              .single();
-            const finalAmount = (reqRow?.proposed_amount && parseFloat(reqRow.proposed_amount) > 0)
-              ? parseFloat(reqRow.proposed_amount)
-              : finalAgreedPrice;
-            await supabaseAdmin
-              .from("requests")
-              .update({
-                final_agreed_amount: finalAmount,
-                status: "finalized"
-              })
-              .eq("id", conversation.request_id);
-          }
-
-          // Calculate payment breakdown for transparency
-          const acceptBreakdown = await this.calculatePaymentBreakdown(finalAgreedPrice);
-
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.influencer_id,
-            receiver_id: conversation.brand_owner_id,
-            message: `✅ **Price Offer Accepted: ₹${finalAgreedPrice}**\n\n` +
-              `📊 **Payment Breakdown:**\n` +
-              `• Total Amount: ${acceptBreakdown.display.total}\n` +
-              `• Platform Fee: ${acceptBreakdown.display.commission}\n` +
-              `• Net Amount: ${acceptBreakdown.display.net_to_influencer}\n\n` +
-              `💳 **Payment Schedule:**\n` +
-              `• Advance (30%): ${acceptBreakdown.display.advance}\n` +
-              `• Final (70%): ${acceptBreakdown.display.final}\n\n` +
-              `Please proceed with payment to complete the collaboration.`,
-            message_type: "automated",
-            action_required: true,
-            action_data: {
-              title: "🎯 **Payment Required**",
-              subtitle: "Complete the payment to finalize the collaboration:",
-              buttons: [
-                {
-                  id: "proceed_to_payment",
-                  text: "Proceed to Payment",
-                  style: "success",
-                  action: "proceed_to_payment",
-                },
-              ],
-              flow_state: "payment_pending",
-              message_type: "brand_owner_payment",
-              visible_to: "brand_owner",
-            },
-          };
-
-          // Update conversation with agreed price
-          const { error: flowDataError } = await supabaseAdmin
-            .from("conversations")
-            .update({ flow_data: updatedFlowData })
-            .eq("id", conversationId);
-
-          if (flowDataError) {
-            console.error("❌ [DEBUG] Failed to update flow_data:", flowDataError);
-          } else {
-            console.log("✅ [DEBUG] Updated flow_data with agreed price:", agreedPrice);
-          }
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Price Offer Accepted**\n\nYou have accepted the price offer from the brand owner.`,
-            message_type: "audit",
-            action_required: false,
-          };
-          break;
-
-        case "reject_price":
-          // Influencer rejects price offer
-          newFlowState = "chat_closed";
-          newAwaitingRole = null;
-
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.influencer_id,
-            receiver_id: conversation.brand_owner_id,
-            message: `❌ **Price Offer Rejected**\n\nInfluencer has rejected your price offer. The chat is now closed.`,
-            message_type: "automated",
-            action_required: false,
-          };
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Price Offer Rejected**\n\nYou have rejected the price offer from the brand owner.`,
-            message_type: "audit",
-            action_required: false,
-          };
-          break;
-
-        case "negotiate_price":
-          // Influencer wants to negotiate
-          newFlowState = "brand_owner_negotiation";
-          newAwaitingRole = "brand_owner";
-
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.influencer_id,
-            receiver_id: conversation.brand_owner_id,
-            message: `🤝 **Negotiation Request**\n\nInfluencer wants to negotiate the price offer. Please respond to this request.`,
-            message_type: "automated",
-            action_required: true,
-            action_data: {
-              title: "🎯 **Negotiation Response**",
-              subtitle:
-                "Choose how you'd like to respond to the negotiation request:",
-              buttons: [
-                {
-                  id: "agree_negotiation",
-                  text: "Agree to Negotiate",
-                  style: "success",
-                  action: "handle_negotiation",
-                  data: { action: "agree" },
-                },
-                {
-                  id: "reject_negotiation",
-                  text: "Reject Negotiation",
-                  style: "danger",
-                  action: "handle_negotiation",
-                  data: { action: "reject" },
-                },
-              ],
-              flow_state: "brand_owner_negotiation",
-              message_type: "brand_owner_negotiation_response",
-              visible_to: "brand_owner",
-            },
-          };
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Negotiation Requested**\n\nYou have requested to negotiate the price offer.`,
-            message_type: "audit",
-            action_required: false,
-          };
-          break;
-
-        case "send_counter_offer":
-          // Influencer sends counter offer
-          
-          if (!data.price || data.price === undefined) {
-            console.error("❌ [ERROR] send_counter_offer called without price data!");
-            return {
-              success: false,
-              error: "Price is required for counter offer",
-            };
-          }
-
-          // Calculate payment breakdown for transparency
-          const counterOfferBreakdown = await this.calculatePaymentBreakdown(data.price);
-          
-          newFlowState = "brand_owner_price_response";
-          newAwaitingRole = "brand_owner";
-
-          // No negotiation rounds tracking
-
-          // Update negotiation history
-          // Use the variables already declared at the beginning of the method
-          const newHistoryEntry = {
-            round: currentRound,
-            influencer_price: parseFloat(data.price),
-            timestamp: new Date().toISOString(),
-            action: "counter_offer"
-          };
-          const updatedHistory = [...baseNegotiationHistory, newHistoryEntry];
-
-          // Persist negotiation round increment and history
-          try {
-            await supabaseAdmin
-              .from("conversations")
-              .update({
-                negotiation_round: currentRound + 1,
-                negotiation_history: updatedHistory
-              })
-              .eq("id", conversationId);
-          } catch (e) {
-            console.error("❌ [NEGOTIATION] Failed to persist negotiation round/history:", e);
-          }
-
-          // Persist the counter offer price as requests.proposed_amount
-          if (conversation.request_id) {
-            await supabaseAdmin
-              .from("requests")
-              .update({
-                proposed_amount: data.price ? parseFloat(data.price) : null,
-                status: "negotiating"
-              })
-              .eq("id", conversation.request_id);
-          } else {
-            // Fallback: upsert request by bid_id + influencer_id
-            const { data: reqRow } = await supabaseAdmin
-              .from("requests")
-              .select("id")
-              .eq("bid_id", conversation.bid_id)
-              .eq("influencer_id", conversation.influencer_id)
-              .single();
-            if (reqRow) {
-              await supabaseAdmin
-                .from("requests")
-                .update({
-                  proposed_amount: data.price ? parseFloat(data.price) : null,
-                  status: "negotiating"
-                })
-                .eq("id", reqRow.id);
-              await supabaseAdmin
-                .from("conversations")
-                .update({ request_id: reqRow.id })
-                .eq("id", conversationId);
-            } else {
-              const { data: newReq } = await supabaseAdmin
-                .from("requests")
-                .insert({
-                  bid_id: conversation.bid_id,
-                  influencer_id: conversation.influencer_id,
-                  status: "negotiating",
-                  proposed_amount: data.price ? parseFloat(data.price) : null
-                })
-                .select()
-                .single();
-              if (newReq) {
-                await supabaseAdmin
-                  .from("conversations")
-                  .update({ request_id: newReq.id })
-                  .eq("id", conversationId);
-              }
-            }
-          }
-
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.influencer_id,
-            receiver_id: conversation.brand_owner_id,
-            message: `💰 **Counter Offer: ₹${data.price}**\n\n` +
-              `📊 **Payment Breakdown:**\n` +
-              `• Total Amount: ${counterOfferBreakdown.display.total}\n` +
-              `• Platform Fee: ${counterOfferBreakdown.display.commission}\n` +
-              `• Influencer Net: ${counterOfferBreakdown.display.net_to_influencer}\n\n` +
-              `💳 **Payment Schedule:**\n` +
-              `• Advance (30%): ${counterOfferBreakdown.display.advance}\n` +
-              `• Final (70%): ${counterOfferBreakdown.display.final}\n\n` +
-              `Please respond to this offer.`,
-            message_type: "automated",
-            action_required: true,
-            action_data: {
-              title: "🎯 **Counter Offer Response**",
-              subtitle: `Influencer's counter offer: ₹${data.price}`,
-              buttons: [
-                {
-                  id: "accept_counter_offer",
-                  text: "Accept Counter Offer",
-                  style: "success",
-                  action: "accept_counter_offer",
-                  data: { price: data.price },
-                },
-                {
-                  id: "reject_counter_offer",
-                  text: "Reject Counter Offer",
-                  style: "danger",
-                  action: "reject_counter_offer",
-                  data: { price: data.price },
-                },
-                {
-                  id: "make_final_offer",
-                  text: "Make Final Offer",
-                  style: "secondary",
-                  action: "make_final_offer",
-                },
-              ],
-              // Add payment breakdown
-              payment_breakdown: {
-                total_amount: counterOfferBreakdown.total_amount_paise,
-                commission_amount: counterOfferBreakdown.commission_amount_paise,
-                commission_percentage: counterOfferBreakdown.commission_percentage,
-                net_amount: counterOfferBreakdown.net_amount_paise,
-                advance_amount: counterOfferBreakdown.advance_amount_paise,
-                final_amount: counterOfferBreakdown.final_amount_paise,
-                display: counterOfferBreakdown.display
-              },
-              flow_state: "brand_owner_price_response",
-              message_type: "brand_owner_counter_response",
-              visible_to: "brand_owner",
-            },
-          };
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Counter Offer Sent**\n\nYou have sent a counter offer of ₹${data.price}.\n\n📊 **Payment Breakdown:**\n• **Total Amount:** ₹${counterOfferBreakdown.total_amount_paise / 100}\n• **Platform Commission (${counterOfferBreakdown.commission_percentage}%):** ₹${counterOfferBreakdown.commission_amount_paise / 100}\n• **Your Net Amount:** ₹${counterOfferBreakdown.net_amount_paise / 100}\n\n💳 **Payment Schedule:**\n• **Advance Payment:** ₹${counterOfferBreakdown.advance_amount_paise / 100} (30%)\n• **Final Payment:** ₹${counterOfferBreakdown.final_amount_paise / 100} (70%)`,
-            message_type: "audit",
-            action_required: false,
-          };
-
-          // Update conversation with negotiation history only
+          // Update conversation to closed state
           await supabaseAdmin
             .from("conversations")
             .update({
-              negotiation_history: updatedHistory
+              flow_state: "project_rejected",
+              chat_status: "closed"
             })
             .eq("id", conversationId);
           break;
 
-        case "accept_final_offer":
-          // Influencer accepts final offer
+        case "accept_price":
+          // Influencer accepts the price offer - move to payment
           newFlowState = "payment_pending";
           newAwaitingRole = "brand_owner";
 
-          // Calculate payment breakdown for transparency
-          const finalPrice = data.price ? parseFloat(data.price) : 0;
-          const finalOfferBreakdown = await this.calculatePaymentBreakdown(finalPrice);
+          const acceptedPrice = data.price ? parseFloat(data.price) : (conversation.flow_data?.price_offer || 0);
 
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.influencer_id,
-            receiver_id: conversation.brand_owner_id,
-            message: `✅ **Final Offer Accepted: ₹${finalPrice}**\n\n` +
-              `📊 **Payment Breakdown:**\n` +
-              `• Total Amount: ${finalOfferBreakdown.display.total}\n` +
-              `• Platform Fee: ${finalOfferBreakdown.display.commission}\n` +
-              `• Net Amount: ${finalOfferBreakdown.display.net_to_influencer}\n\n` +
-              `💳 **Payment Schedule:**\n` +
-              `• Advance (30%): ${finalOfferBreakdown.display.advance}\n` +
-              `• Final (70%): ${finalOfferBreakdown.display.final}\n\n` +
-              `Please proceed with payment to complete the collaboration.`,
-            message_type: "automated",
-            action_required: true,
-            action_data: {
-              title: "🎯 **Payment Required**",
-              subtitle: `Accepted amount: ₹${data.price}`,
-              buttons: [
-                {
-                  id: "proceed_to_payment",
-                  text: "Proceed to Payment",
-                  style: "success",
-                  action: "proceed_to_payment",
-                  data: { amount: data.price },
-                },
-              ],
-              flow_state: "payment_pending",
-              message_type: "brand_owner_payment",
-              visible_to: "brand_owner",
-            },
+          // Update flow_data with agreed price
+          const agreedFlowData = {
+            ...(conversation.flow_data || {}),
+            agreed_price: acceptedPrice,
+            price_accepted_at: new Date().toISOString()
           };
 
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Final Offer Accepted**\n\nYou have accepted the final offer of ₹${data.price}.`,
-            message_type: "audit",
-            action_required: false,
-          };
-          break;
-
-        case "reject_final_offer":
-          // Influencer rejects final offer
-          newFlowState = "chat_closed";
-          newAwaitingRole = null;
-
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.influencer_id,
-            receiver_id: conversation.brand_owner_id,
-            message: `❌ **Final Offer Rejected**\n\nInfluencer has rejected your final offer. The collaboration has been cancelled.`,
-            message_type: "automated",
-            action_required: false,
-          };
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Final Offer Rejected**\n\nYou have rejected the final offer.`,
-            message_type: "audit",
-            action_required: false,
-          };
-          break;
-
-        case "accept_negotiated_price":
-        case "accept_final_price":
-          // Influencer accepts negotiated price
-          newFlowState = "payment_pending";
-          newAwaitingRole = "brand_owner";
-
-          // Update the final agreed amount in requests table
+          // Update request if exists
           if (conversation.request_id) {
             await supabaseAdmin
               .from("requests")
               .update({
-                final_agreed_amount: data.price ? parseFloat(data.price) : null,
+                final_agreed_amount: acceptedPrice,
                 status: "finalized"
               })
               .eq("id", conversation.request_id);
-          } else {
-            // Fallback: upsert request by bid_id + influencer_id
-            const { data: reqRow } = await supabaseAdmin
-              .from("requests")
-              .select("id")
-              .eq("bid_id", conversation.bid_id)
-              .eq("influencer_id", conversation.influencer_id)
-              .single();
-            if (reqRow) {
-              await supabaseAdmin
-                .from("requests")
-                .update({
-                  final_agreed_amount: data.price ? parseFloat(data.price) : null,
-                  status: "finalized"
-                })
-                .eq("id", reqRow.id);
-              await supabaseAdmin
-                .from("conversations")
-                .update({ request_id: reqRow.id })
-                .eq("id", conversationId);
-            } else {
-              const { data: newReq } = await supabaseAdmin
-                .from("requests")
-                .insert({
-                  bid_id: conversation.bid_id,
-                  influencer_id: conversation.influencer_id,
-                  status: "finalized",
-                  proposed_amount: data.price ? parseFloat(data.price) : null,
-                  final_agreed_amount: data.price ? parseFloat(data.price) : null
-                })
-                .select()
-                .single();
-              if (newReq) {
-                await supabaseAdmin
-                  .from("conversations")
-                  .update({ request_id: newReq.id })
-                  .eq("id", conversationId);
-              }
-            }
           }
 
-          // Calculate payment breakdown for transparency
-          const negotiatedPrice = data.price ? parseFloat(data.price) : 0;
-          const negotiatedPaymentBreakdown = await this.calculatePaymentBreakdown(negotiatedPrice);
+          // Calculate payment breakdown
+          const paymentBreakdown = await this.calculatePaymentBreakdown(acceptedPrice);
 
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `✅ **Negotiated Price Accepted: ₹${negotiatedPrice}**\n\n` +
-              `📊 **Payment Breakdown:**\n` +
-              `• Total Amount: ${negotiatedPaymentBreakdown.display.total}\n` +
-              `• Platform Fee: ${negotiatedPaymentBreakdown.display.commission}\n` +
-              `• Net Amount: ${negotiatedPaymentBreakdown.display.net_to_influencer}\n\n` +
-              `💳 **Payment Schedule:**\n` +
-              `• Advance (30%): ${negotiatedPaymentBreakdown.display.advance}\n` +
-              `• Final (70%): ${negotiatedPaymentBreakdown.display.final}\n\n` +
-              `Please proceed with payment to complete the collaboration.`,
+            message: `✅ **Price Accepted: ₹${acceptedPrice}**\n\nInfluencer has accepted the price offer. Please proceed with payment to start the collaboration.`,
             message_type: "automated",
             action_required: true,
             action_data: {
-              title: "🎯 **Payment Required**",
-              subtitle: "Complete the payment to finalize the collaboration:",
+              title: "💳 **Payment Required**",
+              subtitle: `Accepted price: ₹${acceptedPrice}\n\nPayment breakdown:\n• Total: ${paymentBreakdown.display.total}\n• Platform Fee: ${paymentBreakdown.display.commission}\n• Net to Influencer: ${paymentBreakdown.display.net_to_influencer}`,
+              payment_breakdown: {
+                total_amount: paymentBreakdown.total_amount_paise,
+                commission_amount: paymentBreakdown.commission_amount_paise,
+                commission_percentage: paymentBreakdown.commission_percentage,
+                net_amount: paymentBreakdown.net_amount_paise,
+                advance_amount: paymentBreakdown.advance_amount_paise,
+                final_amount: paymentBreakdown.final_amount_paise,
+                display: paymentBreakdown.display
+              },
               buttons: [
                 {
                   id: "proceed_to_payment",
                   text: "Proceed to Payment",
                   style: "success",
                   action: "proceed_to_payment",
+                  data: { amount: acceptedPrice },
                 },
               ],
               flow_state: "payment_pending",
@@ -2421,185 +1370,138 @@ Please respond to confirm your interest and availability for this campaign.`,
             },
           };
 
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Negotiated Price Accepted**\n\nYou have accepted the negotiated price offer.`,
-            message_type: "audit",
-            action_required: false,
-          };
+          // Update flow_data with agreed price
+          await supabaseAdmin
+            .from("conversations")
+            .update({ flow_data: agreedFlowData })
+            .eq("id", conversationId);
           break;
 
-        case "reject_negotiated_price":
-        case "reject_final_price":
-          // Influencer rejects negotiated price
-          newFlowState = "chat_closed";
+        case "reject_price":
+          // Influencer rejects the price offer - conversation ends
+          newFlowState = "price_rejected";
           newAwaitingRole = null;
+
+          const rejectedPrice = data.price ? parseFloat(data.price) : (conversation.flow_data?.price_offer || 0);
 
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `❌ **Price Offer Rejected**\n\nInfluencer has rejected your negotiated price offer. The chat is now closed.`,
+            message: `❌ **Price Rejected**\n\nInfluencer has rejected the price offer of ₹${rejectedPrice}. The collaboration will not proceed.${data.rejection_reason ? `\n\nReason: ${data.rejection_reason}` : ''}`,
             message_type: "automated",
             action_required: false,
           };
 
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Negotiated Price Rejected**\n\nYou have rejected the negotiated price offer.`,
-            message_type: "audit",
-            action_required: false,
-          };
+          // Update conversation to closed state
+            await supabaseAdmin
+              .from("conversations")
+              .update({
+              flow_state: "price_rejected",
+              chat_status: "closed"
+            })
+            .eq("id", conversationId);
           break;
 
-        case "continue_negotiate":
-          // Influencer wants to continue negotiating
-          newFlowState = "brand_owner_negotiation";
+        case "send_counter_offer":
+          // Legacy alias -> treat as negotiated price send
+          action = "send_negotiated_price";
+          // fallthrough
+
+        case "send_negotiated_price":
+          // Influencer proposes a negotiated price
+          newFlowState = "brand_owner_negotiation_review";
           newAwaitingRole = "brand_owner";
+
+          const negotiatedPrice = data.price ? parseFloat(data.price) : null;
+          if (!negotiatedPrice || negotiatedPrice <= 0) {
+            throw new Error("Valid negotiated price is required");
+          }
+
+          // Append to negotiation history
+          const negHist = Array.isArray(conversation.negotiation_history) ? conversation.negotiation_history : [];
+          negHist.push({ event: "negotiated_price_submitted", by: "influencer", price: negotiatedPrice, at: new Date().toISOString() });
+
+              await supabaseAdmin
+                .from("conversations")
+            .update({ negotiation_history: negHist, flow_data: { ...(conversation.flow_data || {}), negotiated_price: negotiatedPrice } })
+                .eq("id", conversationId);
+
+          const negotiatedBreakdown = await this.calculatePaymentBreakdown(negotiatedPrice);
 
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `🤝 **Continued Negotiation Request**\n\nInfluencer wants to continue negotiating the price. Please respond to this request.`,
+            message: `💬 **Negotiated Price Proposed: ₹${negotiatedPrice}**\n\nPlease review and accept or reject.`,
             message_type: "automated",
             action_required: true,
             action_data: {
-              title: "🎯 **Negotiation Response**",
-              subtitle:
-                "Choose how you'd like to respond to the continued negotiation request:",
+              title: "💬 Review Negotiated Price",
+              subtitle: `Proposed: ₹${negotiatedPrice}`,
+              payment_breakdown: {
+                total_amount: negotiatedBreakdown.total_amount_paise,
+                commission_amount: negotiatedBreakdown.commission_amount_paise,
+                commission_percentage: negotiatedBreakdown.commission_percentage,
+                net_amount: negotiatedBreakdown.net_amount_paise,
+                advance_amount: negotiatedBreakdown.advance_amount_paise,
+                final_amount: negotiatedBreakdown.final_amount_paise,
+                display: negotiatedBreakdown.display
+              },
               buttons: [
-                {
-                  id: "agree_negotiation",
-                  text: "Agree to Negotiate",
-                  style: "success",
-                  action: "handle_negotiation",
-                  data: { action: "agree" },
-                },
-                {
-                  id: "reject_negotiation",
-                  text: "Reject Negotiation",
-                  style: "danger",
-                  action: "handle_negotiation",
-                  data: { action: "reject" },
-                },
+                { id: "accept_negotiated_price", text: "Accept Negotiated Price", style: "success", action: "accept_negotiated_price", data: { price: negotiatedPrice } },
+                { id: "reject_negotiated_price", text: "Reject Negotiated Price", style: "danger", action: "reject_negotiated_price", data: { price: negotiatedPrice } }
               ],
-              flow_state: "brand_owner_negotiation",
-              message_type: "brand_owner_negotiation_response",
-              visible_to: "brand_owner",
-            },
-          };
-
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Continued Negotiation Requested**\n\nYou have requested to continue negotiating the price.`,
-            message_type: "audit",
-            action_required: false,
+              flow_state: "brand_owner_negotiation_review",
+              message_type: "brand_owner_negotiation_review",
+              visible_to: "brand_owner"
+            }
           };
           break;
 
         case "submit_work":
         case "resubmit_work":
-          // Influencer submits work (initial or resubmission after revision)
-          const isResubmission = action === "resubmit_work";
-          const currentRevisionCount = conversation.flow_data?.revision_count || 0;
-          const maxRevisions = conversation.flow_data?.max_revisions || 3;
-          
+          // Influencer submits work
           newFlowState = "work_submitted";
           newAwaitingRole = "brand_owner";
-
-          // Prepare work submission data
-          const workSubmissionData = {
-            deliverables: data.deliverables || data.message || "Work submitted",
-            description: data.description || data.message || "Work completed as requested",
-            submission_notes: data.submission_notes || data.notes || "",
-            submitted_at: new Date().toISOString(),
-            attachments: data.attachments || [],
-            revision_number: isResubmission ? currentRevisionCount : 0
-          };
 
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.influencer_id,
             receiver_id: conversation.brand_owner_id,
-            message: `📤 **Work Submitted**${isResubmission ? ` (Revision ${currentRevisionCount})` : ''}\n\n**Description:** ${workSubmissionData.description}\n\n${workSubmissionData.submission_notes ? `**Notes:** ${workSubmissionData.submission_notes}\n\n` : ''}${workSubmissionData.attachments && workSubmissionData.attachments.length > 0 ? `**Attachments:** ${workSubmissionData.attachments.length} file(s)\n\n` : ''}Please review the submitted work and provide your feedback.`,
+            message: `📤 **Work Submitted**\n\nWork has been submitted for review. Please review and provide feedback.`,
             message_type: "automated",
             action_required: true,
-            attachment_metadata: workSubmissionData.attachments && workSubmissionData.attachments.length > 0 ? workSubmissionData.attachments : null,
             action_data: {
-              title: "🎯 **Work Review Required**",
-              subtitle: "Please review the submitted work and provide feedback:",
-              work_submission: workSubmissionData,
-              buttons: (() => {
-                const buttons = [
+              title: "📋 **Work Review Required**",
+              subtitle: "Please review the submitted work and take action.",
+              buttons: [
                   {
                     id: "approve_work",
                     text: "Approve Work",
                     action: "approve_work",
                     style: "success"
-                  }
-                ];
-
-                // Check if this is final revision
-                const isFinalRevision = currentRevisionCount >= (maxRevisions - 1);
-
-                if (isFinalRevision) {
-                  buttons.push({
-                    id: "reject_final_work",
-                    text: "Reject Work (Final)",
-                    action: "reject_final_work",
-                    style: "danger"
-                  });
-                } else {
-                  buttons.push({
+                },
+                {
                     id: "request_revision",
                     text: "Request Revision",
                     action: "request_revision",
                     style: "warning"
-                  });
                 }
-
-                return buttons;
-              })(),
+              ],
               flow_state: "work_submitted",
               message_type: "work_review",
               visible_to: "brand_owner",
             },
           };
 
-          auditMessage = {
-            conversation_id: conversationId,
-            sender_id: SYSTEM_USER_ID,
-            receiver_id: conversation.influencer_id,
-            message: `✅ **Action Taken: Work Submitted**\n\nYou have submitted your work${isResubmission ? ` (Revision ${currentRevisionCount})` : ''} for review.`,
-            message_type: "audit",
-            action_required: false,
-          };
-
-          // Update conversation with work submission data and change chat_status to automated
-          const { error: workUpdateError } = await supabaseAdmin
+          // Update conversation to automated mode
+          await supabaseAdmin
             .from("conversations")
             .update({
-              // Store work submission data in flow_data since work_submission column doesn't exist
-              flow_data: {
-                ...conversation.flow_data,
-                work_submission: workSubmissionData,
-                submission_date: new Date().toISOString(),
-                work_status: "submitted"
-              },
-              chat_status: "automated" // Change from real_time to automated
+              chat_status: "automated"
             })
             .eq("id", conversationId);
-            
-          if (workUpdateError) {
-            throw new Error(`Failed to update conversation: ${workUpdateError.message}`);
-          }
           break;
 
         default:
@@ -2636,141 +1538,22 @@ Please respond to confirm your interest and availability for this campaign.`,
         });
       }
 
-      // Create messages (INFLUENCER ACTION HANDLER)
-      const messagesToCreate = [newMessage];
-      if (auditMessage) {
-        messagesToCreate.push(auditMessage);
-      }
-
-      console.log("🔍 [DEBUG] About to create messages in influencer action:");
-      console.log("  - Messages to create:", messagesToCreate.length);
-      console.log("  - First message:", JSON.stringify(newMessage, null, 2));
-      if (auditMessage) {
-        console.log(
-          "  - Audit message:",
-          JSON.stringify(auditMessage, null, 2)
-        );
-      }
-
-      // Validate message structure before insertion
-      console.log("🔍 [DEBUG] Validating message structure...");
-      messagesToCreate.forEach((msg, index) => {
-        console.log(`  Message ${index + 1}:`);
-        console.log(
-          `    - conversation_id: ${
-            msg.conversation_id
-          } (type: ${typeof msg.conversation_id})`
-        );
-        console.log(
-          `    - sender_id: ${msg.sender_id} (type: ${typeof msg.sender_id})`
-        );
-        console.log(
-          `    - receiver_id: ${
-            msg.receiver_id
-          } (type: ${typeof msg.receiver_id})`
-        );
-        console.log(`    - message: ${msg.message?.substring(0, 50)}...`);
-        console.log(
-          `    - message_type: ${
-            msg.message_type
-          } (type: ${typeof msg.message_type})`
-        );
-        console.log(
-          `    - action_required: ${
-            msg.action_required
-          } (type: ${typeof msg.action_required})`
-        );
-        console.log(
-          `    - action_data: ${msg.action_data ? "present" : "null"}`
-        );
-        console.log(
-          `    - is_automated: ${
-            msg.is_automated
-          } (type: ${typeof msg.is_automated})`
-        );
-        console.log(
-          `    - action_completed: ${
-            msg.action_completed
-          } (type: ${typeof msg.action_completed})`
-        );
-      });
-
-      // Test insert each message individually to identify which one fails
-      console.log("🧪 [DEBUG] Testing individual message insertion...");
-      for (let i = 0; i < messagesToCreate.length; i++) {
-        const msg = messagesToCreate[i];
-        console.log(`  Testing message ${i + 1}...`);
-
-        try {
-          const { data: testResult, error: testError } = await supabaseAdmin
-            .from("messages")
-            .insert(msg)
-            .select();
-
-          if (testError) {
-            console.error(
-              `❌ [DEBUG] Message ${i + 1} failed:`,
-              testError.message
-            );
-            if (testError.message.includes("check constraint")) {
-              console.error(
-                `🔍 [DEBUG] Check constraint violation on message ${i + 1}:`
-              );
-              console.error(`  - message_type: ${msg.message_type}`);
-              console.error(`  - action_required: ${msg.action_required}`);
-              console.error(
-                `  - action_data: ${msg.action_data ? "present" : "null"}`
-              );
-            }
-          } else {
-            console.log(`✅ [DEBUG] Message ${i + 1} test insert successful`);
-            // Clean up test insert
-            await supabaseAdmin
-              .from("messages")
-              .delete()
-              .eq("id", testResult[0].id);
-          }
-        } catch (testErr) {
-          console.error(`❌ [DEBUG] Error testing message ${i + 1}:`, testErr);
-        }
-      }
+      // Create messages
+      const messagesToInsert = [newMessage];
 
       const { data: createdMessages, error: messageError } = await supabaseAdmin
         .from("messages")
-        .insert(messagesToCreate)
+        .insert(messagesToInsert)
         .select();
 
       if (messageError) {
-        console.error(
-          "❌ [DEBUG] Message creation failed in influencer action:"
-        );
-        console.error("  - Error details:", messageError);
-        console.error("  - Error message:", messageError.message);
-        console.error("  - Error code:", messageError.code);
-        console.error("  - Error details:", messageError.details);
-        console.error("  - Error hint:", messageError.hint);
-
-        // Try to identify the specific constraint violation
-        if (messageError.message.includes("check constraint")) {
-          console.error("🔍 [DEBUG] Check constraint violation detected!");
-          console.error(
-            "  - This suggests a field value is not allowed by the constraint"
-          );
-          console.error(
-            "  - Check message_type, action_required, or other constrained fields"
-          );
-        }
-
         throw new Error(`Failed to create messages: ${messageError.message}`);
       }
 
-      console.log(
-        "✅ [DEBUG] Messages created successfully in influencer action:"
-      );
-      console.log("  - Created messages count:", createdMessages?.length || 0);
+      // Emit socket events for new messages
       if (createdMessages && createdMessages.length > 0) {
-        createdMessages.forEach((msg, index) => {
-          console.log(`  Message ${index + 1} ID: ${msg.id}`);
+        createdMessages.forEach(msg => {
+          this.emitAutomatedMessage(conversationId, msg);
         });
       }
 
@@ -2812,7 +1595,6 @@ Please respond to confirm your interest and availability for this campaign.`,
           current_action_data: currentActionData,
         },
         message: createdMessages[0],
-        audit_message: auditMessage ? createdMessages[1] : null,
       };
 
       // Emit WebSocket events for real-time updates
@@ -2833,23 +1615,6 @@ Please respond to confirm your interest and availability for this campaign.`,
             this.io.to(`conversation_${conversationId}`).emit('new_message', {
               conversation_id: conversationId,
               message: result.message,
-              conversation_context: {
-                id: conversationId,
-                chat_status: 'automated',
-                flow_state: newFlowState,
-                awaiting_role: newAwaitingRole,
-                conversation_type: conversation.campaign_id ? 'campaign' : conversation.bid_id ? 'bid' : 'direct',
-                automation_enabled: true,
-                current_action_data: result.conversation.current_action_data
-              }
-            });
-          }
-
-          // Emit audit message if exists
-          if (result.audit_message) {
-            this.io.to(`conversation_${conversationId}`).emit('new_message', {
-              conversation_id: conversationId,
-              message: result.audit_message,
               conversation_context: {
                 id: conversationId,
                 chat_status: 'automated',
@@ -3606,7 +2371,6 @@ Please respond to confirm your interest and availability for this campaign.`,
         success: true,
         conversation: await this.getConversation(conversationId),
         message: message,
-        audit_message: null,
         transaction: txn
       };
     } catch (error) {
@@ -3726,7 +2490,6 @@ Please respond to confirm your interest and availability for this campaign.`,
         success: true,
         conversation: updatedConversation,
         message: message,
-        audit_message: null,
         transaction: txn
       };
     } catch (error) {
@@ -3863,7 +2626,6 @@ Please respond to confirm your interest and availability for this campaign.`,
         success: true,
         conversation: updatedConversation,
         message: message,
-        audit_message: null,
         transaction: txn
       };
     } catch (error) {
@@ -3983,7 +2745,6 @@ Please respond to confirm your interest and availability for this campaign.`,
         success: true,
         conversation: updatedConversation,
         message: message,
-        audit_message: null,
         transaction: txn
       };
     } catch (error) {
@@ -4070,7 +2831,6 @@ Please respond to confirm your interest and availability for this campaign.`,
         success: true,
         conversation: updatedConversation,
         message: message,
-        audit_message: null
       };
     } catch (error) {
       console.error('Error in forceCloseConversation:', error);

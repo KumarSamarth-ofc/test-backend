@@ -1382,50 +1382,9 @@ class CampaignController {
         });
       }
 
-      // Use enhanced balance service to add funds properly
-      console.log("🔍 [DEBUG] Starting wallet fund addition process...");
-      console.log("🔍 [DEBUG] Influencer ID:", conversation.influencer_id);
-      console.log("🔍 [DEBUG] Payment amount (paise):", paymentAmount);
-      console.log("🔍 [DEBUG] Conversation ID:", conversation_id);
-      
+      // Escrow-only at verify-time. Ensure wallet exists; no available credit here.
       const enhancedBalanceService = require('../utils/enhancedBalanceService');
-      
-      // First check if wallet exists
-      console.log("🔍 [DEBUG] Checking if wallet exists for influencer...");
-      const walletCheckResult = await enhancedBalanceService.getWalletBalance(conversation.influencer_id);
-      console.log("🔍 [DEBUG] Wallet check result:", walletCheckResult);
-      
-      const addFundsResult = await enhancedBalanceService.addFunds(
-        conversation.influencer_id,
-        paymentAmount,
-        {
-          conversation_id: conversation_id,
-          razorpay_order_id: razorpay_order_id,
-          razorpay_payment_id: razorpay_payment_id,
-          conversation_type: conversation.campaign_id ? "campaign" : "bid",
-          brand_owner_id: conversation.brand_owner_id,
-          bid_id: conversation.bid_id,
-          campaign_id: conversation.campaign_id,
-          notes: `Payment received for ${conversation.campaign_id ? 'campaign' : 'bid'} collaboration`
-        }
-      );
-
-      console.log("🔍 [DEBUG] Enhanced balance service result:", addFundsResult);
-
-      if (!addFundsResult.success) {
-        console.error("❌ [DEBUG] Enhanced balance service error:", addFundsResult.error);
-        console.error("❌ [DEBUG] Full error details:", JSON.stringify(addFundsResult, null, 2));
-        return res.status(500).json({
-          success: false,
-          message: "Failed to add funds to wallet",
-          debug: {
-            error: addFundsResult.error,
-            influencer_id: conversation.influencer_id,
-            payment_amount: paymentAmount,
-            conversation_id: conversation_id
-          }
-        });
-      }
+      await enhancedBalanceService.getWalletBalance(conversation.influencer_id);
 
       console.log("✅ [DEBUG] Enhanced balance service: Funds added successfully");
 
@@ -1549,8 +1508,33 @@ class CampaignController {
         return res.status(500).json({ success: false, message: "Failed to update conversation" });
       }
 
-      // Transaction records are already created by enhancedBalanceService.addFunds()
-      // and enhancedBalanceService.freezeFunds() calls above
+      // Realtime emits (final contract)
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`room:${conversation_id}`).emit('conversation_state_changed', {
+          conversation_id: conversation_id,
+          flow_state: 'payment_completed',
+          awaiting_role: 'influencer',
+          chat_status: 'real_time',
+          current_action_data: {},
+          updated_at: new Date().toISOString()
+        });
+
+        io.to(`user_${conversation.brand_owner_id}`).emit('conversation_list_updated', {
+          conversation_id: conversation_id,
+          action: 'state_changed',
+          flow_state: 'payment_completed',
+          chat_status: 'real_time',
+          timestamp: new Date().toISOString()
+        });
+        io.to(`user_${conversation.influencer_id}`).emit('conversation_list_updated', {
+          conversation_id: conversation_id,
+          action: 'state_changed',
+          flow_state: 'payment_completed',
+          chat_status: 'real_time',
+          timestamp: new Date().toISOString()
+        });
+      }
 
       // Send FCM notification for payment completion
       const fcmService = require('../services/fcmService');
@@ -1565,7 +1549,6 @@ class CampaignController {
         success: true,
         message: "Payment verified successfully",
         payment_order: paymentOrder,
-        transaction: transaction,
         escrow_hold: escrowHold,
         conversation: {
           id: conversation_id,

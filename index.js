@@ -366,6 +366,131 @@ app.post("/api/test-socket-notification-all", async (req, res) => {
   }
 });
 
+// Debug: Direct message send via REST (mirrors socket chat:send)
+app.post("/api/debug/direct-send", async (req, res) => {
+  try {
+    const { conversationId, senderId, text = '', attachments = null, metadata = null } = req.body;
+    if (!conversationId || !senderId) {
+      return res.status(400).json({ success: false, error: "conversationId and senderId are required" });
+    }
+
+    const { supabaseAdmin } = require('./supabase/client');
+    const { data: conversation, error: convError } = await supabaseAdmin
+      .from('conversations')
+      .select('id, brand_owner_id, influencer_id, campaign_id, bid_id, chat_status, flow_state')
+      .eq('id', conversationId)
+      .single();
+
+    if (convError || !conversation) {
+      return res.status(404).json({ success: false, error: 'Conversation not found', details: convError || null, conversationId });
+    }
+
+    const isDirect = !conversation.campaign_id && !conversation.bid_id;
+    if (!isDirect && conversation.chat_status !== 'real_time' && conversation.flow_state !== 'real_time') {
+      return res.status(409).json({ success: false, error: 'Automated mode for this conversation' });
+    }
+
+    const receiverId = conversation.brand_owner_id === senderId
+      ? conversation.influencer_id
+      : conversation.brand_owner_id;
+
+    const messageData = {
+      conversation_id: conversationId,
+      sender_id: senderId,
+      receiver_id: receiverId,
+      message: text,
+      message_type: 'user_input',
+      attachment_metadata: attachments || metadata || null,
+      seen: false,
+      updated_at: new Date().toISOString()
+    };
+
+    const { data: savedMessage, error: saveError } = await supabaseAdmin
+      .from('messages')
+      .insert(messageData)
+      .select()
+      .single();
+
+    if (saveError) {
+      console.error('❌ [DEBUG] direct-send save error:', saveError);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to save message',
+        details: {
+          message: saveError.message || null,
+          code: saveError.code || null,
+          hint: saveError.hint || null,
+          details: saveError.details || null
+        },
+        payload: messageData
+      });
+    }
+
+    const io = app.get('io');
+    if (io) {
+      console.log(`💾 [DEBUG] direct-send saved ${savedMessage.id} -> emitting to room:${conversationId}`);
+      io.to(`user_${senderId}`).emit('conversation_list_updated', {
+        conversation_id: conversationId,
+        message: savedMessage,
+        action: 'message_sent'
+      });
+      io.to(`user_${receiverId}`).emit('conversation_list_updated', {
+        conversation_id: conversationId,
+        message: savedMessage,
+        action: 'message_received'
+      });
+      io.to(`room:${conversationId}`).emit('chat:new', { message: savedMessage });
+    }
+
+    return res.json({ success: true, message: savedMessage });
+  } catch (e) {
+    console.error('❌ [DEBUG] direct-send exception:', e);
+    return res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Debug: Check conversation exists in DB (no auth, service role)
+app.get("/api/debug/conversation/:id", async (req, res) => {
+  try {
+    const conversationId = req.params.id;
+    const { supabaseAdmin } = require('./supabase/client');
+    const { data, error } = await supabaseAdmin
+      .from('conversations')
+      .select('id, brand_owner_id, influencer_id, campaign_id, bid_id, chat_status, flow_state, created_at')
+      .eq('id', conversationId)
+      .maybeSingle();
+
+    if (error) {
+      return res.status(500).json({ success: false, error: error.message, conversationId });
+    }
+    if (!data) {
+      return res.status(404).json({ success: false, found: false, conversationId });
+    }
+    return res.json({ success: true, found: true, conversation: data });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Debug: Issue JWT for a user (development only)
+app.get("/api/debug/token/:userId", async (req, res) => {
+  try {
+    const allow = (process.env.ALLOW_DEBUG_TOKEN || 'false').toLowerCase() === 'true';
+    if ((process.env.NODE_ENV || 'development') === 'production' && !allow) {
+      return res.status(403).json({ success: false, error: 'Disabled in production' });
+    }
+    const userId = req.params.userId;
+    const authService = require('./utils/auth');
+    const result = await authService.refreshToken(userId);
+    if (!result.success) {
+      return res.status(404).json({ success: false, error: result.message || 'Failed to issue token' });
+    }
+    return res.json({ success: true, token: result.token });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // Get online users status endpoint
 app.get("/api/online-users", (req, res) => {
   try {
@@ -431,6 +556,10 @@ app.set("io", io);
 // Set socket for automated flow service
 const automatedFlowService = require("./utils/automatedFlowService");
 automatedFlowService.setIO(io);
+
+// Set socket for socket emitter service
+const socketEmitter = require("./services/socketEmitter");
+socketEmitter.setIO(io);
 
 // Set socket for admin payment flow service
 const adminPaymentFlowService = require("./utils/adminPaymentFlowService");
@@ -539,8 +668,8 @@ app.post("/test-message", async (req, res) => {
     };
 
     // Emit to conversation room
-    console.log(`📡 [TEST] Emitting new_message to conversation_${conversationId}`);
-    io.to(`conversation_${conversationId}`).emit("new_message", {
+    console.log(`📡 [TEST] Emitting new_message to room:${conversationId}`);
+    io.to(`room:${conversationId}`).emit("new_message", {
       conversation_id: conversationId,
       message: testMessage,
       conversation_context: conversationContext,
