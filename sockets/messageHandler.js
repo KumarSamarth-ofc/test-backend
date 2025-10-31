@@ -269,47 +269,43 @@ class MessageHandler {
 
                 // Update conversation list for both users with standardized conversations:upsert
                 try {
-                    const { count: unreadForReceiver } = await supabaseAdmin
-                        .from('messages')
-                        .select('id', { count: 'exact', head: true })
-                        .eq('conversation_id', conversationId)
-                        .eq('receiver_id', receiverId)
-                        .eq('seen', false);
+                    const conversationListUtils = require('../utils/conversationListUpdates');
 
-                    const { count: unreadForSender } = await supabaseAdmin
-                        .from('messages')
-                        .select('id', { count: 'exact', head: true })
-                        .eq('conversation_id', conversationId)
-                        .eq('receiver_id', socket.user.id)
-                        .eq('seen', false);
+                    // Fetch full conversation for updated_at timestamp
+                    const { data: fullConversation } = await supabaseAdmin
+                        .from('conversations')
+                        .select('*')
+                        .eq('id', conversationId)
+                        .single();
 
-                    const base = {
-                        conversation_id: conversationId,
-                        last_message: {
-                            id: savedMessage.id,
-                            conversation_id: conversationId,
-                            sender_id: savedMessage.sender_id,
-                            receiver_id: savedMessage.receiver_id,
-                            message: savedMessage.message,
-                            created_at: savedMessage.created_at
-                        },
-                        chat_status: conversation.chat_status || null,
-                        flow_state: conversation.flow_state || null,
-                        awaiting_role: conversation.awaiting_role || null,
-                        updated_at: new Date().toISOString()
-                    };
-
-                    console.log(`➡️ [EMIT] conversations:upsert -> user_${socket.user.id} conv:${conversationId}`);
-                    this.io.to(`user_${socket.user.id}`).emit('conversations:upsert', {
-                        ...base,
-                        unread_count: unreadForSender || 0
+                    // Build and emit for sender
+                    const senderPayload = await conversationListUtils.buildConversationsUpsertPayload({
+                        conversationId,
+                        currentUserId: socket.user.id,
+                        lastMessage: savedMessage,
+                        conversation: fullConversation || conversation
                     });
+                    conversationListUtils.emitConversationsUpsert(this.io, socket.user.id, senderPayload);
 
-                    console.log(`➡️ [EMIT] conversations:upsert -> user_${receiverId} conv:${conversationId}`);
-                    this.io.to(`user_${receiverId}`).emit('conversations:upsert', {
-                        ...base,
-                        unread_count: unreadForReceiver || 0
+                    // Build and emit for receiver (increment unread count)
+                    const receiverPayload = await conversationListUtils.buildConversationsUpsertPayload({
+                        conversationId,
+                        currentUserId: receiverId,
+                        lastMessage: savedMessage,
+                        conversation: fullConversation || conversation
                     });
+                    conversationListUtils.emitConversationsUpsert(this.io, receiverId, receiverPayload);
+
+                    // Also emit unread_count_updated for receiver
+                    if (receiverPayload.unread_count > 0) {
+                        conversationListUtils.emitUnreadCountUpdated(
+                            this.io,
+                            receiverId,
+                            conversationId,
+                            receiverPayload.unread_count,
+                            'increment'
+                        );
+                    }
                 } catch (e) {
                     console.warn('conversation_list_updated summary emit failed:', e.message);
                 }

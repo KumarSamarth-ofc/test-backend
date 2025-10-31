@@ -606,46 +606,53 @@ class MessageController {
 
         // Compute conversation summary and emit conversations:upsert to both users
         try {
-          const { data: unreadForReceiver } = await supabaseAdmin
-            .from('messages')
-            .select('id', { count: 'exact', head: true })
-            .eq('conversation_id', conversationId)
-            .eq('receiver_id', receiverId)
-            .eq('seen', false);
+          const conversationListUtils = require('../utils/conversationListUpdates');
 
-          const { data: unreadForSender } = await supabaseAdmin
-            .from('messages')
-            .select('id', { count: 'exact', head: true })
-            .eq('conversation_id', conversationId)
-            .eq('receiver_id', senderId)
-            .eq('seen', false);
+          // Fetch full conversation for updated_at and other fields
+          const { data: fullConversation } = await supabaseAdmin
+            .from('conversations')
+            .select('*')
+            .eq('id', conversationId)
+            .single();
 
-          const base = {
-            conversation_id: conversationId,
-            last_message: {
-              id: newMessage.id,
-              conversation_id: conversationId,
-              sender_id: newMessage.sender_id,
-              receiver_id: newMessage.receiver_id,
-              message: newMessage.message,
-              created_at: newMessage.created_at,
-            },
-            chat_status: conversationContext?.chat_status || null,
-            flow_state: conversationContext?.flow_state || null,
-            awaiting_role: conversationContext?.awaiting_role || null,
+          const convData = fullConversation || {
+            id: conversationId,
+            chat_status: conversationContext?.chat_status,
+            flow_state: conversationContext?.flow_state,
+            awaiting_role: conversationContext?.awaiting_role,
             updated_at: new Date().toISOString()
           };
 
-          io.to(`user_${receiverId}`).emit('conversations:upsert', {
-            ...base,
-            unread_count: unreadForReceiver || 0
+          // Build and emit for receiver
+          const receiverPayload = await conversationListUtils.buildConversationsUpsertPayload({
+            conversationId,
+            currentUserId: receiverId,
+            lastMessage: newMessage,
+            conversation: convData
           });
+          conversationListUtils.emitConversationsUpsert(io, receiverId, receiverPayload);
 
-          io.to(`user_${senderId}`).emit('conversations:upsert', {
-            ...base,
-            unread_count: unreadForSender || 0
+          // Build and emit for sender
+          const senderPayload = await conversationListUtils.buildConversationsUpsertPayload({
+            conversationId,
+            currentUserId: senderId,
+            lastMessage: newMessage,
+            conversation: convData
           });
+          conversationListUtils.emitConversationsUpsert(io, senderId, senderPayload);
+
+          // Also emit unread_count_updated for receiver
+          if (receiverPayload.unread_count > 0) {
+            conversationListUtils.emitUnreadCountUpdated(
+              io,
+              receiverId,
+              conversationId,
+              receiverPayload.unread_count,
+              'increment'
+            );
+          }
         } catch (e) {
+          console.warn('conversations:upsert emit failed:', e.message);
         }
       } else {
       }
