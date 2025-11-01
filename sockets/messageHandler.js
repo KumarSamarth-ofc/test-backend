@@ -1,5 +1,7 @@
 const { supabaseAdmin } = require('../supabase/client');
 const fcmService = require('../services/fcmService');
+const authService = require('../utils/auth');
+const messageController = require('../controllers/messageController');
 
 class MessageHandler {
     constructor(io) {
@@ -9,28 +11,126 @@ class MessageHandler {
     }
 
     /**
+     * Authenticate socket connection via JWT
+     */
+    async authenticateSocket(socket, token) {
+        try {
+            const result = authService.verifyToken(token);
+            if (!result.success) {
+                return null;
+            }
+            socket.user = result.user;
+            return result.user;
+        } catch (error) {
+            console.error('Socket auth error:', error);
+            return null;
+        }
+    }
+
+    /**
      * Handle socket connection
      */
     handleConnection(socket) {
         console.log(`User connected: ${socket.id}`);
 
-        // Join user to their personal room
-        socket.on('join', (userId) => {
-            socket.join(`user_${userId}`);
-            this.onlineUsers.set(socket.id, userId);
-            console.log(`User ${userId} joined room: user_${userId}`);
+        // Authenticate on connection
+        socket.on('authenticate', async (data) => {
+            const { token } = data;
+            console.log(`🔐 [SOCKET] authenticate received on ${socket.id} tokenLen:${token ? String(token).length : 0}`);
+            const user = await this.authenticateSocket(socket, token);
+            if (user) {
+                socket.user = user;
+                socket.join(`user_${user.id}`);
+                this.onlineUsers.set(socket.id, user.id);
+                socket.emit('authenticated', { userId: user.id });
+                console.log(`✅ User ${user.id} authenticated on socket ${socket.id}`);
+            } else {
+                console.warn(`❌ [SOCKET] authentication failed on ${socket.id}`);
+                socket.emit('auth_error', { message: 'Authentication failed' });
+                socket.disconnect();
+            }
         });
 
-        // Handle joining conversation room
-        socket.on('join_conversation', (conversationId) => {
-            socket.join(`conversation_${conversationId}`);
-            console.log(`User joined conversation: ${conversationId}`);
+        // Simplified: Join conversation room (chat:join)
+        socket.on('chat:join', async ({ conversationId }) => {
+            if (!socket.user) {
+                socket.emit('chat:error', { message: 'Not authenticated' });
+                return;
+            }
+
+            try {
+                // Verify user has access to this conversation
+                const { data: conversation, error } = await supabaseAdmin
+                    .from('conversations')
+                    .select('brand_owner_id, influencer_id')
+                    .eq('id', conversationId)
+                    .single();
+
+                if (error || !conversation) {
+                    socket.emit('chat:error', { message: 'Conversation not found' });
+                    return;
+                }
+
+                if (conversation.brand_owner_id !== socket.user.id && conversation.influencer_id !== socket.user.id) {
+                    socket.emit('chat:error', { message: 'Access denied' });
+                    return;
+                }
+
+                socket.join(`room:${conversationId}`);
+                console.log(`📡 [SOCKET] chat:join room:${conversationId} by user:${socket.user.id} sock:${socket.id}`);
+                socket.emit('chat:joined', { conversationId });
+            } catch (error) {
+                socket.emit('chat:error', { message: error.message });
+            }
         });
 
-        // Handle leaving conversation room
-        socket.on('leave_conversation', (conversationId) => {
-            socket.leave(`conversation_${conversationId}`);
-            console.log(`User left conversation: ${conversationId}`);
+        // Simplified: Leave conversation room (chat:leave)
+        socket.on('chat:leave', ({ conversationId }) => {
+            socket.leave(`room:${conversationId}`);
+            console.log(`📡 [SOCKET] chat:leave room:${conversationId} by user:${socket.user?.id} sock:${socket.id}`);
+        });
+
+        // Join work room for campaign updates (work:join)
+        socket.on('work:join', async ({ campaignId }) => {
+            if (!socket.user) {
+                socket.emit('work:error', { message: 'Not authenticated' });
+                return;
+            }
+
+            try {
+                // Verify user has access (brand owner or influencer)
+                const { data: campaign, error } = await supabaseAdmin
+                    .from('campaigns')
+                    .select('created_by')
+                    .eq('id', campaignId)
+                    .single();
+
+                const { data: request } = await supabaseAdmin
+                    .from('requests')
+                    .select('influencer_id')
+                    .eq('campaign_id', campaignId)
+                    .eq('influencer_id', socket.user.id)
+                    .maybeSingle();
+
+                if (!campaign && error) {
+                    socket.emit('work:error', { message: 'Campaign not found' });
+                    return;
+                }
+
+                if (campaign.created_by !== socket.user.id && !request) {
+                    socket.emit('work:error', { message: 'Access denied' });
+                    return;
+                }
+
+                socket.join(`room:work:${campaignId}`);
+                console.log(`✅ User ${socket.user.id} joined work room:${campaignId}`);
+            } catch (error) {
+                socket.emit('work:error', { message: error.message });
+            }
+        });
+
+        socket.on('work:leave', ({ campaignId }) => {
+            socket.leave(`room:work:${campaignId}`);
         });
 
         // Handle typing indicator
@@ -38,11 +138,11 @@ class MessageHandler {
             const { conversationId, userId } = data;
             this.typingUsers.set(`${conversationId}_${userId}`, true);
             
-            // Emit to conversation room
-            socket.to(`conversation_${conversationId}`).emit('user_typing', {
-                conversationId,
-                userId,
-                isTyping: true
+            // Emit to conversation room (spec schema)
+            socket.to(`room:${conversationId}`).emit('user_typing', {
+                conversation_id: conversationId,
+                user_id: userId,
+                is_typing: true
             });
 
             // Emit to global update rooms for chat list
@@ -58,11 +158,11 @@ class MessageHandler {
             const { conversationId, userId } = data;
             this.typingUsers.delete(`${conversationId}_${userId}`);
             
-            // Emit to conversation room
-            socket.to(`conversation_${conversationId}`).emit('user_typing', {
-                conversationId,
-                userId,
-                isTyping: false
+            // Emit to conversation room (spec schema)
+            socket.to(`room:${conversationId}`).emit('user_typing', {
+                conversation_id: conversationId,
+                user_id: userId,
+                is_typing: false
             });
 
             // Emit to global update rooms for chat list
@@ -74,76 +174,152 @@ class MessageHandler {
             });
         });
 
-        // Handle sending message
-        socket.on('send_message', async (data) => {
-            try {
-                const { conversationId, senderId, receiverId, message, mediaUrl, attachmentMetadata } = data;
-                console.log("🔍 [DEBUG] Socket send_message received:", { conversationId, senderId, receiverId, hasAttachment: !!mediaUrl });
+        // Simplified: Send message (chat:send)
+        socket.on('chat:send', async (data) => {
+            if (!socket.user) {
+                socket.emit('chat:error', { message: 'Not authenticated' });
+                return;
+            }
 
-                // Get conversation context first
+            try {
+                const { tempId, conversationId, text, attachments, metadata, clientNonce } = data;
+
+                // Check if conversation allows realtime chat
                 const { data: conversation, error: convError } = await supabaseAdmin
                     .from('conversations')
-                    .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data')
+                    .select('id, chat_status, flow_state, brand_owner_id, influencer_id, campaign_id, bid_id')
                     .eq('id', conversationId)
                     .single();
 
-                if (convError) {
-                    console.error("❌ [DEBUG] Failed to fetch conversation context:", convError);
-                    socket.emit('message_error', { error: 'Failed to fetch conversation context' });
+                if (convError || !conversation) {
+                    socket.emit('chat:error', { message: 'Conversation not found', tempId });
                     return;
                 }
 
-                // Prepare message data
-                const messageData = {
-                    conversation_id: conversationId,
-                    sender_id: senderId,
-                    receiver_id: receiverId,
-                    message: message,
-                    media_url: mediaUrl
-                };
-
-                // Add attachment metadata if present
-                if (attachmentMetadata) {
-                    messageData.attachment_metadata = attachmentMetadata;
+                // Allow direct conversations to always send; restrict others to real_time
+                const isDirectConversation = !conversation.campaign_id && !conversation.bid_id;
+                if (!isDirectConversation && conversation.chat_status !== 'real_time' && conversation.flow_state !== 'real_time') {
+                    console.log(`🚫 [CHAT] Blocked chat:send in automated mode conv:${conversationId} sender:${socket.user.id}`);
+                    socket.emit('chat:error', { 
+                        message: 'Chat is in automated mode. Use action buttons to respond.', 
+                        tempId 
+                    });
+                    return;
                 }
 
-                // Save message to database
-                const { data: savedMessage, error } = await supabaseAdmin
+                // Determine receiver
+                const receiverId = conversation.brand_owner_id === socket.user.id 
+                    ? conversation.influencer_id 
+                    : conversation.brand_owner_id;
+
+                // Persist message (idempotency via clientNonce if provided)
+                const messageData = {
+                    conversation_id: conversationId,
+                    sender_id: socket.user.id,
+                    receiver_id: receiverId,
+                    message: text || '',
+                    message_type: 'user_input',
+                    attachment_metadata: attachments || metadata || null
+                };
+
+                // If clientNonce provided, check for duplicates
+                if (clientNonce) {
+                    const { data: existing } = await supabaseAdmin
+                        .from('messages')
+                        .select('id')
+                        .eq('conversation_id', conversationId)
+                        .eq('sender_id', socket.user.id)
+                        .contains('attachment_metadata', { clientNonce })
+                        .maybeSingle();
+
+                    if (existing) {
+                        // Duplicate detected, return existing message
+                        const { data: msg } = await supabaseAdmin
+                            .from('messages')
+                            .select('*')
+                            .eq('id', existing.id)
+                            .single();
+                        
+                        socket.emit('chat:ack', { tempId, message: msg });
+                        return;
+                    }
+                }
+
+                const { data: savedMessage, error: saveError } = await supabaseAdmin
                     .from('messages')
                     .insert(messageData)
                     .select()
                     .single();
 
-                if (error) {
-                    console.error("❌ [DEBUG] Failed to save message via socket:", error);
-                    socket.emit('message_error', { error: 'Failed to save message' });
+                if (saveError) {
+                    socket.emit('chat:error', { message: 'Failed to save message', tempId });
                     return;
                 }
 
-                console.log("✅ [DEBUG] Message saved via socket, emitting events");
+                // Debug: saved and emit sequence
+                console.log(`💾 [CHAT] saved message ${savedMessage.id} conv:${conversationId} sender:${socket.user.id} -> receiver:${receiverId}`);
 
-                // Prepare conversation context
-                const conversationContext = {
-                    id: conversation.id,
-                    chat_status: conversation.chat_status,
-                    flow_state: conversation.flow_state,
-                    awaiting_role: conversation.awaiting_role,
-                    conversation_type: conversation.campaign_id ? 'campaign' : 
-                                      conversation.bid_id ? 'bid' : 'direct',
-                    automation_enabled: conversation.automation_enabled || false,
-                    current_action_data: conversation.current_action_data
-                };
+                // Emit ack to sender
+                console.log(`➡️ [EMIT] chat:ack -> sock:${socket.id} tempId:${tempId} msg:${savedMessage.id}`);
+                socket.emit('chat:ack', { tempId, message: savedMessage });
 
-                // Fetch sender's name for notifications
+                // Broadcast to room: chat:new with { message }
+                console.log(`➡️ [EMIT] chat:new -> room:${conversationId} msg:${savedMessage.id}`);
+                this.io.to(`room:${conversationId}`).emit('chat:new', { message: savedMessage });
+
+                // Update conversation list for both users with standardized conversations:upsert
+                try {
+                    const conversationListUtils = require('../utils/conversationListUpdates');
+
+                    // Fetch full conversation for updated_at timestamp
+                    const { data: fullConversation } = await supabaseAdmin
+                        .from('conversations')
+                        .select('*')
+                        .eq('id', conversationId)
+                        .single();
+
+                    // Build and emit for sender
+                    const senderPayload = await conversationListUtils.buildConversationsUpsertPayload({
+                        conversationId,
+                        currentUserId: socket.user.id,
+                        lastMessage: savedMessage,
+                        conversation: fullConversation || conversation
+                    });
+                    conversationListUtils.emitConversationsUpsert(this.io, socket.user.id, senderPayload);
+
+                    // Build and emit for receiver (increment unread count)
+                    const receiverPayload = await conversationListUtils.buildConversationsUpsertPayload({
+                        conversationId,
+                        currentUserId: receiverId,
+                        lastMessage: savedMessage,
+                        conversation: fullConversation || conversation
+                    });
+                    conversationListUtils.emitConversationsUpsert(this.io, receiverId, receiverPayload);
+
+                    // Also emit unread_count_updated for receiver
+                    if (receiverPayload.unread_count > 0) {
+                        conversationListUtils.emitUnreadCountUpdated(
+                            this.io,
+                            receiverId,
+                            conversationId,
+                            receiverPayload.unread_count,
+                            'increment'
+                        );
+                    }
+                } catch (e) {
+                    console.warn('conversation_list_updated summary emit failed:', e.message);
+                }
+
+                // Fetch sender's name for notification
                 let senderName = 'Someone';
                 try {
                     const { data: sender, error: senderError } = await supabaseAdmin
                         .from('users')
                         .select('name')
-                        .eq('id', senderId)
+                        .eq('id', socket.user.id)
                         .eq('is_deleted', false)
                         .single();
-
+                    
                     if (!senderError && sender && sender.name) {
                         senderName = sender.name;
                     }
@@ -151,17 +327,6 @@ class MessageHandler {
                     console.warn('⚠️ Could not fetch sender name for socket notification:', error.message);
                 }
 
-                // Emit message to conversation room with context
-                console.log(`📡 [DEBUG] Socket emitting new_message to conversation_${conversationId}`);
-                this.io.to(`conversation_${conversationId}`).emit('new_message', {
-                    conversation_id: conversationId,
-                    message: savedMessage,
-                    conversation_context: conversationContext
-                });
-
-                // Store notification in database and emit to receiver
-                console.log(`📡 [DEBUG] Storing and emitting notification to user_${receiverId}`);
-                
                 // Store notification in database
                 const notificationService = require('../services/notificationService');
                 notificationService.storeNotification({
@@ -170,101 +335,38 @@ class MessageHandler {
                     title: `${senderName} sent you a message`,
                     message: savedMessage.message,
                     data: {
-                        conversation_context: conversationContext,
-                        payload: { 
-                            conversation_id: conversationId, 
-                            message_id: savedMessage.id, 
-                            sender_id: senderId 
-                        },
-                        conversation_id: conversationId,
-                        message: savedMessage,
-                        sender_id: senderId,
-                        receiver_id: receiverId
+                    conversation_id: conversationId,
+                    message: savedMessage,
+                        sender_id: socket.user.id,
+                        receiver_id: receiverId,
+                        sender_name: senderName
                     },
                     action_url: `/conversations/${conversationId}`
-                }).then(result => {
-                    if (result.success) {
-                        console.log(`✅ Notification stored successfully: ${result.notification.id}`);
-                    } else {
-                        console.error(`❌ Failed to store notification:`, result.error);
-                    }
-                }).catch(error => {
-                    console.error(`❌ Error storing notification:`, error);
+                }, this.io).catch(error => {
+                    console.error('❌ Error storing socket message notification:', error);
                 });
 
-                // Emit notification to receiver with context
-                this.io.to(`user_${receiverId}`).emit('notification', {
-                    type: 'message',
-                    data: {
-                        id: savedMessage.id,
-                        title: `${senderName} sent you a message`,
-                        body: savedMessage.message,
-                        created_at: savedMessage.created_at,
-                        conversation_context: conversationContext,
-                        payload: { 
-                            conversation_id: conversationId, 
-                            message_id: savedMessage.id, 
-                            sender_id: senderId 
-                        },
-                        conversation_id: conversationId,
-                        message: savedMessage,
-                        sender_id: senderId,
-                        receiver_id: receiverId
-                    }
-                });
-
-                // Send FCM push notification
+                // Send FCM notification only if user is not actively viewing conversation
                 fcmService.sendMessageNotification(
                     conversationId,
                     savedMessage,
-                    senderId,
-                    receiverId
+                    socket.user.id,
+                    receiverId,
+                    this.io  // Pass io to check if user is in conversation room
                 ).then(result => {
-                    if (result.success) {
-                        console.log(`✅ FCM notification sent: ${result.sent} successful, ${result.failed} failed`);
-                    } else {
-                        console.error(`❌ FCM notification failed:`, result.error);
+                    if (result.success && !result.skipped) {
+                        console.log(`✅ FCM notification sent: ${result.sent} successful`);
+                    } else if (result.skipped) {
+                        console.log(`ℹ️ [FCM] Skipped - user is viewing conversation`);
                     }
-                }).catch(error => {
-                    console.error(`❌ FCM notification error:`, error);
-                });
-
-                // Emit conversation list update to both users
-                console.log(`📡 [DEBUG] Socket emitting conversation_list_updated to both users`);
-                this.io.to(`user_${senderId}`).emit('conversation_list_updated', {
-                    conversation_id: conversationId,
-                    message: savedMessage,
-                    conversation_context: conversationContext,
-                    action: 'message_sent'
-                });
-                
-                this.io.to(`user_${receiverId}`).emit('conversation_list_updated', {
-                    conversation_id: conversationId,
-                    message: savedMessage,
-                    conversation_context: conversationContext,
-                    action: 'message_received'
-                });
-
-                // Emit unread count update to receiver
-                console.log(`📡 [DEBUG] Socket emitting unread_count_updated to user_${receiverId}`);
-                this.io.to(`user_${receiverId}`).emit('unread_count_updated', {
-                    conversation_id: conversationId,
-                    unread_count: 1, // Increment by 1
-                    action: 'increment'
-                });
-
-                // Stop typing indicator
-                this.typingUsers.delete(`${conversationId}_${senderId}`);
-                socket.to(`conversation_${conversationId}`).emit('user_typing', {
-                    conversationId,
-                    userId: senderId,
-                    isTyping: false
-                });
+                }).catch(err => console.error('FCM error:', err));
 
             } catch (error) {
-                socket.emit('message_error', { error: error.message });
+                console.error('chat:send error:', error);
+                socket.emit('chat:error', { message: error.message, tempId: data.tempId });
             }
         });
+
 
         // Handle joining bid/campaign room for real-time updates
         socket.on('join_bid_room', (bidId) => {
@@ -329,54 +431,93 @@ class MessageHandler {
             console.log(`User left global notifications: ${userId}`);
         });
 
-        // Handle message seen
-        socket.on('mark_seen', async (data) => {
-            try {
-                const { messageId, userId, conversationId } = data;
-
-                if (!messageId || !userId || !conversationId) {
-                    socket.emit('seen_error', { error: 'Missing required fields: messageId, userId, conversationId' });
-                    return;
-                }
-
-                // Update message seen status
-                const { error } = await supabaseAdmin
-                    .from('messages')
-                    .update({ seen: true })
-                    .eq('id', messageId);
-
-                if (error) {
-                    socket.emit('seen_error', { error: 'Failed to mark message as seen' });
-                    return;
-                }
-
-                // Emit seen status to conversation room
-                this.io.to(`conversation_${conversationId}`).emit('message_seen', {
-                    messageId,
-                    userId,
-                    conversationId,
-                    timestamp: new Date().toISOString()
-                });
-
-                // Emit to global update rooms for real-time chat list updates
-                this.io.to(`global_${userId}`).emit('message_seen_update', {
-                    messageId,
-                    conversationId,
-                    timestamp: new Date().toISOString()
-                });
-
-                console.log(`✅ Message ${messageId} marked as seen by user ${userId}`);
-
-            } catch (error) {
-                console.error('❌ Error marking message as seen:', error);
-                socket.emit('seen_error', { error: error.message });
+        // Simplified: Mark messages as read (chat:read)
+        socket.on('chat:read', async (data) => {
+            if (!socket.user) {
+                socket.emit('chat:error', { message: 'Not authenticated' });
+                return;
             }
-        });
+
+            try {
+                const { conversationId, messageIds, upToMessageId } = data;
+                console.log(`👁️ [READ] chat:read conv:${conversationId} upTo:${upToMessageId || 'n/a'} ids:${Array.isArray(messageIds) ? messageIds.length : 0} by user:${socket.user.id}`);
+
+                if (!conversationId) {
+                    socket.emit('chat:error', { message: 'conversationId required' });
+                    return;
+                }
+
+                // Verify access
+                const { data: conversation } = await supabaseAdmin
+                    .from('conversations')
+                    .select('brand_owner_id, influencer_id')
+                    .eq('id', conversationId)
+                    .single();
+
+                if (!conversation || 
+                    (conversation.brand_owner_id !== socket.user.id && 
+                     conversation.influencer_id !== socket.user.id)) {
+                    socket.emit('chat:error', { message: 'Access denied' });
+                    return;
+                }
+
+                // If upToMessageId provided, mark all messages up to that ID as read
+                if (upToMessageId) {
+                    // Get the timestamp of the target message
+                    const { data: targetMsg } = await supabaseAdmin
+                        .from('messages')
+                        .select('created_at')
+                        .eq('id', upToMessageId)
+                        .single();
+
+                    if (targetMsg) {
+                        const { error } = await supabaseAdmin
+                            .from('messages')
+                            .update({ seen: true })
+                            .eq('conversation_id', conversationId)
+                            .eq('receiver_id', socket.user.id)
+                            .lte('created_at', targetMsg.created_at);
+
+                    if (!error) {
+                        console.log(`➡️ [EMIT] chat:read -> room:${conversationId} upTo:${upToMessageId} reader:${socket.user.id}`);
+                        this.io.to(`room:${conversationId}`).emit('chat:read', {
+                            conversation_id: conversationId,
+                            messageIds: [],
+                            upToMessageId,
+                            readerId: socket.user.id,
+                            readAt: new Date().toISOString()
+                        });
+                    }
+                } else if (messageIds && messageIds.length > 0) {
+                    // Mark specific messages as read
+                    const { error } = await supabaseAdmin
+                        .from('messages')
+                        .update({ seen: true })
+                        .in('id', messageIds)
+                        .eq('conversation_id', conversationId)
+                        .eq('receiver_id', socket.user.id);
+
+                    if (!error) {
+                        console.log(`➡️ [EMIT] chat:read -> room:${conversationId} ids:${messageIds.length} reader:${socket.user.id}`);
+                        this.io.to(`room:${conversationId}`).emit('chat:read', {
+                            conversation_id: conversationId,
+                            messageIds,
+                            readerId: socket.user.id,
+                            readAt: new Date().toISOString()
+                        });
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('chat:read error:', error);
+            socket.emit('chat:error', { message: error.message, conversationId, messageIds, upToMessageId });
+        }
+    });
 
         // Handle attachment upload progress
         socket.on('attachment_upload_progress', (data) => {
             const { conversationId, progress, fileName } = data;
-            socket.to(`conversation_${conversationId}`).emit('attachment_upload_progress', {
+            socket.to(`room:${conversationId}`).emit('attachment_upload_progress', {
                 conversationId,
                 progress,
                 fileName,
@@ -387,7 +528,7 @@ class MessageHandler {
         // Handle attachment upload complete
         socket.on('attachment_upload_complete', (data) => {
             const { conversationId, attachment, fileName } = data;
-            socket.to(`conversation_${conversationId}`).emit('attachment_upload_complete', {
+            socket.to(`room:${conversationId}`).emit('attachment_upload_complete', {
                 conversationId,
                 attachment,
                 fileName,
@@ -398,7 +539,7 @@ class MessageHandler {
         // Handle attachment upload error
         socket.on('attachment_upload_error', (data) => {
             const { conversationId, error, fileName } = data;
-            socket.to(`conversation_${conversationId}`).emit('attachment_upload_error', {
+            socket.to(`room:${conversationId}`).emit('attachment_upload_error', {
                 conversationId,
                 error,
                 fileName,
@@ -502,7 +643,7 @@ class MessageHandler {
      * Emit conversation state change event
      */
     emitConversationStateChange(conversationId, stateChange) {
-        this.io.to(`conversation_${conversationId}`).emit('conversation_state_changed', {
+    this.io.to(`room:${conversationId}`).emit('conversation_state_changed', {
             conversation_id: conversationId,
             previous_state: stateChange.from,
             new_state: stateChange.to,
@@ -518,7 +659,7 @@ class MessageHandler {
         try {
             const { data: conversation, error } = await supabaseAdmin
                 .from('conversations')
-                .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data')
+                    .select('id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data')
                 .eq('id', conversationId)
                 .single();
 
@@ -534,7 +675,7 @@ class MessageHandler {
                 awaiting_role: conversation.awaiting_role,
                 conversation_type: conversation.campaign_id ? 'campaign' : 
                                   conversation.bid_id ? 'bid' : 'direct',
-                automation_enabled: conversation.automation_enabled || false,
+                    
                 current_action_data: conversation.current_action_data
             };
         } catch (error) {

@@ -95,9 +95,10 @@ class FCMService {
    */
   async unregisterToken(userId, token) {
     try {
+      // Delete token instead of marking inactive
       const { error } = await supabaseAdmin
         .from('fcm_tokens')
-        .update({ is_active: false })
+        .delete()
         .eq('user_id', userId)
         .eq('token', token);
 
@@ -165,13 +166,7 @@ class FCMService {
           .in('token', results.successful);
       }
 
-      // Deactivate failed tokens
-      if (results.failed.length > 0) {
-        await supabaseAdmin
-          .from('fcm_tokens')
-          .update({ is_active: false })
-          .in('token', results.failed);
-      }
+      // Do not mark tokens inactive automatically; leave as-is
 
       return {
         success: true,
@@ -244,21 +239,23 @@ class FCMService {
           body: notification.body
         },
         android: {
+          // High priority for immediate delivery and banners
           priority: 'high',
           notification: {
             sound: 'default',
             channelId: 'stoory_notifications',
-            priority: 'high',
-            defaultSound: true
+            priority: 'high'
           }
         },
         apns: {
           headers: {
-            'apns-priority': '10',
-            'apns-push-type': 'alert'
+            'apns-priority': '10', // High priority for immediate delivery
+            'apns-push-type': 'alert', // Alert type for banner display
+            'apns-expiration': '0' // No expiration
           },
           payload: {
             aps: {
+              // Use dictionary format for alert to ensure it shows as banner
               alert: {
                 title: notification.title,
                 body: notification.body
@@ -266,8 +263,8 @@ class FCMService {
               sound: 'default',
               badge: notification.badge || 1,
               category: 'MESSAGE_CATEGORY',
-              'mutable-content': 1,
-              'content-available': 1
+              'mutable-content': 1
+              // Do NOT set 'content-available' to avoid silent pushes
             },
             // Add custom data for iOS
             ...notification.data
@@ -277,7 +274,9 @@ class FCMService {
           notification: {
             icon: notification.icon || '/icon-192x192.png',
             badge: '/badge-72x72.png',
-            requireInteraction: true
+            requireInteraction: true,
+            renotify: true,
+            vibrate: [200, 100, 200]
           }
         }
       };
@@ -285,6 +284,7 @@ class FCMService {
       // Send to each token individually since sendMulticast might not be available
       const successful = [];
       const failed = [];
+      const failedDetails = [];
 
       for (let i = 0; i < tokens.length; i++) {
         try {
@@ -296,8 +296,11 @@ class FCMService {
           successful.push(tokens[i]);
           console.log(`✅ Successfully sent to token ${tokens[i].substring(0, 20)}...`);
         } catch (error) {
-          failed.push(tokens[i]);
-          console.error(`❌ Failed to send to token ${tokens[i].substring(0, 20)}...:`, error.message);
+          const token = tokens[i];
+          failed.push(token);
+          const errorCode = error?.code || null;
+          failedDetails.push({ token, errorCode, message: error?.message || 'send failed' });
+          console.error(`❌ Failed to send to token ${token.substring(0, 20)}...:`, error.message, errorCode ? `(${errorCode})` : '');
         }
       }
 
@@ -312,6 +315,7 @@ class FCMService {
         success: true,
         successful,
         failed,
+        failedDetails,
         response
       };
     } catch (error) {
@@ -321,10 +325,49 @@ class FCMService {
   }
 
   /**
-   * Send message notification
+   * Send message notification (only if user is not actively viewing conversation)
    */
-  async sendMessageNotification(conversationId, message, senderId, receiverId) {
+  async sendMessageNotification(conversationId, message, senderId, receiverId, io = null) {
     try {
+      // Check if receiver is actively viewing this conversation
+      // If they're in the room, they'll get socket notification, skip FCM
+      let shouldSkip = false;
+      
+      if (io && io.sockets && io.sockets.adapter) {
+        try {
+          const roomName = `room:${conversationId}`;
+          const userRoom = `user_${receiverId}`;
+          
+          // Get all sockets in the user room
+          const userRoomSockets = io.sockets.adapter.rooms.get(userRoom);
+          
+          if (userRoomSockets && userRoomSockets.size > 0) {
+            // Check if any of user's sockets are in the conversation room
+            const conversationRoom = io.sockets.adapter.rooms.get(roomName);
+            
+            if (conversationRoom && conversationRoom.size > 0) {
+              // Check if any of user's sockets are in the conversation room
+              for (const socketId of userRoomSockets) {
+                if (conversationRoom.has(socketId)) {
+                  console.log(`ℹ️ [FCM] User ${receiverId} is viewing conversation ${conversationId}, skipping FCM`);
+                  shouldSkip = true;
+                  break;
+                }
+              }
+            }
+          }
+        } catch (adapterError) {
+          console.warn('⚠️ [FCM] Error checking room membership, proceeding with FCM:', adapterError.message);
+          // If we can't check, default to sending FCM (safer)
+        }
+      }
+      
+      if (shouldSkip) {
+        return { success: true, sent: 0, failed: 0, skipped: true };
+      }
+
+      console.log(`📱 [FCM] Sending message notification to user ${receiverId} for conversation ${conversationId}`);
+
       // Fetch sender's name
       let senderName = 'Someone';
       try {
@@ -365,10 +408,17 @@ class FCMService {
   }
 
   /**
-   * Send flow state notification
+   * Send flow state notification (only if user is offline)
    */
   async sendFlowStateNotification(conversationId, userId, flowState, customMessage = null) {
     try {
+      // Check if user is online - if online, skip FCM (they'll get socket notification)
+      const notificationService = require('./notificationService');
+      if (notificationService.isUserOnline(userId)) {
+        console.log(`ℹ️ [FCM] Skipping flow state FCM for online user ${userId}`);
+        return { success: true, sent: 0, failed: 0, skipped: true };
+      }
+
       const stateMessages = {
         'influencer_responding': 'You have a new connection request',
         'brand_owner_details': 'Please provide project details',
@@ -433,10 +483,10 @@ class FCMService {
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
+      // Delete old tokens instead of flipping is_active
       const { error } = await supabaseAdmin
         .from('fcm_tokens')
-        .update({ is_active: false })
-        .eq('is_active', true)
+        .delete()
         .lt('last_used_at', thirtyDaysAgo.toISOString());
 
       if (error) {

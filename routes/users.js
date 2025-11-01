@@ -20,6 +20,7 @@ router.get('/stats', authService.requireRole(['admin']), UserController.getUserS
 // User profile and verification routes
 router.get('/profile', UserController.getUserProfile);
 router.get('/verification-status', UserController.getVerificationStatus);
+router.get('/registration-status', UserController.getRegistrationStatus);
 router.put('/verification-details', validateVerificationDetails, UserController.updateVerificationDetails);
 router.post('/verification-document', upload.single('verification_document'), validateVerificationDocument, UserController.uploadVerificationDocument);
 

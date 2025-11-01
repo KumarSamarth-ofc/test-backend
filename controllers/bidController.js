@@ -109,6 +109,13 @@ class BidController {
         });
       }
 
+      // Emit stats update after bid creation
+      const io = req.app.get("io");
+      if (io) {
+        const { emitBidStatsOnChange } = require('../utils/statsUpdates');
+        await emitBidStatsOnChange(userId, io);
+      }
+
       res.status(201).json({
         success: true,
         data: bid,
@@ -228,6 +235,9 @@ class BidController {
             .filter((r) => r.bid_id && allowedReqStatuses.includes(r.status))
             .map((r) => r.bid_id);
           const idsSet = new Set(filteredIds);
+          
+          console.log(`[LISTING DEBUG] Status: ${normalizedStatus}, Filtered bid IDs: ${Array.from(idsSet).join(', ')}`);
+          
           if (idsSet.size === 0) {
             return res.json({
               success: true,
@@ -247,6 +257,8 @@ class BidController {
           const { data: bids, error } = await query
             .order("created_at", { ascending: false })
             .range(offset, offset + limit - 1);
+          
+          console.log(`[LISTING DEBUG] Found ${bids?.length || 0} bids after status filter`);
 
           if (error) {
             return res
@@ -656,6 +668,13 @@ class BidController {
         });
       }
 
+      // Emit stats updates after deletion
+      const io = req.app.get("io");
+      if (io && existingBid.created_by) {
+        const { emitBidStatsOnChange } = require('../utils/statsUpdates');
+        await emitBidStatsOnChange(existingBid.created_by, io);
+      }
+
       res.json({
         success: true,
         message: "Bid deleted successfully",
@@ -670,69 +689,111 @@ class BidController {
 
   /**
    * Get bid statistics
+   * 
+   * For Influencers:
+   * - "new": All open bids (status='open')
+   * - "pending": Bids where influencer has interacted AND bid.status='pending'
+   * - "closed": Bids where influencer has interacted AND bid.status='closed'
+   * 
+   * For Brand Owners:
+   * - "new": All their created bids with status='open'
+   * - "pending": Their created bids with status='pending'
+   * - "closed": Their created bids with status='closed'
    */
   async getBidStats(req, res) {
     try {
       const userId = req.user.id;
+      const { getBidsStatsForUser } = require('../utils/statsUpdates');
 
-      let query = supabaseAdmin
-        .from("bids")
-        .select("status, min_budget, max_budget");
+      // Use the helper function that reuses listing logic
+      const stats = await getBidsStatsForUser(userId, req.user.role);
 
-      // Apply role-based filtering
+      // Calculate total budget if needed
+      let totalBudget = 0;
       if (req.user.role === "brand_owner") {
-        query = query.eq("created_by", userId);
-      } else if (req.user.role === "influencer") {
-        // Get bids where influencer has requests
-        query = supabaseAdmin
-          .from("requests")
-          .select(
-            `
-                        bids (
-                            status,
-                            min_budget,
-                            max_budget
-                        )
-                    `
-          )
-          .eq("influencer_id", userId);
-      }
-
-      const { data, error } = await query;
-
-      if (error) {
-        return res.status(500).json({
-          success: false,
-          message: "Failed to fetch statistics",
+        const { data: allBids } = await supabaseAdmin
+          .from("bids")
+          .select("min_budget, max_budget")
+          .eq("created_by", userId);
+        
+        allBids?.forEach((bid) => {
+          totalBudget += parseFloat(bid.max_budget || bid.min_budget || 0);
         });
+      } else if (req.user.role === "influencer") {
+        // For influencers, calculate budget from all bids in stats
+        const allBidIds = new Set();
+        
+        // Get open bids
+        const { data: openBids } = await supabaseAdmin
+          .from("bids")
+          .select("id, min_budget, max_budget")
+          .eq("status", "open");
+        openBids?.forEach(b => {
+          allBidIds.add(b.id);
+          totalBudget += parseFloat(b.max_budget || b.min_budget || 0);
+        });
+
+        // Get pending/closed bids from requests
+        const { data: influencerRequests } = await supabaseAdmin
+          .from("requests")
+          .select("bid_id, status")
+          .eq("influencer_id", userId)
+          .not("bid_id", "is", null);
+
+        const pendingRequestStatuses = ["connected", "negotiating", "paid", "finalized", "work_submitted", "work_approved"];
+        const closedRequestStatuses = ["completed", "cancelled"];
+        
+        const pendingBidIds = new Set(
+          (influencerRequests || [])
+            .filter((r) => r.bid_id && pendingRequestStatuses.includes(r.status))
+            .map((r) => r.bid_id)
+        );
+        
+        const closedBidIds = new Set(
+          (influencerRequests || [])
+            .filter((r) => r.bid_id && closedRequestStatuses.includes(r.status))
+            .map((r) => r.bid_id)
+        );
+
+        if (pendingBidIds.size > 0) {
+          const { data: pendingBids } = await supabaseAdmin
+            .from("bids")
+            .select("id, min_budget, max_budget")
+            .in("id", Array.from(pendingBidIds))
+            .eq("status", "pending");
+          pendingBids?.forEach(b => {
+            if (!allBidIds.has(b.id)) {
+              allBidIds.add(b.id);
+              totalBudget += parseFloat(b.max_budget || b.min_budget || 0);
+            }
+          });
+        }
+
+        if (closedBidIds.size > 0) {
+          const { data: closedBids } = await supabaseAdmin
+            .from("bids")
+            .select("id, min_budget, max_budget")
+            .in("id", Array.from(closedBidIds))
+            .eq("status", "closed");
+          closedBids?.forEach(b => {
+            if (!allBidIds.has(b.id)) {
+              allBidIds.add(b.id);
+              totalBudget += parseFloat(b.max_budget || b.min_budget || 0);
+            }
+          });
+        }
       }
 
-      // Calculate statistics
-      const bids =
-        req.user.role === "influencer"
-          ? data.map((item) => item.bids).filter(Boolean)
-          : data;
-
-      const stats = {
-        total: bids.length,
-        byStatus: {},
-        totalBudget: 0,
-      };
-
-      bids.forEach((bid) => {
-        // Status stats
-        stats.byStatus[bid.status] = (stats.byStatus[bid.status] || 0) + 1;
-
-        // Budget (use max_budget for total calculation)
-        const bidBudget = parseFloat(bid.max_budget || bid.min_budget || 0);
-        stats.totalBudget += bidBudget;
-      });
-
-      res.json({
+      return res.json({
         success: true,
-        stats: stats,
+        stats: {
+          ...stats,
+          new: stats.open || stats.new || 0, // Ensure 'new' field for frontend
+          totalBudget: totalBudget,
+        },
       });
     } catch (error) {
+      console.error("Error in getBidStats:", error);
       res.status(500).json({
         success: false,
         message: "Internal server error",
@@ -839,6 +900,7 @@ class BidController {
   async handleBrandOwnerAction(req, res) {
     try {
       const { conversation_id, action, data, button_id, additional_data } = req.body;
+      console.log("🧾 [BID] brand-owner-action body:", { conversation_id, action, data, button_id, additional_data });
       const userId = req.user.id;
 
       if (!conversation_id) {
@@ -848,67 +910,47 @@ class BidController {
         });
       }
 
-      // Handle button mapping if button_id is provided OR if action is a button ID
+      // Handle button mapping only when an explicit button_id is provided
       let mappedAction = action;
       let mappedData = data || {};
 
-      // Check if we have button_id OR if action looks like a button ID
-      const buttonToMap = button_id || action;
-      
-      if (buttonToMap) {
-        console.log("🔍 [DEBUG] Processing brand owner button mapping for:", buttonToMap);
-        console.log("🔍 [DEBUG] Original action:", action);
-        console.log("🔍 [DEBUG] Original data:", data);
-        console.log("🔍 [DEBUG] Additional data:", additional_data);
-        console.log("🔍 [DEBUG] Button ID provided:", !!button_id);
-        console.log("🔍 [DEBUG] Using action as button ID:", !button_id);
+      if (button_id) {
+        const buttonToMap = button_id;
 
-        // Map button IDs to automated flow actions (same logic as message controller)
         if (buttonToMap === 'agree_negotiation') {
           mappedAction = 'handle_negotiation';
           mappedData = { action: 'agree' };
-          console.log("🔄 [DEBUG] Mapped agree_negotiation to handle_negotiation with action: agree");
         } else if (buttonToMap === 'reject_negotiation') {
           mappedAction = 'handle_negotiation';
           mappedData = { action: 'reject' };
-          console.log("🔄 [DEBUG] Mapped reject_negotiation to handle_negotiation with action: reject");
         } else if (buttonToMap === 'send_negotiated_price') {
           mappedAction = 'send_negotiated_price';
-          mappedData = { price: additional_data?.price };
-          console.log("🔄 [DEBUG] Mapped send_negotiated_price with price:", additional_data?.price);
+          mappedData = { price: additional_data?.price ?? mappedData?.price };
         } else if (buttonToMap === 'send_project_details') {
           mappedAction = 'send_project_details';
-          mappedData = { details: additional_data?.details };
-          console.log("🔄 [DEBUG] Mapped send_project_details with details:", additional_data?.details);
+          mappedData = { details: additional_data?.details ?? mappedData?.details };
         } else if (buttonToMap === 'send_price_offer') {
           mappedAction = 'send_price_offer';
-          mappedData = { price: additional_data?.price };
-          console.log("🔄 [DEBUG] Mapped send_price_offer with price:", additional_data?.price);
+          mappedData = { price: additional_data?.price ?? mappedData?.price };
         } else if (buttonToMap === 'proceed_to_payment') {
           mappedAction = 'proceed_to_payment';
-          mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped proceed_to_payment");
+          mappedData = { ...(additional_data || {}), ...(mappedData || {}) };
         } else if (buttonToMap === 'accept_counter_offer') {
           mappedAction = 'accept_counter_offer';
-          mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped accept_counter_offer");
+          mappedData = { ...(additional_data || {}), ...(mappedData || {}) };
         } else if (buttonToMap === 'reject_counter_offer') {
           mappedAction = 'reject_counter_offer';
-          mappedData = { price: additional_data?.price };
-          console.log("🔄 [DEBUG] Mapped reject_counter_offer with price:", additional_data?.price);
+          mappedData = { price: additional_data?.price ?? mappedData?.price };
         } else if (buttonToMap === 'make_final_offer') {
           mappedAction = 'make_final_offer';
-          mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped make_final_offer");
+          mappedData = { ...(additional_data || {}), ...(mappedData || {}) };
         } else {
-          console.log("⚠️ [DEBUG] No special mapping found for button:", buttonToMap);
-          // Use additional_data for unmapped buttons
-          mappedData = additional_data || {};
+          // Fallback: merge, do not drop existing data
+          mappedData = { ...(mappedData || {}), ...(additional_data || {}) };
         }
-
-        console.log("🔄 [DEBUG] Final mapped action:", mappedAction);
-        console.log("🔄 [DEBUG] Final mapped data:", mappedData);
       }
+
+      console.log("🧭 [BID] mapped action/data:", { mappedAction, mappedData });
 
       if (!mappedAction) {
         return res.status(400).json({
@@ -1013,70 +1055,49 @@ class BidController {
       const buttonToMap = button_id || action;
       
       if (buttonToMap) {
-        console.log("🔍 [DEBUG] Processing influencer button mapping for:", buttonToMap);
-        console.log("🔍 [DEBUG] Original action:", action);
-        console.log("🔍 [DEBUG] Original data:", data);
-        console.log("🔍 [DEBUG] Additional data:", additional_data);
-        console.log("🔍 [DEBUG] Button ID provided:", !!button_id);
-        console.log("🔍 [DEBUG] Using action as button ID:", !button_id);
 
         // Map button IDs to automated flow actions (same logic as message controller)
         if (buttonToMap === 'accept_connection') {
           mappedAction = 'accept_connection';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped accept_connection");
         } else if (buttonToMap === 'reject_connection') {
           mappedAction = 'reject_connection';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped reject_connection");
         } else if (buttonToMap === 'accept_project') {
           mappedAction = 'accept_project';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped accept_project");
         } else if (buttonToMap === 'deny_project') {
           mappedAction = 'deny_project';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped deny_project");
         } else if (buttonToMap === 'accept_price') {
           mappedAction = 'accept_price';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped accept_price");
         } else if (buttonToMap === 'reject_price') {
           mappedAction = 'reject_price';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped reject_price");
         } else if (buttonToMap === 'negotiate_price') {
           mappedAction = 'negotiate_price';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped negotiate_price");
         } else if (buttonToMap === 'send_counter_offer') {
           mappedAction = 'send_counter_offer';
           mappedData = { price: additional_data?.price };
-          console.log("🔄 [DEBUG] Mapped send_counter_offer with price:", additional_data?.price);
         } else if (buttonToMap === 'accept_final_offer') {
           mappedAction = 'accept_final_offer';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped accept_final_offer");
         } else if (buttonToMap === 'reject_final_offer') {
           mappedAction = 'reject_final_offer';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped reject_final_offer");
         } else if (buttonToMap === 'accept_negotiated_price') {
           mappedAction = 'accept_negotiated_price';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped accept_negotiated_price");
         } else if (buttonToMap === 'reject_negotiated_price') {
           mappedAction = 'reject_negotiated_price';
           mappedData = additional_data || {};
-          console.log("🔄 [DEBUG] Mapped reject_negotiated_price");
-        } else {
-          console.log("⚠️ [DEBUG] No special mapping found for button:", buttonToMap);
+          
           // Use additional_data for unmapped buttons
           mappedData = additional_data || {};
         }
 
-        console.log("🔄 [DEBUG] Final mapped action:", mappedAction);
-        console.log("🔄 [DEBUG] Final mapped data:", mappedData);
       }
 
       if (!mappedAction) {
@@ -1339,52 +1360,10 @@ class BidController {
         });
       }
 
-      // Use enhanced balance service to add funds properly
-      console.log("🔍 [DEBUG] Starting wallet fund addition process...");
-      console.log("🔍 [DEBUG] Influencer ID:", conversation.influencer_id);
-      console.log("🔍 [DEBUG] Payment amount (paise):", paymentAmount);
-      console.log("🔍 [DEBUG] Conversation ID:", conversation_id);
-      
+      // Escrow only at verify-time (no wallet credit here). Wallet credit happens on admin release.
       const enhancedBalanceService = require('../utils/enhancedBalanceService');
-      
-      // First check if wallet exists
-      console.log("🔍 [DEBUG] Checking if wallet exists for influencer...");
-      const walletCheckResult = await enhancedBalanceService.getWalletBalance(conversation.influencer_id);
-      console.log("🔍 [DEBUG] Wallet check result:", walletCheckResult);
-      
-      const addFundsResult = await enhancedBalanceService.addFunds(
-        conversation.influencer_id,
-        paymentAmount,
-        {
-          conversation_id: conversation_id,
-          razorpay_order_id: razorpay_order_id,
-          razorpay_payment_id: razorpay_payment_id,
-          conversation_type: conversation.campaign_id ? "campaign" : "bid",
-          brand_owner_id: conversation.brand_owner_id,
-          bid_id: conversation.bid_id,
-          campaign_id: conversation.campaign_id,
-          notes: `Payment received for ${conversation.campaign_id ? 'campaign' : 'bid'} collaboration`
-        }
-      );
-
-      console.log("🔍 [DEBUG] Enhanced balance service result:", addFundsResult);
-
-      if (!addFundsResult.success) {
-        console.error("❌ [DEBUG] Enhanced balance service error:", addFundsResult.error);
-        console.error("❌ [DEBUG] Full error details:", JSON.stringify(addFundsResult, null, 2));
-        return res.status(500).json({
-          success: false,
-          message: "Failed to add funds to wallet",
-          debug: {
-            error: addFundsResult.error,
-            influencer_id: conversation.influencer_id,
-            payment_amount: paymentAmount,
-            conversation_id: conversation_id
-          }
-        });
-      }
-
-      console.log("✅ [DEBUG] Enhanced balance service: Funds added successfully");
+      // Ensure wallet exists
+      await enhancedBalanceService.getWalletBalance(conversation.influencer_id);
 
       // Upsert payment order: update if order already exists
       const { data: existingOrder } = await supabaseAdmin
@@ -1446,6 +1425,87 @@ class BidController {
         paymentOrder = insertedOrder;
       }
 
+      // Create admin payment tracking and pending release transactions (advance/final)
+      try {
+        // Fetch commission settings (fallback to 10% if missing)
+        const { data: commissionSettings } = await supabaseAdmin
+          .from("commission_settings")
+          .select("commission_percentage, is_active")
+          .eq("is_active", true)
+          .order("effective_from", { ascending: false })
+          .limit(1)
+          .single();
+
+        if (!commissionSettings) {
+          throw new Error("No active commission settings found. Admin must set commission.");
+        }
+        const commissionPercentage = commissionSettings.commission_percentage;
+        const totalAmountPaise = paymentAmount; // already in paise
+        const commissionAmountPaise = Math.round((totalAmountPaise * commissionPercentage) / 100);
+        const netAmountPaise = totalAmountPaise - commissionAmountPaise;
+        const advanceAmountPaise = Math.round(netAmountPaise * 0.30);
+        const finalAmountPaise = netAmountPaise - advanceAmountPaise;
+
+        // Insert admin payment tracking row
+        const { data: adminPaymentRecord, error: adminTrackErr } = await supabaseAdmin
+          .from("admin_payment_tracking")
+          .insert({
+            conversation_id: conversation_id,
+            campaign_id: conversation.campaign_id,
+            bid_id: conversation.bid_id,
+            brand_owner_id: conversation.brand_owner_id,
+            influencer_id: conversation.influencer_id,
+            total_amount_paise: totalAmountPaise,
+            commission_amount_paise: commissionAmountPaise,
+            net_amount_paise: netAmountPaise,
+            advance_amount_paise: advanceAmountPaise,
+            final_amount_paise: finalAmountPaise,
+            commission_percentage: commissionPercentage,
+            advance_payment_status: 'admin_received',
+            final_payment_status: 'pending'
+          })
+          .select()
+          .single();
+
+        if (!adminTrackErr && adminPaymentRecord) {
+          // Create pending advance and final transactions for influencer wallet
+          const { error: txErr } = await supabaseAdmin
+            .from("transactions")
+            .insert([
+              {
+                wallet_id: walletId,
+                amount: advanceAmountPaise / 100,
+                amount_paise: advanceAmountPaise,
+                type: "credit",
+                status: "pending",
+                campaign_id: conversation.campaign_id || null,
+                bid_id: conversation.bid_id || null,
+                conversation_id: conversation_id,
+                payment_stage: "advance",
+                admin_payment_tracking_id: adminPaymentRecord.id,
+                description: "Advance payment (30% after commission)"
+              },
+              {
+                wallet_id: walletId,
+                amount: finalAmountPaise / 100,
+                amount_paise: finalAmountPaise,
+                type: "credit",
+                status: "pending",
+                campaign_id: conversation.campaign_id || null,
+                bid_id: conversation.bid_id || null,
+                conversation_id: conversation_id,
+                payment_stage: "final",
+                admin_payment_tracking_id: adminPaymentRecord.id,
+                description: "Final payment (70% after commission)"
+              }
+            ]);
+          // Ignore txErr to avoid failing verification path
+        }
+      } catch (e) {
+        // Swallow errors so verification flow isn't blocked
+        console.warn("⚠️ Failed to create admin payment release tracking:", e.message);
+      }
+
       // Create escrow hold record after payment order is created
       let escrowHold = null;
       if (request) {
@@ -1483,10 +1543,7 @@ class BidController {
           );
 
           if (!freezeResult.success) {
-            console.warn("⚠️ Escrow freeze failed:", freezeResult.error);
             // Continue anyway as escrow hold is created
-          } else {
-            console.log("✅ Enhanced balance service: Funds frozen in escrow");
           }
         }
       }
@@ -1500,45 +1557,12 @@ class BidController {
           .select()
           .single();
         if (createWalletError) {
-          console.error("Wallet create error:", createWalletError);
           return res.status(500).json({ success: false, message: "Failed to ensure wallet" });
         }
         walletId = newWallet.id;
       }
 
-      // Refresh wallet to get current balances, then add to frozen balance (escrow)
-      const { data: curWallet, error: curWalletErr } = await supabaseAdmin
-        .from("wallets")
-        .select("id, balance, balance_paise, frozen_balance_paise")
-        .eq("id", walletId)
-        .single();
-      if (curWalletErr) {
-        console.error("Wallet read error:", curWalletErr);
-      }
-      
-      // Add payment to available balance first, then move to escrow
-      const currentBalancePaise = Number(curWallet?.balance_paise || 0);
-      const currentFrozenPaise = Number(curWallet?.frozen_balance_paise || 0);
-      
-      // First add to available balance
-      const newBalancePaise = currentBalancePaise + paymentAmount;
-      // Then move to frozen balance (escrow)
-      const newFrozenPaise = currentFrozenPaise + paymentAmount;
-      const newAvailableBalance = newBalancePaise - paymentAmount; // Remove from available
-      
-      const { error: walletUpdateErr } = await supabaseAdmin
-        .from("wallets")
-        .update({ 
-          balance_paise: newAvailableBalance,
-          frozen_balance_paise: newFrozenPaise,
-          balance: newAvailableBalance / 100, // Keep old balance field for compatibility
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", walletId);
-      if (walletUpdateErr) {
-        console.error("Wallet update error (frozen balance):", walletUpdateErr);
-        // Do not fail the flow; continue
-      }
+      // No available balance change here; funds are considered held and frozen via escrow
 
       // Credit transaction already created by enhancedBalanceService.addFunds()
       // Only create the escrow freeze transaction
@@ -1588,7 +1612,6 @@ class BidController {
         .single();
 
       if (freezeTransactionError) {
-        console.error("Freeze transaction creation error:", freezeTransactionError);
         // Don't fail the flow, just log the error
       }
 
@@ -1603,7 +1626,6 @@ class BidController {
           .eq("id", request.id);
 
         if (requestUpdateError) {
-          console.error("Request update error:", requestUpdateError);
           // Don't fail the payment, just log the error
         }
       }
@@ -1643,7 +1665,6 @@ class BidController {
         .single();
 
       if (updateError) {
-        console.error("Conversation update error:", updateError);
         return res.status(500).json({
           success: false,
           message: "Failed to update conversation state"
@@ -1658,39 +1679,34 @@ class BidController {
           sender_id: conversation.brand_owner_id,
           receiver_id: conversation.influencer_id,
           message: "🎉 **Payment Completed Successfully!**\n\nYour payment has been processed and the collaboration is now active. You can now communicate in real-time.",
-          message_type: "automated", // Fixed: Changed from "system" to "automated"
+          message_type: "automated",
           action_required: false
         })
         .select()
         .single();
 
-      // Emit realtime events
+      // Emit realtime events (final contract)
       const io = req.app.get("io");
+      
+      // Emit stats updates after status change
+      if (io && conversation.brand_owner_id && conversation.influencer_id) {
+        const { emitStatsUpdatesToBothUsers } = require('../utils/statsUpdates');
+        await emitStatsUpdatesToBothUsers(conversation.brand_owner_id, conversation.influencer_id, io);
+      }
       if (io) {
-        // Emit conversation_updated event with correct state
-        io.to(`conversation_${conversation_id}`).emit("conversation_updated", {
+        // State change to room:<conversationId>
+        io.to(`room:${conversation_id}`).emit('conversation_state_changed', {
           conversation_id: conversation_id,
-          flow_state: "work_in_progress",
-          awaiting_role: null,
-          chat_status: "real_time",
-          payment_completed: true
+          flow_state: 'work_in_progress',
+          awaiting_role: updatedConversation.awaiting_role,
+          chat_status: 'real_time',
+          current_action_data: {},
+          updated_at: new Date().toISOString()
         });
 
-        // Emit payment status update event
-        io.to(`conversation_${conversation_id}`).emit("payment_status_update", {
-          conversation_id: conversation_id,
-          status: "completed",
-          message: "Payment has been successfully processed",
-          flow_state: "work_in_progress",
-          chat_status: "real_time"
-        });
-
-        // Emit new_message event
+        // Optional system message
         if (successMessage) {
-          io.to(`conversation_${conversation_id}`).emit("new_message", {
-            conversation_id: conversation_id,
-            message: successMessage
-          });
+          io.to(`room:${conversation_id}`).emit('chat:new', { message: successMessage });
         }
 
         // Send individual notifications to both users
@@ -1712,6 +1728,22 @@ class BidController {
             flow_state: "work_in_progress",
             chat_status: "real_time"
           }
+        });
+
+        // Conversation list updates for both users
+        io.to(`user_${conversation.brand_owner_id}`).emit('conversation_list_updated', {
+          conversation_id: conversation_id,
+          action: 'state_changed',
+          flow_state: 'work_in_progress',
+          chat_status: 'real_time',
+          timestamp: new Date().toISOString()
+        });
+        io.to(`user_${conversation.influencer_id}`).emit('conversation_list_updated', {
+          conversation_id: conversation_id,
+          action: 'state_changed',
+          flow_state: 'work_in_progress',
+          chat_status: 'real_time',
+          timestamp: new Date().toISOString()
         });
       }
 
@@ -1735,16 +1767,6 @@ class BidController {
           razorpay_order_id: razorpay_order_id,
           amount: paymentAmount,
           currency: "INR"
-        },
-        wallet_updates: {
-          brand_owner: {
-            balance_paise: 0, // Brand owner's balance would be updated separately
-            frozen_balance_paise: 0
-          },
-          influencer: {
-            balance_paise: newBalance,
-            frozen_balance_paise: paymentAmount
-          }
         }
       });
 
@@ -1810,12 +1832,12 @@ class BidController {
   async handleWorkSubmission(req, res) {
     try {
       const { conversation_id } = req.params;
-      const { deliverables, description, submission_notes } = req.body;
+      const { deliverables, description, submission_notes, attachments } = req.body;
 
-      if (!deliverables || !description) {
+      if (!deliverables && !description) {
         return res.status(400).json({
           success: false,
-          message: "deliverables and description are required",
+          message: "Either deliverables or description is required",
         });
       }
 
@@ -1847,10 +1869,19 @@ class BidController {
         });
       }
 
+      // Validate attachments if provided (should be array of attachment IDs)
+      if (attachments && !Array.isArray(attachments)) {
+        return res.status(400).json({
+          success: false,
+          message: "Attachments must be an array of attachment IDs",
+        });
+      }
+
       const submissionData = {
-        deliverables,
-        description,
-        submission_notes,
+        deliverables: deliverables || "",
+        description: description || "",
+        submission_notes: submission_notes || "",
+        attachments: attachments || [],
         submitted_at: new Date().toISOString(),
       };
 
@@ -1867,24 +1898,21 @@ class BidController {
         });
       }
 
-      // Emit realtime events
+      // Emit realtime events (handleWorkSubmission already emits, but ensure consistency)
       const io = req.app.get("io");
-      if (io) {
-        // Emit conversation_updated event
-        io.to(`conversation_${conversation_id}`).emit("conversation_updated", {
+      if (io && result.message) {
+        // Emit standardized socket events
+        io.to(`room:${conversation_id}`).emit('conversation_state_changed', {
           conversation_id: conversation_id,
           flow_state: result.flow_state,
           awaiting_role: result.awaiting_role,
-          chat_status: "work_submitted"
+          chat_status: 'automated',
+          updated_at: new Date().toISOString()
         });
 
-        // Emit new_message event
-        if (result.message) {
-          io.to(`conversation_${conversation_id}`).emit("new_message", {
-            conversation_id: conversation_id,
-            message: result.message
-          });
-        }
+        io.to(`room:${conversation_id}`).emit('chat:new', {
+          message: result.message
+        });
       }
 
       res.json({
@@ -1892,6 +1920,7 @@ class BidController {
         message: "Work submitted successfully",
         flow_state: result.flow_state,
         awaiting_role: result.awaiting_role,
+        message_data: result.message
       });
     } catch (error) {
       console.error("Error handling work submission:", error);

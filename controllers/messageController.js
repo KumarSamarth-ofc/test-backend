@@ -21,13 +21,21 @@ class MessageController {
         .from("users")
         .select("role")
         .eq("id", userId)
-        .single();
+        .maybeSingle();
 
       if (userError) {
         console.error("❌ Error fetching user role:", userError);
         return res.status(500).json({
           success: false,
           message: "Failed to fetch user details",
+        });
+      }
+
+      if (!currentUser) {
+        console.error("❌ User not found:", userId);
+        return res.status(404).json({
+          success: false,
+          message: "User not found",
         });
       }
 
@@ -86,14 +94,13 @@ class MessageController {
       }
 
       // Execute the query with pagination
+      // Note: Count with nested selects doesn't work, so we'll just return the data
       const {
         data: conversations,
         error,
-        count,
       } = await conversationsQuery
         .order("updated_at", { ascending: false })
-        .range(offset, offset + limit - 1)
-        .limit(limit);
+        .range(offset, offset + limit - 1);
 
       if (error) {
         console.error("❌ Database error fetching conversations:", error);
@@ -244,7 +251,8 @@ class MessageController {
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
-          total: count || 0,
+          total: enrichedConversations.length, // Approximate count
+          has_more: enrichedConversations.length === parseInt(limit), // If we got full page, there might be more
         },
         user_role: currentUser.role,
         query_description: queryDescription,
@@ -509,24 +517,17 @@ class MessageController {
 
       // Emit real-time update
       const io = req.app.get("io");
-      console.log("🔍 [DEBUG] Socket.IO emit check:", {
-        hasIo: !!io,
-        conversationId,
-        receiverId,
-        senderId
-      });
       
       // Get conversation context for emit (moved outside if block for broader scope)
       let conversationContext = null;
       if (io) {
         const { data: conversation, error: convError } = await supabaseAdmin
           .from("conversations")
-          .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data")
+          .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data")
           .eq("id", conversationId)
           .single();
 
         if (convError) {
-          console.error("❌ [DEBUG] Failed to fetch conversation context:", convError);
         }
 
         // Prepare conversation context
@@ -537,27 +538,38 @@ class MessageController {
           awaiting_role: conversation.awaiting_role,
           conversation_type: conversation.campaign_id ? 'campaign' : 
                             conversation.bid_id ? 'bid' : 'direct',
-          automation_enabled: conversation.automation_enabled || false,
+          
           current_action_data: conversation.current_action_data
         } : null;
 
-        // Emit to conversation room with context
-        console.log(`📡 [DEBUG] Emitting new_message to conversation_${conversationId}`);
-        io.to(`conversation_${conversationId}`).emit("new_message", {
-          conversation_id: conversationId,
-          message: newMessage,
-          conversation_context: conversationContext,
+        // Emit to conversation room: chat:new with { message }
+        io.to(`room:${conversationId}`).emit('chat:new', {
+          message: newMessage
         });
 
+        // Fetch sender's name for notification
+        let senderName = 'Someone';
+        try {
+          const { data: sender, error: senderError } = await supabaseAdmin
+            .from('users')
+            .select('name')
+            .eq('id', senderId)
+            .eq('is_deleted', false)
+            .single();
+          
+          if (!senderError && sender && sender.name) {
+            senderName = sender.name;
+          }
+        } catch (error) {
+          console.warn('⚠️ Could not fetch sender name for notification:', error.message);
+        }
+
         // Store notification in database and emit to receiver
-        console.log(`📡 [DEBUG] Storing and emitting notification to user_${receiverId}`);
-        
-        // Store notification in database
         const notificationService = require('../services/notificationService');
         notificationService.storeNotification({
           user_id: receiverId,
           type: 'message',
-          title: `${req.user.name} sent you a message`,
+          title: `${senderName} sent you a message`,
           message: newMessage.message,
           data: {
             conversation_id: conversationId,
@@ -565,9 +577,10 @@ class MessageController {
             conversation_context: conversationContext,
             sender_id: senderId,
             receiver_id: receiverId,
+            sender_name: senderName
           },
           action_url: `/conversations/${conversationId}`
-        }).then(result => {
+        }, io).then(result => {
           if (result.success) {
             console.log(`✅ Notification stored successfully: ${result.notification.id}`);
           } else {
@@ -586,40 +599,94 @@ class MessageController {
             conversation_context: conversationContext,
             sender_id: senderId,
             receiver_id: receiverId,
+            sender_name: senderName,
+            title: `${senderName} sent you a message`,
+            body: newMessage.message
           },
         });
 
         // Also emit to sender's personal room for confirmation
-        console.log(`📡 [DEBUG] Emitting message_sent to user_${senderId}`);
         io.to(`user_${senderId}`).emit("message_sent", {
           conversation_id: conversationId,
           message: newMessage,
           conversation_context: conversationContext,
         });
+
+        // Compute conversation summary and emit conversations:upsert to both users
+        try {
+          const conversationListUtils = require('../utils/conversationListUpdates');
+
+          // Fetch full conversation for updated_at and other fields
+          const { data: fullConversation } = await supabaseAdmin
+            .from('conversations')
+            .select('*')
+            .eq('id', conversationId)
+            .single();
+
+          const convData = fullConversation || {
+            id: conversationId,
+            chat_status: conversationContext?.chat_status,
+            flow_state: conversationContext?.flow_state,
+            awaiting_role: conversationContext?.awaiting_role,
+            updated_at: new Date().toISOString()
+          };
+
+          // Build and emit for receiver
+          const receiverPayload = await conversationListUtils.buildConversationsUpsertPayload({
+            conversationId,
+            currentUserId: receiverId,
+            lastMessage: newMessage,
+            conversation: convData
+          });
+          conversationListUtils.emitConversationsUpsert(io, receiverId, receiverPayload);
+
+          // Build and emit for sender
+          const senderPayload = await conversationListUtils.buildConversationsUpsertPayload({
+            conversationId,
+            currentUserId: senderId,
+            lastMessage: newMessage,
+            conversation: convData
+          });
+          conversationListUtils.emitConversationsUpsert(io, senderId, senderPayload);
+
+          // Also emit unread_count_updated for receiver
+          if (receiverPayload.unread_count > 0) {
+            conversationListUtils.emitUnreadCountUpdated(
+              io,
+              receiverId,
+              conversationId,
+              receiverPayload.unread_count,
+              'increment'
+            );
+          }
+        } catch (e) {
+          console.warn('conversations:upsert emit failed:', e.message);
+        }
       } else {
-        console.error("❌ [DEBUG] Socket.IO not available for realtime emit");
       }
 
-      // Send FCM push notification for REST API messages
+      // Send FCM push notification for REST API messages (only if user not viewing conversation)
       const fcmService = require('../services/fcmService');
       fcmService.sendMessageNotification(
         conversationId,
         newMessage,
         senderId,
-        receiverId
+        receiverId,
+        io  // Pass io to check if user is in conversation room
       ).then(result => {
-        if (result.success) {
-          console.log(`✅ FCM notification sent: ${result.sent} successful, ${result.failed} failed`);
+        if (result.success && !result.skipped) {
+          console.log(`✅ FCM notification sent: ${result.sent} successful`);
+        } else if (result.skipped) {
+          console.log(`ℹ️ [FCM] Skipped - user is viewing conversation`);
         } else {
           console.error(`❌ FCM notification failed:`, result.error);
         }
-      }).catch(error => {
+      }).catch(error => { 
         console.error(`❌ FCM notification error:`, error);
       });
 
       // Emit conversation list update to both users
       if (io) {
-        console.log(`📡 [DEBUG] Socket emitting conversation_list_updated to both users`);
         
         // Emit to individual user rooms
         io.to(`user_${senderId}`).emit('conversation_list_updated', {
@@ -656,7 +723,6 @@ class MessageController {
         });
 
         // Emit unread count update to receiver
-        console.log(`📡 [DEBUG] Socket emitting unread_count_updated to user_${receiverId}`);
         io.to(`user_${receiverId}`).emit('unread_count_updated', {
           conversation_id: conversationId,
           unread_count: 1, // Increment by 1
@@ -681,17 +747,12 @@ class MessageController {
         });
       }
 
-      console.log(
-        `✅ Message sent successfully in conversation: ${conversationId}`
-      );
-
       res.json({
         success: true,
         message: newMessage,
         conversation_id: conversationId,
       });
     } catch (error) {
-      console.error("💥 Unexpected error in sendMessage:", error);
       res.status(500).json({
         success: false,
         message: "Internal server error",
@@ -762,7 +823,6 @@ class MessageController {
           timestamp: new Date().toISOString()
         });
 
-        console.log(`✅ Messages in conversation ${conversation_id} marked as seen by user ${userId}`);
       }
 
       res.json({
@@ -1066,7 +1126,7 @@ class MessageController {
             conversation_context: conversationContext
           },
           action_url: `/conversations/${conversation.id}`
-        }).then(result => {
+        }, io).then(result => {
           if (result.success) {
             console.log(`✅ Brand owner notification stored: ${result.notification.id}`);
           } else {
@@ -1088,7 +1148,7 @@ class MessageController {
             conversation_context: conversationContext
           },
           action_url: `/conversations/${conversation.id}`
-        }).then(result => {
+        }, io).then(result => {
           if (result.success) {
             console.log(`✅ Influencer notification stored: ${result.notification.id}`);
           } else {
@@ -1850,7 +1910,7 @@ class MessageController {
         // Get updated conversation context after flow update
         const { data: updatedConversation, error: convError } = await supabaseAdmin
           .from("conversations")
-          .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, automation_enabled, current_action_data")
+          .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data")
           .eq("id", conversation_id)
           .single();
 
@@ -1861,7 +1921,7 @@ class MessageController {
           awaiting_role: updatedConversation.awaiting_role,
           conversation_type: updatedConversation.campaign_id ? 'campaign' : 
                             updatedConversation.bid_id ? 'bid' : 'direct',
-          automation_enabled: updatedConversation.automation_enabled || false,
+          
           current_action_data: updatedConversation.current_action_data
         } : null;
 
@@ -1914,11 +1974,7 @@ class MessageController {
         message: "Internal server error",
       });
     }
-  }
-
-  /**
-   * Handle text input from frontend
-   */
+  } 
   async handleTextInput(req, res) {
     try {
       const { conversation_id } = req.params;
@@ -2239,6 +2295,7 @@ class MessageController {
         `🔍 Fetching bid conversations for user: ${userId}, role: ${userRole}`
       );
 
+      // SECURITY: Always filter by userId - user must be either brand_owner or influencer in the conversation
       // Get bid conversations only (must have bid_id)
       let query = supabaseAdmin
         .from("conversations")
@@ -2253,16 +2310,10 @@ class MessageController {
         `
         )
         .not("bid_id", "is", null)
+        .or(`brand_owner_id.eq.${userId},influencer_id.eq.${userId}`) // CRITICAL: Always filter by userId
         .order("updated_at", { ascending: false })
         .range(offset, offset + limit - 1)
         .limit(limit);
-
-      // Filter by user role and participation
-      if (userRole === "brand_owner") {
-        query = query.eq("brand_owner_id", userId);
-      } else if (userRole === "influencer") {
-        query = query.eq("influencer_id", userId);
-      }
 
       const { data: conversations, error, count } = await query;
 
@@ -2420,6 +2471,7 @@ class MessageController {
         `🔍 Fetching campaign conversations for user: ${userId}, role: ${userRole}`
       );
 
+      // SECURITY: Always filter by userId - user must be either brand_owner or influencer in the conversation
       // Get campaign conversations only (must have campaign_id, no bid_id)
       let query = supabaseAdmin
         .from("conversations")
@@ -2435,16 +2487,10 @@ class MessageController {
         )
         .not("campaign_id", "is", null)
         .is("bid_id", null) // No bid associated
+        .or(`brand_owner_id.eq.${userId},influencer_id.eq.${userId}`) // CRITICAL: Always filter by userId
         .order("updated_at", { ascending: false })
         .range(offset, offset + limit - 1)
         .limit(limit);
-
-      // Filter by user role and participation
-      if (userRole === "brand_owner") {
-        query = query.eq("brand_owner_id", userId);
-      } else if (userRole === "influencer") {
-        query = query.eq("influencer_id", userId);
-      }
 
       const { data: conversations, error, count } = await query;
 
