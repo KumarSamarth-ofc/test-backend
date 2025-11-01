@@ -21,13 +21,21 @@ class MessageController {
         .from("users")
         .select("role")
         .eq("id", userId)
-        .single();
+        .maybeSingle();
 
       if (userError) {
         console.error("❌ Error fetching user role:", userError);
         return res.status(500).json({
           success: false,
           message: "Failed to fetch user details",
+        });
+      }
+
+      if (!currentUser) {
+        console.error("❌ User not found:", userId);
+        return res.status(404).json({
+          success: false,
+          message: "User not found",
         });
       }
 
@@ -86,14 +94,13 @@ class MessageController {
       }
 
       // Execute the query with pagination
+      // Note: Count with nested selects doesn't work, so we'll just return the data
       const {
         data: conversations,
         error,
-        count,
       } = await conversationsQuery
         .order("updated_at", { ascending: false })
-        .range(offset, offset + limit - 1)
-        .limit(limit);
+        .range(offset, offset + limit - 1);
 
       if (error) {
         console.error("❌ Database error fetching conversations:", error);
@@ -244,7 +251,8 @@ class MessageController {
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
-          total: count || 0,
+          total: enrichedConversations.length, // Approximate count
+          has_more: enrichedConversations.length === parseInt(limit), // If we got full page, there might be more
         },
         user_role: currentUser.role,
         query_description: queryDescription,
@@ -2287,6 +2295,7 @@ class MessageController {
         `🔍 Fetching bid conversations for user: ${userId}, role: ${userRole}`
       );
 
+      // SECURITY: Always filter by userId - user must be either brand_owner or influencer in the conversation
       // Get bid conversations only (must have bid_id)
       let query = supabaseAdmin
         .from("conversations")
@@ -2301,16 +2310,10 @@ class MessageController {
         `
         )
         .not("bid_id", "is", null)
+        .or(`brand_owner_id.eq.${userId},influencer_id.eq.${userId}`) // CRITICAL: Always filter by userId
         .order("updated_at", { ascending: false })
         .range(offset, offset + limit - 1)
         .limit(limit);
-
-      // Filter by user role and participation
-      if (userRole === "brand_owner") {
-        query = query.eq("brand_owner_id", userId);
-      } else if (userRole === "influencer") {
-        query = query.eq("influencer_id", userId);
-      }
 
       const { data: conversations, error, count } = await query;
 
@@ -2468,6 +2471,7 @@ class MessageController {
         `🔍 Fetching campaign conversations for user: ${userId}, role: ${userRole}`
       );
 
+      // SECURITY: Always filter by userId - user must be either brand_owner or influencer in the conversation
       // Get campaign conversations only (must have campaign_id, no bid_id)
       let query = supabaseAdmin
         .from("conversations")
@@ -2483,16 +2487,10 @@ class MessageController {
         )
         .not("campaign_id", "is", null)
         .is("bid_id", null) // No bid associated
+        .or(`brand_owner_id.eq.${userId},influencer_id.eq.${userId}`) // CRITICAL: Always filter by userId
         .order("updated_at", { ascending: false })
         .range(offset, offset + limit - 1)
         .limit(limit);
-
-      // Filter by user role and participation
-      if (userRole === "brand_owner") {
-        query = query.eq("brand_owner_id", userId);
-      } else if (userRole === "influencer") {
-        query = query.eq("influencer_id", userId);
-      }
 
       const { data: conversations, error, count } = await query;
 

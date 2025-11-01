@@ -817,6 +817,10 @@ const validateVerificationDetails = [
     .optional()
     .matches(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/)
     .withMessage("PAN number must be in format: AAAAA9999A"),
+  body("upi_id")
+    .optional()
+    .matches(/^[\w.-]+@[\w]+$/i)
+    .withMessage("UPI ID must be in format: username@provider (e.g., username@paytm, phone@upi)"),
   body("verification_document_type")
     .optional()
     .isIn(["pan_card", "aadhaar_card", "passport", "driving_license", "voter_id"])

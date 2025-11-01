@@ -393,13 +393,22 @@ class AuthService {
         };
       }
 
-      // First check if user exists
-      const userCheck = await this.checkUserExists(phone);
-      if (!userCheck.success) {
-        return userCheck;
+      // Check if user exists (including deleted users - they can still receive OTP to restore account)
+      const { data: existingUser, error } = await supabaseAdmin
+        .from("users")
+        .select("id, phone, name, email, role, is_deleted")
+        .eq("phone", phone)
+        .single();
+
+      if (error && error.code !== "PGRST116") {
+        return {
+          success: false,
+          message: "Database error",
+        };
       }
 
-      if (!userCheck.exists) {
+      // Allow deleted users to receive OTP (they will be restored on verification)
+      if (!existingUser) {
         return {
           success: false,
           message: "Account not found. Please register first.",
@@ -554,15 +563,71 @@ class AuthService {
           userName = "Test Influencer";
         }
 
-        // Check if mock user exists, if not create one
+        // Check if mock user exists (including deleted users)
         const { data: existingUser, error: userError } = await supabaseAdmin
           .from("users")
           .select("*")
           .eq("phone", phone)
-          .eq("is_deleted", false)
           .single();
 
         let user = existingUser;
+        let isRestoredAccount = false;
+
+        // If user exists but is deleted, restore the account
+        if (existingUser && existingUser.is_deleted) {
+          console.log('🔄 [ACCOUNT RESTORE] Restoring deleted mock account for phone:', phone);
+          
+          const { data: restoredUser, error: restoreError } = await supabaseAdmin
+            .from("users")
+            .update({ 
+              is_deleted: false,
+              updated_at: new Date().toISOString()
+            })
+            .eq("id", existingUser.id)
+            .select("*")
+            .single();
+
+          if (restoreError) {
+            console.error('❌ [ACCOUNT RESTORE] Failed to restore mock account:', restoreError);
+          } else {
+            user = restoredUser;
+            isRestoredAccount = true;
+            console.log('✅ [ACCOUNT RESTORE] Mock account restored successfully');
+
+            // Send FCM notification and store in-app notification for account restoration
+            try {
+              const fcmService = require('../services/fcmService');
+              const notificationService = require('../services/notificationService');
+              
+              // Store in-app notification
+              await notificationService.storeNotification({
+                user_id: user.id,
+                type: 'account_restored',
+                title: 'Welcome Back! 🎉',
+                message: `Your account has been restored. Welcome back, ${user.name || 'User'}!`,
+                data: {
+                  type: 'account_restored',
+                  timestamp: new Date().toISOString()
+                },
+                priority: 'high'
+              });
+
+              // Send FCM push notification
+              await fcmService.sendNotificationToUser(user.id, {
+                title: 'Welcome Back! 🎉',
+                body: `Your account has been restored. Welcome back, ${user.name || 'User'}!`,
+                data: {
+                  type: 'account_restored',
+                  user_id: user.id,
+                  timestamp: new Date().toISOString()
+                }
+              });
+              console.log('✅ [ACCOUNT RESTORE] FCM and in-app notifications sent for mock user');
+            } catch (fcmError) {
+              console.error('⚠️ [ACCOUNT RESTORE] Failed to send notifications:', fcmError);
+            }
+          }
+        }
 
         // If mock user doesn't exist, create one
         if (!existingUser) {
@@ -678,7 +743,8 @@ class AuthService {
           success: true,
           user: user,
           token: jwtToken,
-          message: "Mock authentication successful",
+          message: isRestoredAccount ? "Account restored and authentication successful" : "Mock authentication successful",
+          account_restored: isRestoredAccount
         };
       }
 
@@ -688,17 +754,16 @@ class AuthService {
         return verifyResult;
       }
 
-      // Check if user exists in our database
+      // Check if user exists in our database (including deleted users)
       const { data: existingUser, error: userError } = await supabaseAdmin
         .from("users")
         .select("*")
         .eq("phone", phone)
-        .eq("is_deleted", false)
         .single();
 
       console.log('🔍 [DEBUG] Database user lookup:', {
         phone,
-        existingUser: existingUser ? { id: existingUser.id, role: existingUser.role, name: existingUser.name } : null,
+        existingUser: existingUser ? { id: existingUser.id, role: existingUser.role, name: existingUser.name, is_deleted: existingUser.is_deleted } : null,
         error: userError?.message || null
       });
 
@@ -710,6 +775,72 @@ class AuthService {
       }
 
       let user = existingUser;
+      let isRestoredAccount = false;
+
+      // If user exists but is deleted, restore the account
+      if (existingUser && existingUser.is_deleted) {
+        console.log('🔄 [ACCOUNT RESTORE] Restoring deleted account for phone:', phone);
+        
+        const { data: restoredUser, error: restoreError } = await supabaseAdmin
+          .from("users")
+          .update({ 
+            is_deleted: false,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", existingUser.id)
+          .select("*")
+          .single();
+
+        if (restoreError) {
+          console.error('❌ [ACCOUNT RESTORE] Failed to restore account:', restoreError);
+          return {
+            success: false,
+            message: "Failed to restore account. Please contact support.",
+          };
+        }
+
+        user = restoredUser;
+        isRestoredAccount = true;
+        console.log('✅ [ACCOUNT RESTORE] Account restored successfully:', {
+          userId: user.id,
+          phone: user.phone,
+          name: user.name
+        });
+
+        // Send FCM notification and store in-app notification for account restoration
+        try {
+          const fcmService = require('../services/fcmService');
+          const notificationService = require('../services/notificationService');
+          
+          // Store in-app notification
+          await notificationService.storeNotification({
+            user_id: user.id,
+            type: 'account_restored',
+            title: 'Welcome Back! 🎉',
+            message: `Your account has been restored. Welcome back, ${user.name || 'User'}!`,
+            data: {
+              type: 'account_restored',
+              timestamp: new Date().toISOString()
+            },
+            priority: 'high'
+          });
+
+          // Send FCM push notification
+          await fcmService.sendNotificationToUser(user.id, {
+            title: 'Welcome Back! 🎉',
+            body: `Your account has been restored. Welcome back, ${user.name || 'User'}!`,
+            data: {
+              type: 'account_restored',
+              user_id: user.id,
+              timestamp: new Date().toISOString()
+            }
+          });
+          console.log('✅ [ACCOUNT RESTORE] FCM and in-app notifications sent');
+        } catch (fcmError) {
+          console.error('⚠️ [ACCOUNT RESTORE] Failed to send notifications:', fcmError);
+          // Don't fail the login if notifications fail
+        }
+      }
 
       // If user doesn't exist, create new user with custom UUID
       if (!existingUser) {
@@ -736,6 +867,7 @@ class AuthService {
           
           // Verification fields
           if (userData.pan_number) userCreateData.pan_number = userData.pan_number;
+          if (userData.upi_id) userCreateData.upi_id = userData.upi_id;
           if (userData.verification_image_url) userCreateData.verification_image_url = userData.verification_image_url;
           if (userData.verification_document_type) userCreateData.verification_document_type = userData.verification_document_type;
           if (userData.address_line1) userCreateData.address_line1 = userData.address_line1;
@@ -795,7 +927,7 @@ class AuthService {
           await this.upsertSocialPlatforms(user.id, userData.social_platforms);
         }
 
-        // Send welcome message
+        // Send welcome message (only for new users, not restored)
         try {
           await whatsappService.sendWelcome(phone, userData?.name || "User");
         } catch (error) {
@@ -817,6 +949,7 @@ class AuthService {
             
             // Verification fields
             pan_number: userData.pan_number,
+            upi_id: userData.upi_id,
             verification_image_url: userData.verification_image_url,
             verification_document_type: userData.verification_document_type,
             address_line1: userData.address_line1,
@@ -910,7 +1043,8 @@ class AuthService {
         success: true,
         user: user,
         token: jwtToken,
-        message: "Authentication successful",
+        message: isRestoredAccount ? "Account restored and authentication successful" : "Authentication successful",
+        account_restored: isRestoredAccount
       };
     } catch (error) {
       return {

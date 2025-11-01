@@ -379,6 +379,7 @@ class UserController {
                     is_verified,
                     verification_priority,
                     pan_number,
+                    upi_id,
                     verification_image_url,
                     verification_document_type,
                     address_line1,
@@ -413,16 +414,29 @@ class UserController {
                 .eq('user_id', userId)
                 .eq('platform_is_active', true);
 
-            // Calculate verification completeness
-            const verificationFields = [
+            // Calculate verification completeness (role-specific)
+            let verificationFields = [
                 user.pan_number,
                 user.verification_image_url,
                 user.address_line1,
                 user.bio,
                 socialPlatformsCount > 0
             ];
+
+            // Add role-specific fields
+            if (user.role === 'brand_owner') {
+                verificationFields.push(user.business_name);
+                verificationFields.push(user.business_type);
+            } else if (user.role === 'influencer') {
+                verificationFields.push(user.upi_id);
+                verificationFields.push(user.experience_years);
+                verificationFields.push(user.specializations && user.specializations.length > 0);
+            }
+
             const completedFields = verificationFields.filter(Boolean).length;
             const verificationCompleteness = (completedFields / verificationFields.length) * 100;
+
+            const missingFields = this.getMissingVerificationFields(user, socialPlatformsCount);
 
             res.json({
                 success: true,
@@ -430,7 +444,9 @@ class UserController {
                     ...user,
                     social_platforms_count: socialPlatformsCount || 0,
                     verification_completeness: Math.round(verificationCompleteness),
-                    missing_fields: this.getMissingVerificationFields(user, socialPlatformsCount)
+                    missing_fields: missingFields,
+                    missing_fields_count: missingFields.length,
+                    is_registration_complete: missingFields.length === 0
                 }
             });
         } catch (error) {
@@ -439,6 +455,561 @@ class UserController {
                 message: 'Internal server error' 
             });
         }
+    }
+
+    /**
+     * Get registration status - shows what fields are missing after OTP verification
+     * This endpoint helps users know what steps are remaining in their registration
+     * Follows the step-based approach with role-specific field requirements
+     */
+    async getRegistrationStatus(req, res) {
+        try {
+            // Reduced logging - only log essential info
+
+            if (!req.user || !req.user.id) {
+                console.error('❌ [getRegistrationStatus] No user in request - authentication failed');
+                return res.status(401).json({
+                    success: false,
+                    message: 'Authentication required'
+                });
+            }
+
+            const userId = req.user.id;
+            console.log('🔍 [getRegistrationStatus] Fetching user data for userId:', userId);
+
+            // Fetch user with all required fields
+            // Use * to get all columns (handles missing columns gracefully)
+            // Use maybeSingle() instead of single() to handle case where user doesn't exist
+            const { data: user, error } = await supabaseAdmin
+                .from('users')
+                .select('*')
+                .eq('id', userId)
+                .maybeSingle();
+
+            if (error) {
+                console.error('❌ [getRegistrationStatus] Supabase query error:', error);
+                console.error('Error details:', JSON.stringify(error, null, 2));
+                return res.status(500).json({ 
+                    success: false, 
+                    message: 'Failed to fetch user data',
+                    error: process.env.NODE_ENV === 'development' ? error.message : undefined
+                });
+            }
+
+            if (!user) {
+                console.log('⚠️ [getRegistrationStatus] User not found for userId:', userId);
+                return res.status(404).json({
+                    success: false,
+                    message: 'User not found'
+                });
+            }
+
+            console.log('✅ [getRegistrationStatus] User found:', { id: user.id, role: user.role, name: user.name });
+
+            // Get social platforms count (at least one required for influencers)
+            // For registration, we just need to know if ANY platforms exist for this user
+            // Don't filter by platform_is_active since it might not be set for all records
+            let socialPlatformsCount = 0;
+            let hasSocialPlatforms = false;
+            
+            const { count: countResult, error: spError } = await supabaseAdmin
+                .from('social_platforms')
+                .select('id', { count: 'exact', head: true })
+                .eq('user_id', userId);
+
+            if (spError) {
+                console.error('⚠️ [getRegistrationStatus] Error fetching social platforms:', spError);
+            } else {
+                socialPlatformsCount = countResult || 0;
+                hasSocialPlatforms = socialPlatformsCount > 0;
+                console.log('🔍 [getRegistrationStatus] Social platforms found:', hasSocialPlatforms, 'count:', socialPlatformsCount);
+                
+                // Debug: Get actual platform data to see what's there
+                if (socialPlatformsCount === 0) {
+                    const { data: debugPlatforms } = await supabaseAdmin
+                        .from('social_platforms')
+                        .select('id, platform_name, platform_is_active, is_connected')
+                        .eq('user_id', userId)
+                        .limit(5);
+                    console.log('🔍 [getRegistrationStatus] Debug - All platforms for user:', debugPlatforms);
+                }
+            }
+
+            // Calculate registration status based on role
+            console.log('🔍 [getRegistrationStatus] User role:', user.role);
+            console.log('🔍 [getRegistrationStatus] Key fields check:', {
+                pan_number: user.pan_number ? '✓' : '✗',
+                upi_id: user.upi_id ? '✓' : '✗',
+                name: user.name ? '✓' : '✗',
+                gender: user.gender ? '✓' : '✗',
+                date_of_birth: user.date_of_birth ? '✓' : '✗',
+                hasSocialPlatforms: hasSocialPlatforms ? '✓' : '✗'
+            });
+            
+            let statusResponse;
+            if (user.role === 'influencer') {
+                console.log('🔍 [getRegistrationStatus] Calling getInfluencerRegistrationStatus...');
+                if (typeof this.getInfluencerRegistrationStatus !== 'function') {
+                    console.error('❌ [getRegistrationStatus] getInfluencerRegistrationStatus is not a function!');
+                    console.error('❌ [getRegistrationStatus] this keys:', Object.keys(this || {}));
+                    throw new Error('getInfluencerRegistrationStatus method not found on controller instance');
+                }
+                statusResponse = this.getInfluencerRegistrationStatus(user, hasSocialPlatforms);
+            } else if (user.role === 'brand_owner') {
+                console.log('🔍 [getRegistrationStatus] Calling getBrandOwnerRegistrationStatus...');
+                if (typeof this.getBrandOwnerRegistrationStatus !== 'function') {
+                    console.error('❌ [getRegistrationStatus] getBrandOwnerRegistrationStatus is not a function!');
+                    console.error('❌ [getRegistrationStatus] this keys:', Object.keys(this || {}));
+                    throw new Error('getBrandOwnerRegistrationStatus method not found on controller instance');
+                }
+                statusResponse = this.getBrandOwnerRegistrationStatus(user);
+            } else {
+                console.log('⚠️ [getRegistrationStatus] Invalid user role:', user.role);
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid user role'
+                });
+            }
+
+            console.log('✅ [getRegistrationStatus] Status calculated:', {
+                role: statusResponse.role,
+                is_complete: statusResponse.is_complete,
+                progress: statusResponse.progress_percentage + '%',
+                next_screen: statusResponse.next_screen,
+                remaining_steps: statusResponse.remaining_steps?.map(s => s.step_id) || []
+            });
+            
+            // Validate response structure
+            if (!statusResponse.role || statusResponse.role !== user.role) {
+                console.error('❌ [getRegistrationStatus] ROLE MISMATCH! User role:', user.role, 'Response role:', statusResponse.role);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Role mismatch in registration status response'
+                });
+            }
+            
+            return res.json(statusResponse);
+        } catch (error) {
+            console.error('❌ [getRegistrationStatus] Error fetching registration status:', error);
+            console.error('❌ [getRegistrationStatus] Error stack:', error.stack);
+            res.status(500).json({ 
+                success: false, 
+                message: 'Internal server error',
+                error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            });
+        }
+    }
+
+    /**
+     * Get registration status for influencers
+     */
+    getInfluencerRegistrationStatus(user, hasSocialPlatforms) {
+        const completedSteps = [];
+        const remainingSteps = [];
+        const missingRequiredFields = [];
+        let completed = 0;
+        let total = 0;
+
+        // Step mapping for screen navigation
+        const stepScreenMap = {
+            'otp_verified': 'Otp',
+            'basic_info': 'Register',
+            'profile_image': 'ImageUpload',
+            'kyc_pan': 'Kyc',
+            'upi_id': 'Kyc',
+            'social_media': 'SocialMedia',
+            'languages': 'FinalStep',
+            'categories': 'FinalStep',
+            'pricing': 'FinalStep'
+        };
+
+        // 1. OTP Verification (always completed if user is authenticated)
+        if (user.phone && user.phone.length > 0) {
+            completedSteps.push({
+                step_id: 'otp_verified',
+                step_name: 'OTP Verification',
+                completed_at: user.created_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            remainingSteps.push({
+                step_id: 'otp_verified',
+                step_name: 'OTP Verification',
+                description: 'Verify your phone number',
+                screen_name: stepScreenMap['otp_verified'],
+                priority: 'high'
+            });
+            total++;
+        }
+
+        // 2. Basic Info (name, gender, date_of_birth) - email is optional
+        if (user.name && user.gender && user.date_of_birth) {
+            completedSteps.push({
+                step_id: 'basic_info',
+                step_name: 'Basic Information',
+                completed_at: user.updated_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            const missingBasic = [];
+            if (!user.name) missingBasic.push('name');
+            if (!user.gender) missingBasic.push('gender');
+            if (!user.date_of_birth) missingBasic.push('date_of_birth');
+
+            remainingSteps.push({
+                step_id: 'basic_info',
+                step_name: 'Complete your basic information',
+                description: `Missing: ${missingBasic.join(', ')}`,
+                screen_name: stepScreenMap['basic_info'],
+                priority: 'high'
+            });
+            missingRequiredFields.push(...missingBasic.map(f => ({
+                field_name: f,
+                field_label: f.charAt(0).toUpperCase() + f.slice(1).replace(/_/g, ' '),
+                category: 'common',
+                screen_name: stepScreenMap['basic_info']
+            })));
+            total++;
+        }
+
+        // 3. Profile Image (Optional - not counted in completion)
+        // Note: Profile image is optional for now, so we don't count it in the total steps
+
+        // 4. KYC - PAN Number
+        const panNumber = user.pan_number ? String(user.pan_number).trim() : '';
+        if (panNumber.length > 0) {
+            completedSteps.push({
+                step_id: 'kyc_pan',
+                step_name: 'PAN Verification',
+                completed_at: user.updated_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            remainingSteps.push({
+                step_id: 'kyc_pan',
+                step_name: 'Verify your PAN number',
+                description: 'Enter and verify your PAN card number',
+                screen_name: stepScreenMap['kyc_pan'],
+                priority: 'high'
+            });
+            missingRequiredFields.push({
+                field_name: 'pan_number',
+                field_label: 'PAN Card Number',
+                category: 'common',
+                screen_name: stepScreenMap['kyc_pan']
+            });
+            total++;
+        }
+
+        // 5. UPI ID (Influencer-specific)
+        const upiId = user.upi_id ? String(user.upi_id).trim() : '';
+        if (upiId.length > 0) {
+            completedSteps.push({
+                step_id: 'upi_id',
+                step_name: 'UPI ID',
+                completed_at: user.updated_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            remainingSteps.push({
+                step_id: 'upi_id',
+                step_name: 'Add your UPI ID for payments',
+                description: 'Enter your UPI ID (e.g., username@paytm)',
+                screen_name: stepScreenMap['upi_id'],
+                priority: 'high'
+            });
+            missingRequiredFields.push({
+                field_name: 'upi_id',
+                field_label: 'UPI ID',
+                category: 'influencer',
+                screen_name: stepScreenMap['upi_id']
+            });
+            total++;
+        }
+
+        // 6. Social Media (Influencer-specific)
+        if (hasSocialPlatforms) {
+            completedSteps.push({
+                step_id: 'social_media',
+                step_name: 'Social Media Connection',
+                completed_at: user.updated_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            remainingSteps.push({
+                step_id: 'social_media',
+                step_name: 'Connect at least one social media account',
+                description: 'Connect Instagram, Facebook, or YouTube',
+                screen_name: stepScreenMap['social_media'],
+                priority: 'high'
+            });
+            missingRequiredFields.push({
+                field_name: 'social_platforms',
+                field_label: 'Social Platforms',
+                category: 'influencer',
+                screen_name: stepScreenMap['social_media']
+            });
+            total++;
+        }
+
+        // 7. Languages (Influencer-specific)
+        const languages = Array.isArray(user.languages) ? user.languages : [];
+        if (languages.length > 0) {
+            completedSteps.push({
+                step_id: 'languages',
+                step_name: 'Languages',
+                completed_at: user.updated_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            remainingSteps.push({
+                step_id: 'languages',
+                step_name: 'Select at least one language',
+                description: 'Choose the languages you communicate in',
+                screen_name: stepScreenMap['languages'],
+                priority: 'high'
+            });
+            missingRequiredFields.push({
+                field_name: 'languages',
+                field_label: 'Languages',
+                category: 'influencer',
+                screen_name: stepScreenMap['languages']
+            });
+            total++;
+        }
+
+        // 8. Categories (Influencer-specific)
+        const categories = Array.isArray(user.categories) ? user.categories : [];
+        if (categories.length > 0) {
+            completedSteps.push({
+                step_id: 'categories',
+                step_name: 'Categories',
+                completed_at: user.updated_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            remainingSteps.push({
+                step_id: 'categories',
+                step_name: 'Select at least one category',
+                description: 'Choose your content categories',
+                screen_name: stepScreenMap['categories'],
+                priority: 'high'
+            });
+            missingRequiredFields.push({
+                field_name: 'categories',
+                field_label: 'Categories',
+                category: 'influencer',
+                screen_name: stepScreenMap['categories']
+            });
+            total++;
+        }
+
+        // 9. Pricing Range (Influencer-specific)
+        if (user.min_range && user.max_range && user.min_range > 0 && user.max_range > user.min_range) {
+            completedSteps.push({
+                step_id: 'pricing',
+                step_name: 'Pricing Range',
+                completed_at: user.updated_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            remainingSteps.push({
+                step_id: 'pricing',
+                step_name: 'Set your pricing range',
+                description: 'Set minimum and maximum collaboration prices',
+                screen_name: stepScreenMap['pricing'],
+                priority: 'high'
+            });
+            missingRequiredFields.push({
+                field_name: 'min_range',
+                field_label: 'Minimum Price',
+                category: 'influencer',
+                screen_name: stepScreenMap['pricing']
+            });
+            missingRequiredFields.push({
+                field_name: 'max_range',
+                field_label: 'Maximum Price',
+                category: 'influencer',
+                screen_name: stepScreenMap['pricing']
+            });
+            total++;
+        }
+
+        const progressPercentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+        const nextScreen = remainingSteps.length > 0 ? remainingSteps[0].screen_name : null;
+
+        return {
+            success: true,
+            role: 'influencer',
+            is_complete: remainingSteps.length === 0,
+            progress_percentage: progressPercentage,
+            completed_steps: completedSteps,
+            remaining_steps: remainingSteps,
+            next_screen: nextScreen,
+            missing_required_fields: missingRequiredFields
+        };
+    }
+
+    /**
+     * Get registration status for brand owners
+     */
+    getBrandOwnerRegistrationStatus(user) {
+        const completedSteps = [];
+        const remainingSteps = [];
+        const missingRequiredFields = [];
+        let completed = 0;
+        let total = 0;
+
+        // Step mapping for screen navigation
+        const stepScreenMap = {
+            'otp_verified': 'Otp',
+            'basic_info': 'Register',
+            'profile_image': 'ImageUpload',
+            'kyc_pan': 'Kyc',
+            'business_details': 'BrandBusinessDetails'
+        };
+
+        // 1. OTP Verification (always completed if user is authenticated)
+        if (user.phone && user.phone.length > 0) {
+            completedSteps.push({
+                step_id: 'otp_verified',
+                step_name: 'OTP Verification',
+                completed_at: user.created_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            remainingSteps.push({
+                step_id: 'otp_verified',
+                step_name: 'OTP Verification',
+                description: 'Verify your phone number',
+                screen_name: stepScreenMap['otp_verified'],
+                priority: 'high'
+            });
+            total++;
+        }
+
+        // 2. Basic Info (name, gender, date_of_birth) - email is optional
+        if (user.name && user.gender && user.date_of_birth) {
+            completedSteps.push({
+                step_id: 'basic_info',
+                step_name: 'Basic Information',
+                completed_at: user.updated_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            const missingBasic = [];
+            if (!user.name) missingBasic.push('name');
+            if (!user.gender) missingBasic.push('gender');
+            if (!user.date_of_birth) missingBasic.push('date_of_birth');
+
+            remainingSteps.push({
+                step_id: 'basic_info',
+                step_name: 'Complete your basic information',
+                description: `Missing: ${missingBasic.join(', ')}`,
+                screen_name: stepScreenMap['basic_info'],
+                priority: 'high'
+            });
+            missingRequiredFields.push(...missingBasic.map(f => ({
+                field_name: f,
+                field_label: f.charAt(0).toUpperCase() + f.slice(1).replace(/_/g, ' '),
+                category: 'common',
+                screen_name: stepScreenMap['basic_info']
+            })));
+            total++;
+        }
+
+        // 3. Profile Image (Optional - not counted in completion)
+        // Note: Profile image is optional for now, so we don't count it in the total steps
+
+        // 4. KYC - PAN Number
+        const panNumber = user.pan_number ? String(user.pan_number).trim() : '';
+        if (panNumber.length > 0) {
+            completedSteps.push({
+                step_id: 'kyc_pan',
+                step_name: 'PAN Verification',
+                completed_at: user.updated_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            remainingSteps.push({
+                step_id: 'kyc_pan',
+                step_name: 'Verify your PAN number',
+                description: 'Enter and verify your PAN card number',
+                screen_name: stepScreenMap['kyc_pan'],
+                priority: 'high'
+            });
+            missingRequiredFields.push({
+                field_name: 'pan_number',
+                field_label: 'PAN Card Number',
+                category: 'common',
+                screen_name: stepScreenMap['kyc_pan']
+            });
+            total++;
+        }
+
+        // 5. Business Details (Brand Owner-specific)
+        // Business name and type are combined in one step
+        if (user.business_name && user.business_type) {
+            completedSteps.push({
+                step_id: 'business_details',
+                step_name: 'Business Details',
+                completed_at: user.updated_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            const missingBusiness = [];
+            if (!user.business_name) missingBusiness.push('business_name');
+            if (!user.business_type) missingBusiness.push('business_type');
+
+            remainingSteps.push({
+                step_id: 'business_details',
+                step_name: 'Add your business details',
+                description: `Missing: ${missingBusiness.join(', ')}`,
+                screen_name: stepScreenMap['business_details'],
+                priority: 'high'
+            });
+            missingRequiredFields.push(...missingBusiness.map(f => ({
+                field_name: f,
+                field_label: f === 'business_name' ? 'Business Name' : 'Business Type',
+                category: 'brand_owner',
+                screen_name: stepScreenMap['business_details']
+            })));
+            total++;
+        }
+
+        // Optional fields (shown but not counted in completion)
+        const optionalFields = [];
+        if (!user.gst_number) {
+            optionalFields.push({
+                field_name: 'gst_number',
+                field_label: 'GST Number',
+                category: 'brand_owner',
+                screen_name: stepScreenMap['business_details']
+            });
+        }
+        if (!user.business_registration_number) {
+            optionalFields.push({
+                field_name: 'business_registration_number',
+                field_label: 'Business Registration Number',
+                category: 'brand_owner',
+                screen_name: stepScreenMap['business_details']
+            });
+        }
+
+        const progressPercentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+        const nextScreen = remainingSteps.length > 0 ? remainingSteps[0].screen_name : null;
+
+        return {
+            success: true,
+            role: 'brand_owner',
+            is_complete: remainingSteps.length === 0,
+            progress_percentage: progressPercentage,
+            completed_steps: completedSteps,
+            remaining_steps: remainingSteps,
+            next_screen: nextScreen,
+            missing_required_fields: missingRequiredFields,
+            optional_fields: optionalFields.length > 0 ? optionalFields : undefined
+        };
     }
 
     /**
@@ -594,6 +1165,7 @@ class UserController {
     getMissingVerificationFields(user, socialPlatformsCount = 0) {
         const missing = [];
 
+        // Common required fields for all users
         if (!user.pan_number) missing.push('pan_number');
         if (!user.verification_image_url) missing.push('verification_document');
         if (!user.address_line1) missing.push('address');
@@ -602,9 +1174,12 @@ class UserController {
         
         // Role-specific missing fields
         if (user.role === 'brand_owner') {
+            // Brand owners don't need UPI ID, but need business details
             if (!user.business_name) missing.push('business_name');
             if (!user.business_type) missing.push('business_type');
         } else if (user.role === 'influencer') {
+            // Influencers need UPI ID and experience/specializations
+            if (!user.upi_id) missing.push('upi_id');
             if (!user.experience_years) missing.push('experience_years');
             if (!user.specializations || user.specializations.length === 0) missing.push('specializations');
         }
@@ -872,8 +1447,23 @@ class UserController {
     }
 }
 
+const userControllerInstance = new UserController();
+
+// Export with all methods explicitly bound to preserve 'this' context when called by Express
+// This is necessary because Express route handlers lose 'this' context
 module.exports = {
-    UserController: new UserController()
+    UserController: {
+        listInfluencers: userControllerInstance.listInfluencers.bind(userControllerInstance),
+        listBrandOwners: userControllerInstance.listBrandOwners.bind(userControllerInstance),
+        getUserStats: userControllerInstance.getUserStats.bind(userControllerInstance),
+        getUserProfile: userControllerInstance.getUserProfile.bind(userControllerInstance),
+        getVerificationStatus: userControllerInstance.getVerificationStatus.bind(userControllerInstance),
+        getRegistrationStatus: userControllerInstance.getRegistrationStatus.bind(userControllerInstance),
+        updateVerificationDetails: userControllerInstance.updateVerificationDetails.bind(userControllerInstance),
+        uploadVerificationDocument: userControllerInstance.uploadVerificationDocument.bind(userControllerInstance),
+        getInfluencerById: userControllerInstance.getInfluencerById.bind(userControllerInstance),
+        getBrandOwnerById: userControllerInstance.getBrandOwnerById.bind(userControllerInstance),
+    }
 };
 
 

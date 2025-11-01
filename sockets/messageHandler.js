@@ -335,8 +335,8 @@ class MessageHandler {
                     title: `${senderName} sent you a message`,
                     message: savedMessage.message,
                     data: {
-                        conversation_id: conversationId,
-                        message: savedMessage,
+                    conversation_id: conversationId,
+                    message: savedMessage,
                         sender_id: socket.user.id,
                         receiver_id: receiverId,
                         sender_name: senderName
