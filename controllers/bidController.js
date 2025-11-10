@@ -5,6 +5,7 @@ const {
   deleteImageFromStorage,
 } = require("../utils/imageUpload");
 const automatedFlowService = require("../utils/automatedFlowService");
+const SYSTEM_USER_ID = process.env.SYSTEM_USER_ID || "00000000-0000-0000-0000-000000000000";
 
 class BidController {
   /**
@@ -1687,12 +1688,32 @@ class BidController {
           .eq("id", conversation.bid_id);
       }
 
-      // Update conversation to work_in_progress (enable chat) and store escrow hold ID
+      // Check if admin payment tracking exists - if yes, await admin to process advance payment
+      const { data: adminPaymentRecord } = await supabaseAdmin
+        .from("admin_payment_tracking")
+        .select("*")
+        .eq("conversation_id", conversation_id)
+        .eq("advance_payment_status", "admin_received")
+        .single();
+
+      // Determine next state based on whether admin payment flow is active
+      let nextFlowState, nextAwaitingRole;
+      if (adminPaymentRecord) {
+        // Admin payment flow: wait for admin to process advance payment
+        nextFlowState = "admin_advance_payment_pending";
+        nextAwaitingRole = "admin";
+      } else {
+        // Direct payment flow: proceed to work
+        nextFlowState = "work_in_progress";
+        nextAwaitingRole = "influencer";
+      }
+
+      // Update conversation state
       const { data: updatedConversation, error: updateError } = await supabaseAdmin
         .from("conversations")
         .update({
-          flow_state: "work_in_progress",
-          awaiting_role: "influencer", // Influencer's turn to work
+          flow_state: nextFlowState,
+          awaiting_role: nextAwaitingRole,
           chat_status: "real_time",
           conversation_type: conversation.campaign_id ? "campaign" : "bid",
           escrow_hold_id: escrowHold?.id, // Store escrow hold ID for later reference
@@ -1700,7 +1721,8 @@ class BidController {
             agreed_amount: paymentAmount / 100,
             agreement_timestamp: new Date().toISOString(),
             payment_completed: true,
-            payment_timestamp: new Date().toISOString()
+            payment_timestamp: new Date().toISOString(),
+            admin_payment_tracking_id: adminPaymentRecord?.id || null
           },
           current_action_data: {}
         })
@@ -1715,16 +1737,70 @@ class BidController {
         });
       }
 
-      // Create success message
+      // Create appropriate message based on flow
+      let messageText, messageType, actionRequired, actionData;
+      
+      if (adminPaymentRecord) {
+        // Admin payment flow: create message with admin action buttons
+        const advanceAmount = adminPaymentRecord.advance_amount_paise / 100;
+        const finalAmount = adminPaymentRecord.final_amount_paise / 100;
+        const totalAmount = adminPaymentRecord.total_amount_paise / 100;
+        const commissionAmount = adminPaymentRecord.commission_amount_paise / 100;
+        
+        messageText = `💳 **Payment Received - Admin Processing Required**
+
+💰 **Total Amount:** ₹${totalAmount}
+💼 **Commission (${adminPaymentRecord.commission_percentage}%):** ₹${commissionAmount}
+💵 **Net Amount:** ₹${adminPaymentRecord.net_amount_paise / 100}
+
+📊 **Payment Breakdown:**
+• **Advance Payment:** ₹${advanceAmount} (30%)
+• **Final Payment:** ₹${finalAmount} (70%)
+
+⏳ **Status:** Waiting for admin to process advance payment...`;
+
+        messageType = "automated";
+        actionRequired = true;
+        actionData = {
+          title: "💳 **Admin Payment Processing Required**",
+          subtitle: "Please process the advance payment to continue:",
+          payment_breakdown: {
+            total_amount: totalAmount,
+            commission_amount: commissionAmount,
+            net_amount: adminPaymentRecord.net_amount_paise / 100,
+            advance_amount: advanceAmount,
+            final_amount: finalAmount,
+            commission_percentage: adminPaymentRecord.commission_percentage
+          },
+          admin_payment_tracking_id: adminPaymentRecord.id,
+          buttons: [
+            {
+              id: "process_advance_payment",
+              text: "Process Advance Payment",
+              action: "process_advance_payment",
+              style: "primary",
+              visible_to: ["admin"]
+            }
+          ]
+        };
+      } else {
+        // Direct payment flow: standard success message
+        messageText = "🎉 **Payment Completed Successfully!**\n\nYour payment has been processed and the collaboration is now active. You can now communicate in real-time.";
+        messageType = "automated";
+        actionRequired = false;
+        actionData = null;
+      }
+
       const { data: successMessage, error: messageError } = await supabaseAdmin
         .from("messages")
         .insert({
           conversation_id: conversation_id,
-          sender_id: conversation.brand_owner_id,
-          receiver_id: conversation.influencer_id,
-          message: "🎉 **Payment Completed Successfully!**\n\nYour payment has been processed and the collaboration is now active. You can now communicate in real-time.",
-          message_type: "automated",
-          action_required: false
+          sender_id: SYSTEM_USER_ID,
+          receiver_id: null, // Visible to all participants
+          message: messageText,
+          message_type: messageType,
+          action_required: actionRequired,
+          action_data: actionData
         })
         .select()
         .single();

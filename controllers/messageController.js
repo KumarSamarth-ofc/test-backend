@@ -1613,18 +1613,7 @@ class MessageController {
         });
       }
 
-      // Verify user is part of conversation
-      if (
-        conversation.brand_owner_id !== userId &&
-        conversation.influencer_id !== userId
-      ) {
-        return res.status(403).json({
-          success: false,
-          message: "Access denied",
-        });
-      }
-
-      // Get user details
+      // Get user details first to check admin role
       const { data: currentUser, error: userError } = await supabaseAdmin
         .from("users")
         .select("id, name, role")
@@ -1638,16 +1627,94 @@ class MessageController {
         });
       }
 
+      // Check if user is admin
+      const isAdmin = currentUser?.role === 'admin';
+
+      // Verify user is part of conversation OR is admin
+      if (
+        conversation.brand_owner_id !== userId &&
+        conversation.influencer_id !== userId &&
+        !isAdmin
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied",
+        });
+      }
+
       // Check if this is an automated flow conversation
       // Handle automated flow actions (including work submission from real_time chat)
       if (conversation.flow_state) {
         // Route to appropriate automated flow handler
         const automatedFlowService = require('../utils/automatedFlowService');
+        const adminPaymentFlowService = require('../utils/adminPaymentFlowService');
         
         try {
           let result;
           
-          
+          // Handle admin payment actions
+          if (isAdmin && (button_id === 'process_advance_payment' || button_id === 'process_final_payment')) {
+            // Get admin payment tracking ID from button data or conversation flow_data
+            const adminPaymentTrackingId = buttonData?.admin_payment_tracking_id || 
+                                          conversation.flow_data?.admin_payment_tracking_id;
+            
+            if (!adminPaymentTrackingId) {
+              return res.status(400).json({
+                success: false,
+                message: "Admin payment tracking ID not found"
+              });
+            }
+
+            if (button_id === 'process_advance_payment') {
+              // Process advance payment
+              const screenshotUrl = buttonData?.screenshot_url || null;
+              result = await adminPaymentFlowService.confirmAdvancePayment(
+                adminPaymentTrackingId,
+                screenshotUrl
+              );
+              
+              if (result.success) {
+                // Update conversation state to work_in_progress
+                await supabaseAdmin
+                  .from("conversations")
+                  .update({
+                    flow_state: "work_in_progress",
+                    awaiting_role: "influencer",
+                    updated_at: new Date().toISOString()
+                  })
+                  .eq("id", conversation_id);
+              }
+            } else if (button_id === 'process_final_payment') {
+              // Process final payment
+              const screenshotUrl = buttonData?.screenshot_url || null;
+              result = await adminPaymentFlowService.processFinalPayment(
+                adminPaymentTrackingId,
+                screenshotUrl
+              );
+              
+              if (result.success) {
+                // Update conversation state to closed
+                await supabaseAdmin
+                  .from("conversations")
+                  .update({
+                    flow_state: "chat_closed",
+                    chat_status: "closed",
+                    awaiting_role: null,
+                    updated_at: new Date().toISOString()
+                  })
+                  .eq("id", conversation_id);
+              }
+            }
+            
+            if (result && result.success) {
+              return res.json(result);
+            } else {
+              return res.status(400).json({
+                success: false,
+                message: result?.error || "Failed to process admin payment"
+              });
+            }
+          }
           
           if (userId === conversation.brand_owner_id) {
             // Map button IDs to automated flow actions
