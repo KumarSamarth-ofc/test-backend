@@ -168,6 +168,31 @@ class AuthController {
 
       // If verification is successful and user is authenticated, update database
       if (isValid && userId) {
+        // Check if another user already has this PAN number
+        const { data: existingUser, error: checkError } = await supabaseAdmin
+          .from("users")
+          .select("id, name")
+          .eq("pan_number", pan)
+          .neq("id", userId)
+          .maybeSingle();
+
+        if (checkError) {
+          console.error("❌ [verifyPAN] Error checking for duplicate PAN:", checkError);
+          return res.status(500).json({
+            success: false,
+            message: "Failed to verify PAN. Please try again.",
+            error_type: "database_error"
+          });
+        }
+
+        if (existingUser) {
+          return res.status(400).json({
+            success: false,
+            message: "This PAN number is already registered with another account. Please contact support if this is your PAN.",
+            error_type: "duplicate_pan"
+          });
+        }
+
         const updateData = {
           pan_number: pan,
           pan_verified: true,
@@ -184,7 +209,22 @@ class AuthController {
 
         if (updateError) {
           console.error("❌ [verifyPAN] Failed to update PAN verification status:", updateError);
-          // Don't fail the request, just log the error
+          
+          // Check if error is due to unique constraint violation
+          if (updateError.code === '23505' || updateError.message?.includes('unique') || updateError.message?.includes('duplicate')) {
+            return res.status(400).json({
+              success: false,
+              message: "This PAN number is already registered with another account. Please contact support if this is your PAN.",
+              error_type: "duplicate_pan"
+            });
+          }
+          
+          // For other database errors, return generic error
+          return res.status(500).json({
+            success: false,
+            message: "Failed to save PAN verification. Please try again.",
+            error_type: "database_error"
+          });
         } else {
           console.log("✅ [verifyPAN] PAN verification status updated in database:", {
             pan_number: updatedUser?.pan_number,
