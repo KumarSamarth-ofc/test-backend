@@ -26,7 +26,8 @@ class AdminWalletController {
       const type = req.query.type;
       const direction = req.query.direction;
       const status = req.query.status;
-      const userId = req.query.user_id;
+      const userId = req.user.id;
+      console.log(userId);
       const dateFrom = req.query.date_from;
       const dateTo = req.query.date_to;
       const search = req.query.search;
@@ -71,9 +72,6 @@ class AdminWalletController {
       }
       if (status) {
         query = query.eq('status', status);
-      }
-      if (userId) {
-        query = query.eq('user_id', userId);
       }
       if (dateFrom) {
         query = query.gte('created_at', dateFrom);
@@ -175,7 +173,6 @@ class AdminWalletController {
           type: type || null,
           direction: direction || null,
           status: status || null,
-          user_id: userId || null,
           date_from: dateFrom || null,
           date_to: dateTo || null,
           search: search || null

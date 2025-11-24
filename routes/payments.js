@@ -17,7 +17,7 @@ router.get("/payment-config", PaymentController.getPaymentConfig);
 router.post("/create-order", PaymentController.createOrderForRequest);
 
 // Transaction management
-router.get("/transactions", PaymentController.getTransactionHistory);
+router.get("/transactions", authService.authenticateToken, PaymentController.getTransactionHistory);
 
 // New escrow payment routes
 router.post(

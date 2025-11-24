@@ -1,5 +1,6 @@
 const { supabaseAdmin } = require("../supabase/client");
 const { body, validationResult } = require("express-validator");
+const { retrySupabaseQuery } = require("../utils/supabaseRetry");
 
 class SocialPlatformController {
   /**
@@ -10,11 +11,14 @@ class SocialPlatformController {
       const userId = req.user.id;
       console.log(userId)
 
-      const { data: platforms, error } = await supabaseAdmin
-        .from("social_platforms")
-        .select("*")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false });
+      const { data: platforms, error } = await retrySupabaseQuery(
+        () => supabaseAdmin
+          .from("social_platforms")
+          .select("*")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false }),
+        { maxRetries: 3, initialDelay: 200 }
+      );
 
       if (error) {
         return res.status(500).json({

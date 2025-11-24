@@ -23,22 +23,7 @@ router.use((req, res, next) => {
  * @access Admin only
  * @query page, limit, type, direction, status, user_id, date_from, date_to, search
  */
-router.get('/transactions', adminWalletController.getAllTransactions);
-
-/**
- * @route GET /api/admin/wallet/transactions/:id
- * @desc Get single transaction details
- * @access Admin only
- */
-router.get('/transactions/:id', adminWalletController.getTransactionDetails);
-
-/**
- * @route GET /api/admin/wallet/users
- * @desc Get all users with wallet balances
- * @access Admin only
- * @query page, limit, role, search
- */
-router.get('/users', adminWalletController.getAllUsersWithWallets);
+router.get('/transactions', authService.authenticateToken, adminWalletController.getAllTransactions);
 
 /**
  * @route GET /api/admin/wallet/users/:userId

@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const { supabaseAdmin } = require("../supabase/client");
+const { retrySupabaseQuery } = require("./supabaseRetry");
 
 class PaymentService {
   /**
@@ -265,49 +266,57 @@ class PaymentService {
   }
 
   /**
-   * Get transaction history for a user
+   * Get transaction history for a user from transactions table
+   * Uses proper joins with wallets and campaigns tables
    */
   async getTransactionHistory(userId, page = 1, limit = 10, status = null) {
     try {
       const offset = (page - 1) * limit;
 
+      // Query transactions table with joins
       let query = supabaseAdmin
         .from("transactions")
         .select(
           `
-                    *,
-                    wallets!inner (
-                        user_id
-                    ),
-                    campaigns (
-                        id,
-                        title,
-                        type:campaign_type
-                    )
-                `,
+          *,
+          wallets!inner (
+            user_id
+          ),
+          campaigns (
+            id,
+            title,
+            campaign_type
+          )
+        `,
           { count: "exact" }
         )
         .eq("wallets.user_id", userId);
 
+      // Apply status filter if provided
       if (status) {
         query = query.eq("status", status);
       }
 
-      const {
-        data: transactions,
-        error,
-        count,
-      } = await query
-        .order("created_at", { ascending: false })
-        .range(offset, offset + limit - 1);
+      // Execute query with retry logic
+      const result = await retrySupabaseQuery(
+        () => query
+          .order("created_at", { ascending: false })
+          .range(offset, offset + limit - 1),
+        { maxRetries: 3, initialDelay: 200 }
+      );
+
+      const { data: transactions, error, count } = result;
 
       if (error) {
-        throw new Error("Failed to fetch transactions");
+        console.error("❌ [getTransactionHistory] Supabase error:", error);
+        console.error("❌ [getTransactionHistory] Error details:", JSON.stringify(error, null, 2));
+        throw new Error(error.message || "Failed to fetch transactions");
       }
 
+      // Return transactions with nested structure (for backward compatibility)
       return {
         success: true,
-        transactions: transactions,
+        transactions: transactions || [],
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
@@ -316,9 +325,10 @@ class PaymentService {
         },
       };
     } catch (error) {
+      console.error("❌ [getTransactionHistory] Exception:", error);
       return {
         success: false,
-        error: error.message,
+        error: error.message || "Failed to fetch transaction history",
       };
     }
   }

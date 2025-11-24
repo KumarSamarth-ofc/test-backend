@@ -1,6 +1,7 @@
 const { supabaseAdmin } = require("../supabase/client");
 const { body, validationResult } = require("express-validator");
 const AutomatedFlowService = require("../utils/automatedFlowService");
+const { retrySupabaseQuery } = require("../utils/supabaseRetry");
 
 class MessageController {
   /**
@@ -16,18 +17,44 @@ class MessageController {
         `🔍 Fetching conversations for user: ${userId}, page: ${page}, limit: ${limit}`
       );
 
-      // First get the user's role
-      const { data: currentUser, error: userError } = await supabaseAdmin
-        .from("users")
-        .select("role")
-        .eq("id", userId)
-        .maybeSingle();
+      // First get the user's role with retry logic
+      const { data: currentUser, error: userError } = await retrySupabaseQuery(
+        () => supabaseAdmin
+          .from("users")
+          .select("role")
+          .eq("id", userId)
+          .maybeSingle(),
+        { maxRetries: 3, initialDelay: 200 }
+      );
 
       if (userError) {
         console.error("❌ Error fetching user role:", userError);
+        console.error("❌ Error code:", userError.code);
+        console.error("❌ Error details:", JSON.stringify(userError, null, 2));
+        console.error("❌ Error hint:", userError.hint);
+        
+        // Check for specific error types
+        if (userError.code === 'PGRST116' || userError.message?.includes('does not exist')) {
+          return res.status(404).json({
+            success: false,
+            message: "User not found"
+          });
+        }
+        
+        // Check if it's a column error
+        if (userError.message?.includes('column') || userError.hint?.includes('column')) {
+          console.error('❌ Possible missing "role" column in users table');
+          return res.status(500).json({
+            success: false,
+            message: "Database schema error - please check users table structure",
+            error: process.env.NODE_ENV === 'development' ? userError.message : undefined
+          });
+        }
+        
         return res.status(500).json({
           success: false,
           message: "Failed to fetch user details",
+          error: process.env.NODE_ENV === 'development' ? userError.message : undefined
         });
       }
 
