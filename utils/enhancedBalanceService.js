@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require("../supabase/client");
+const { retrySupabaseQuery } = require("./supabaseRetry");
 
 class EnhancedBalanceService {
   /**
@@ -8,11 +9,16 @@ class EnhancedBalanceService {
     try {
       console.log("🔍 [DEBUG] getWalletBalance called for user:", userId);
       
-      const { data: wallet, error } = await supabaseAdmin
-        .from("wallets")
-        .select("*")
-        .eq("user_id", userId)
-        .single();
+      const result = await retrySupabaseQuery(
+        () => supabaseAdmin
+          .from("wallets")
+          .select("*")
+          .eq("user_id", userId)
+          .single(),
+        { maxRetries: 3, initialDelay: 200 }
+      );
+      
+      const { data: wallet, error } = result;
 
       console.log("🔍 [DEBUG] Wallet query result:", { wallet, error });
 
@@ -568,13 +574,36 @@ class EnhancedBalanceService {
   /**
    * Get comprehensive transaction history
    */
+  /**
+   * Get comprehensive transaction history from transactions table
+   * Uses proper joins with wallets, campaigns, and bids tables
+   */
   async getTransactionHistory(userId, page = 1, limit = 20, filters = {}) {
     try {
+      const offset = (page - 1) * limit;
+
+      // Query transactions table with joins to get related data
       let query = supabaseAdmin
-        .from("transaction_history_view")
-        .select("*")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false });
+        .from("transactions")
+        .select(
+          `
+          *,
+          wallets!inner (
+            user_id
+          ),
+          campaigns (
+            id,
+            title,
+            campaign_type
+          ),
+          bids (
+            id,
+            title
+          )
+        `,
+          { count: "exact" }
+        )
+        .eq("wallets.user_id", userId);
 
       // Apply filters
       if (filters.type) {
@@ -591,29 +620,91 @@ class EnhancedBalanceService {
       }
 
       // Apply pagination
-      const from = (page - 1) * limit;
-      const to = from + limit - 1;
-      query = query.range(from, to);
-
-      const { data: transactions, error } = await query;
+      const result = await retrySupabaseQuery(
+        () => query
+          .order("created_at", { ascending: false })
+          .range(offset, offset + limit - 1),
+        { maxRetries: 3, initialDelay: 200 }
+      );
+      
+      const { data: transactions, error, count } = result;
 
       if (error) {
+        console.error("❌ [getTransactionHistory] Supabase error:", error);
+        console.error("❌ [getTransactionHistory] Error details:", JSON.stringify(error, null, 2));
         throw error;
       }
 
+      // Format transactions: flatten nested objects and add user_id directly
+      const formattedTransactions = (transactions || []).map(txn => {
+        // Extract wallet data (to get user_id)
+        const wallet = Array.isArray(txn.wallets) ? txn.wallets[0] : txn.wallets;
+        
+        // Extract campaign data
+        const campaign = Array.isArray(txn.campaigns) ? txn.campaigns[0] : txn.campaigns;
+        
+        // Extract bid data
+        const bid = Array.isArray(txn.bids) ? txn.bids[0] : txn.bids;
+
+        // Return clean transaction object with flattened related data
+        return {
+          // All transaction fields
+          id: txn.id,
+          wallet_id: txn.wallet_id,
+          user_id: wallet?.user_id || userId, // Add user_id from wallet join
+          amount: txn.amount,
+          amount_paise: txn.amount_paise,
+          type: txn.type,
+          direction: txn.direction,
+          status: txn.status,
+          stage: txn.stage,
+          created_at: txn.created_at,
+          updated_at: txn.updated_at,
+          notes: txn.notes,
+          conversation_id: txn.conversation_id,
+          campaign_id: txn.campaign_id,
+          bid_id: txn.bid_id,
+          sender_id: txn.sender_id,
+          receiver_id: txn.receiver_id,
+          payment_stage: txn.payment_stage,
+          razorpay_order_id: txn.razorpay_order_id,
+          razorpay_payment_id: txn.razorpay_payment_id,
+          razorpay_signature: txn.razorpay_signature,
+          balance_after_paise: txn.balance_after_paise,
+          frozen_balance_after_paise: txn.frozen_balance_after_paise,
+          withdrawn_balance_after_paise: txn.withdrawn_balance_after_paise,
+          escrow_hold_id: txn.escrow_hold_id,
+          admin_payment_tracking_id: txn.admin_payment_tracking_id,
+          description: txn.description,
+          // Flattened related data
+          campaign: campaign ? {
+            id: campaign.id,
+            title: campaign.title,
+            campaign_type: campaign.campaign_type
+          } : null,
+          bid: bid ? {
+            id: bid.id,
+            title: bid.title
+          } : null
+        };
+      });
+
       return {
         success: true,
-        transactions: transactions || [],
+        transactions: formattedTransactions,
         pagination: {
           page,
           limit,
-          has_more: transactions && transactions.length === limit
+          total: count || 0,
+          pages: Math.ceil((count || 0) / limit),
+          has_more: formattedTransactions && formattedTransactions.length === limit
         }
       };
     } catch (error) {
+      console.error("❌ [getTransactionHistory] Exception:", error);
       return {
         success: false,
-        error: error.message,
+        error: error.message || "Failed to fetch transaction history",
       };
     }
   }

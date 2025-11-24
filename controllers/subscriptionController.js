@@ -55,13 +55,19 @@ class SubscriptionController {
     try {
       const userId = req.user.id;
 
-      // Call the database function to get subscription status
-      const { data, error } = await supabaseAdmin.rpc(
-        "get_user_subscription_status",
-        {
-          user_uuid: userId,
-        }
+      // Call the database function to get subscription status with retry logic
+      const { retrySupabaseQuery } = require("../utils/supabaseRetry");
+      const result = await retrySupabaseQuery(
+        () => supabaseAdmin.rpc(
+          "get_user_subscription_status",
+          {
+            user_uuid: userId,
+          }
+        ),
+        { maxRetries: 3, initialDelay: 200 }
       );
+      
+      const { data, error } = result;
 
       if (error) {
         return res.status(500).json({

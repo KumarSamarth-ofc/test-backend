@@ -4,6 +4,7 @@ const { body, validationResult } = require("express-validator");
 const { uploadImageToStorage, deleteImageFromStorage } = require("../utils/imageUpload");
 const axios = require("axios");
 const { v4: uuidv4 } = require("uuid");
+const { retrySupabaseQuery } = require("../utils/supabaseRetry");
 
 class AuthController {
   /**
@@ -410,25 +411,51 @@ class AuthController {
       let userError = null;
       
       try {
-        const { data, error } = await supabaseAdmin
-          .from("users")
-          .select("*")
-          .eq("id", userId)
-          .maybeSingle();
+        const { data, error } = await retrySupabaseQuery(
+          () => supabaseAdmin
+            .from("users")
+            .select("*")
+            .eq("id", userId)
+            .maybeSingle(),
+          { maxRetries: 3, initialDelay: 200 }
+        );
         
         if (error) {
           userError = error;
           console.error('❌ [getProfile] Supabase error fetching user:', error);
+          console.error('❌ [getProfile] Error code:', error.code);
+          console.error('❌ [getProfile] Error details:', JSON.stringify(error, null, 2));
+          console.error('❌ [getProfile] Error hint:', error.hint);
         } else {
           user = data;
         }
       } catch (err) {
         userError = err;
         console.error('❌ [getProfile] Exception fetching user:', err);
+        console.error('❌ [getProfile] Exception stack:', err.stack);
       }
 
       if (userError) {
         console.error('❌ [getProfile] Error details:', JSON.stringify(userError, null, 2));
+        
+        // Check for specific error types
+        if (userError.code === 'PGRST116' || userError.message?.includes('does not exist')) {
+          return res.status(404).json({
+            success: false,
+            message: "User not found"
+          });
+        }
+        
+        // Check if it's a column error
+        if (userError.message?.includes('column') || userError.hint?.includes('column')) {
+          console.error('❌ [getProfile] Possible missing column in users table');
+          return res.status(500).json({
+            success: false,
+            message: "Database schema error - please check users table structure",
+            error: process.env.NODE_ENV === 'development' ? userError.message : undefined
+          });
+        }
+        
         return res.status(500).json({
           success: false,
           message: "Failed to fetch profile",

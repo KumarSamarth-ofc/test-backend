@@ -722,41 +722,37 @@ class PaymentController {
     try {
       const userId = req.user.id;
 
-      // Get wallet details
-      const { data: wallet, error: walletError } = await supabaseAdmin
-        .from("wallets")
-        .select("balance, balance_paise, frozen_balance_paise")
-        .eq("user_id", userId)
-        .single();
+      // Use enhanced balance service which handles wallet creation and retries
+      const enhancedBalanceService = require('../utils/enhancedBalanceService');
+      const result = await enhancedBalanceService.getWalletBalance(userId);
 
-      if (walletError) {
-        return res.status(404).json({
+      if (!result.success) {
+        return res.status(500).json({
           success: false,
-          message: "Wallet not found",
+          message: result.error || "Failed to fetch wallet balance",
         });
       }
 
-      // Calculate proper balance breakdown
-      const withdrawableAmountPaise = wallet.balance_paise || 0;
-      const frozenAmountPaise = wallet.frozen_balance_paise || 0;
-      const totalAmountPaise = withdrawableAmountPaise + frozenAmountPaise;
-      
+      const wallet = result.wallet;
+      const balanceSummary = result.balance_summary || {};
+
+      // Format response to match expected structure
       const balanceInfo = {
         // Withdrawable amounts (money user can withdraw)
-        withdrawable_balance: withdrawableAmountPaise / 100,
-        withdrawable_balance_paise: withdrawableAmountPaise,
+        withdrawable_balance: balanceSummary.available_rupees || (wallet.balance_paise || 0) / 100,
+        withdrawable_balance_paise: wallet.balance_paise || 0,
         
         // Frozen amounts (money held in escrow)
-        frozen_balance: frozenAmountPaise / 100,
-        frozen_balance_paise: frozenAmountPaise,
+        frozen_balance: balanceSummary.frozen_rupees || (wallet.frozen_balance_paise || 0) / 100,
+        frozen_balance_paise: wallet.frozen_balance_paise || 0,
         
         // Total amounts (withdrawable + frozen)
-        total_balance: totalAmountPaise / 100,
-        total_balance_paise: totalAmountPaise,
+        total_balance: balanceSummary.total_rupees || ((wallet.balance_paise || 0) + (wallet.frozen_balance_paise || 0)) / 100,
+        total_balance_paise: (wallet.balance_paise || 0) + (wallet.frozen_balance_paise || 0),
         
         // Legacy fields for compatibility
-        available_balance: withdrawableAmountPaise / 100,
-        balance_paise: withdrawableAmountPaise,
+        available_balance: balanceSummary.available_rupees || (wallet.balance_paise || 0) / 100,
+        balance_paise: wallet.balance_paise || 0,
       };
 
       res.json({

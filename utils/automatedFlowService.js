@@ -1829,15 +1829,39 @@ Please respond to confirm your interest and availability for this campaign.`,
         }
       };
 
+      // Create advance payment notification message for influencer
+      const advancePaymentMessage = {
+        conversation_id: conversationId,
+        sender_id: SYSTEM_USER_ID,
+        receiver_id: conversation.influencer_id,
+        message: `💰 **Advance Payment Update**\n\nYour advance payment (30% of net amount) will be sent by the admin soon. You will be notified once the payment is processed.`,
+        message_type: "automated",
+        action_required: false,
+      };
+
       const { data: messages, error: messageError } = await supabaseAdmin
         .from("messages")
-        .insert([confirmationMessage, workStartMessage])
+        .insert([confirmationMessage, workStartMessage, advancePaymentMessage])
         .select();
 
       if (messageError) {
         throw new Error(
           `Failed to create confirmation messages: ${messageError.message}`
         );
+      }
+
+      // Generate MOU document after payment completion
+      try {
+        const mouService = require('../services/mouService');
+        const mouResult = await mouService.generateMOU(conversationId);
+        if (mouResult.success) {
+          console.log(`✅ [MOU] MOU generated for conversation ${conversationId} after payment completion`);
+        } else {
+          console.error(`❌ [MOU] Failed to generate MOU: ${mouResult.error}`);
+        }
+      } catch (mouError) {
+        console.error("❌ [MOU] Error generating MOU:", mouError);
+        // Don't fail the request if MOU generation fails
       }
 
       return {
@@ -2536,6 +2560,79 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       if (messageError) {
         throw new Error(`Failed to create message: ${messageError.message}`);
+      }
+
+      // If work is approved, send both advance and final payment notifications to influencer
+      if (action === "approve_work") {
+        try {
+          // Check advance payment status
+          const { data: adminPaymentRecord } = await supabaseAdmin
+            .from("admin_payment_tracking")
+            .select("advance_payment_status, advance_amount_paise, net_amount_paise")
+            .eq("conversation_id", conversationId)
+            .maybeSingle();
+
+          const advanceAmount = adminPaymentRecord ? (adminPaymentRecord.advance_amount_paise / 100) : 0;
+          const advanceSent = adminPaymentRecord?.advance_payment_status === "admin_confirmed";
+
+          // Always send advance payment status message (checking if already sent or pending)
+          const advancePaymentMessage = {
+            conversation_id: conversationId,
+            sender_id: SYSTEM_USER_ID,
+            receiver_id: conversation.influencer_id,
+            message: advanceSent 
+              ? `✅ **Advance Payment Status**\n\nYour advance payment (30% of net amount: ₹${advanceAmount}) has already been sent.`
+              : `💰 **Advance Payment Update**\n\nYour advance payment (30% of net amount: ₹${advanceAmount}) will be sent by the admin soon. You will be notified once the payment is processed.`,
+            message_type: "automated",
+            action_required: false,
+          };
+
+          const { data: advanceMsg, error: advanceMsgError } = await supabaseAdmin
+            .from("messages")
+            .insert(advancePaymentMessage)
+            .select()
+            .single();
+
+          if (!advanceMsgError && this.io && advanceMsg) {
+            this.io.to(`room:${conversationId}`).emit('chat:new', {
+              message: advanceMsg
+            });
+            console.log(`✅ [WORK APPROVAL] Advance payment status message sent to influencer: ${conversation.influencer_id}`);
+          }
+
+          // Always send final payment notification message
+          const finalPaymentMessage = {
+            conversation_id: conversationId,
+            sender_id: SYSTEM_USER_ID,
+            receiver_id: conversation.influencer_id,
+            message: `💰 **Final Payment Update**\n\nYour final payment (70% of net amount) will be sent by the admin soon. You will be notified once the payment is processed.`,
+            message_type: "automated",
+            action_required: false,
+          };
+
+          const { data: finalPaymentMsg, error: finalPaymentMsgError } = await supabaseAdmin
+            .from("messages")
+            .insert(finalPaymentMessage)
+            .select()
+            .single();
+
+          if (finalPaymentMsgError) {
+            console.error("❌ Failed to send final payment notification:", finalPaymentMsgError);
+            // Don't throw - main message is created, this is just a notification
+          } else {
+            console.log(`✅ [WORK APPROVAL] Final payment notification sent to influencer: ${conversation.influencer_id}`);
+            
+            // Emit socket event for the final payment message
+            if (this.io && finalPaymentMsg) {
+              this.io.to(`room:${conversationId}`).emit('chat:new', {
+                message: finalPaymentMsg
+              });
+            }
+          }
+        } catch (finalPaymentError) {
+          console.error("❌ Error sending payment notifications:", finalPaymentError);
+          // Don't throw - main message is created, this is just a notification
+        }
       }
 
       // Emit socket events for real-time updates

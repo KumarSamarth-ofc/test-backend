@@ -115,6 +115,15 @@ router.patch("/:conversation_id/state", async (req, res) => {
 // Conversation metadata
 router.get("/:id", ConversationController.getConversation);
 
+// Get MOU document
+router.get("/:id/mou", ConversationController.getMOU);
+
+// Preview MOU data (for testing/debugging)
+router.get("/:id/mou/preview", ConversationController.previewMOU);
+
+// Test MOU generation (admin only)
+router.post("/:id/mou/test", ConversationController.testMOU);
+
 // Conversation actions
 router.post("/:id/actions", ConversationController.performAction);
 

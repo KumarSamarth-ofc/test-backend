@@ -1489,11 +1489,40 @@ class BidController {
         });
       }
 
-      // Get payment amount and request details
+      // Fetch actual payment amount from Razorpay (amount is in paise)
       let paymentAmount = 1000; // Default amount in paise
       let request = null;
       
-      if (conversation.request_id) {
+      try {
+        const Razorpay = require("razorpay");
+        const razorpay = new Razorpay({
+          key_id: process.env.RAZORPAY_KEY_ID,
+          key_secret: process.env.RAZORPAY_KEY_SECRET,
+        });
+        
+        const razorpayOrder = await razorpay.orders.fetch(razorpay_order_id);
+        // Razorpay returns amount in paise
+        paymentAmount = razorpayOrder.amount;
+        
+        console.log(`✅ [DEBUG] Fetched payment amount from Razorpay: ${paymentAmount} paise (₹${paymentAmount / 100})`);
+      } catch (razorpayError) {
+        console.error("⚠️ [DEBUG] Failed to fetch Razorpay order, falling back to request amount:", razorpayError.message);
+        // Fallback to request amount if Razorpay fetch fails
+        if (conversation.request_id) {
+          const { data: requestData } = await supabaseAdmin
+            .from("requests")
+            .select("id, final_agreed_amount, influencer_id, campaign_id, bid_id")
+            .eq("id", conversation.request_id)
+            .single();
+          
+          request = requestData;
+          // final_agreed_amount is in rupees, convert to paise
+          paymentAmount = Math.round((request?.final_agreed_amount || 1) * 100);
+        }
+      }
+      
+      // Get request details if not already fetched
+      if (!request && conversation.request_id) {
         const { data: requestData } = await supabaseAdmin
           .from("requests")
           .select("id, final_agreed_amount, influencer_id, campaign_id, bid_id")
@@ -1501,7 +1530,6 @@ class BidController {
           .single();
         
         request = requestData;
-        paymentAmount = Math.round((request?.final_agreed_amount || 1000) * 100); // Convert to paise
       }
 
       // Get influencer's wallet
@@ -1582,6 +1610,33 @@ class BidController {
           return res.status(500).json({ success: false, message: "Failed to create payment order" });
         }
         paymentOrder = insertedOrder;
+      }
+
+      // Create brand owner's debit transaction immediately (so it's visible right away)
+      if (conversation.brand_owner_id) {
+        try {
+          const trackResult = await enhancedBalanceService.trackBrandOwnerPayment(
+            conversation.brand_owner_id,
+            paymentAmount,
+            conversation_id,
+            {
+              razorpay_order_id: razorpay_order_id,
+              razorpay_payment_id: razorpay_payment_id,
+              bid_id: conversation.bid_id,
+              receiver_id: conversation.influencer_id,
+              notes: `Payment sent for conversation ${conversation_id}`
+            }
+          );
+          
+          if (trackResult.success) {
+            console.log(`✅ [DEBUG] Brand owner transaction created: ${trackResult.transaction.id}`);
+          } else {
+            console.warn(`⚠️ [DEBUG] Failed to create brand owner transaction: ${trackResult.error}`);
+          }
+        } catch (trackError) {
+          console.error("❌ [DEBUG] Error creating brand owner transaction:", trackError);
+          // Don't fail the payment verification if transaction tracking fails
+        }
       }
 
       // Create admin payment tracking and pending release transactions (advance/final)
@@ -1851,6 +1906,20 @@ class BidController {
         });
       }
 
+      // Generate MOU document after payment completion
+      try {
+        const mouService = require('../services/mouService');
+        const mouResult = await mouService.generateMOU(conversation_id);
+        if (mouResult.success) {
+          console.log(`✅ [MOU] MOU generated for conversation ${conversation_id} after payment verification`);
+        } else {
+          console.error(`❌ [MOU] Failed to generate MOU: ${mouResult.error}`);
+        }
+      } catch (mouError) {
+        console.error("❌ [MOU] Error generating MOU:", mouError);
+        // Don't fail the request if MOU generation fails
+      }
+
       // Create appropriate message based on flow
       let messageText, messageType, actionRequired, actionData;
       
@@ -1918,6 +1987,35 @@ class BidController {
         })
         .select()
         .single();
+
+      // Always send advance payment notification message to influencer after payment verification
+      const advancePaymentMessage = {
+        conversation_id: conversation_id,
+        sender_id: SYSTEM_USER_ID,
+        receiver_id: conversation.influencer_id,
+        message: `💰 **Advance Payment Update**\n\nYour advance payment (30% of net amount) will be sent by the admin soon. You will be notified once the payment is processed.`,
+        message_type: "automated",
+        action_required: false,
+      };
+
+      const { data: advanceMsg, error: advanceMsgError } = await supabaseAdmin
+        .from("messages")
+        .insert(advancePaymentMessage)
+        .select()
+        .single();
+
+      if (advanceMsgError) {
+        console.error("❌ Failed to send advance payment notification:", advanceMsgError);
+      } else {
+        console.log(`✅ [PAYMENT VERIFICATION] Advance payment notification sent to influencer: ${conversation.influencer_id}`);
+        
+        // Emit socket event for the advance payment message
+        if (io && advanceMsg) {
+          io.to(`room:${conversation_id}`).emit('chat:new', {
+            message: advanceMsg
+          });
+        }
+      }
 
       // Emit realtime events (final contract)
       const io = req.app.get("io");

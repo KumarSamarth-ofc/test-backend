@@ -114,6 +114,291 @@ class ConversationController {
     }
   }
 
+  /**
+   * Test/Preview MOU generation - shows all data that will be used
+   * GET /api/conversations/:id/mou/preview
+   * Useful for testing and debugging
+   */
+  async previewMOU(req, res) {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id;
+
+      // Fetch all conversation details that will be used for MOU
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select(`
+          id,
+          brand_owner_id,
+          influencer_id,
+          campaign_id,
+          bid_id,
+          flow_data,
+          created_at,
+          brand_owner:users!conversations_brand_owner_id_fkey(
+            id, name, email, phone, brand_name
+          ),
+          influencer:users!conversations_influencer_id_fkey(
+            id, name, email, phone
+          ),
+          campaigns(id, title, description, budget),
+          bids(id, title, description, amount)
+        `)
+        .eq("id", id)
+        .single();
+
+      if (convError || !conversation) {
+        return res.status(404).json({
+          success: false,
+          message: "Conversation not found",
+          error: convError?.message
+        });
+      }
+
+      // Check if user has access
+      if (userId && conversation.brand_owner_id !== userId && conversation.influencer_id !== userId && req.user?.role !== "admin") {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied"
+        });
+      }
+
+      // Get payment breakdown
+      const mouService = require('../services/mouService');
+      const paymentBreakdown = await mouService.getPaymentBreakdown(id);
+
+      // Prepare preview data
+      const collaborationType = conversation.campaign_id ? "Campaign" : "Bid";
+      const collaborationTitle = conversation.campaign_id
+        ? conversation.campaigns?.title
+        : conversation.bids?.title;
+      const collaborationDescription = conversation.campaign_id
+        ? conversation.campaigns?.description
+        : conversation.bids?.description;
+      const totalAmount = conversation.campaign_id
+        ? conversation.campaigns?.budget
+        : conversation.bids?.amount;
+
+      return res.json({
+        success: true,
+        preview: {
+          conversation_id: id,
+          brand_owner: {
+            id: conversation.brand_owner?.id,
+            name: conversation.brand_owner?.name,
+            email: conversation.brand_owner?.email,
+            phone: conversation.brand_owner?.phone,
+            brand_name: conversation.brand_owner?.brand_name
+          },
+          influencer: {
+            id: conversation.influencer?.id,
+            name: conversation.influencer?.name,
+            email: conversation.influencer?.email,
+            phone: conversation.influencer?.phone
+          },
+          collaboration: {
+            type: collaborationType,
+            title: collaborationTitle,
+            description: collaborationDescription,
+            total_amount: totalAmount
+          },
+          payment_breakdown: paymentBreakdown,
+          conversation_created_at: conversation.created_at,
+          flow_data: conversation.flow_data
+        },
+        can_generate: !!(conversation.brand_owner && conversation.influencer && paymentBreakdown.totalAmount > 0),
+        missing_data: {
+          brand_owner: !conversation.brand_owner,
+          influencer: !conversation.influencer,
+          collaboration_title: !collaborationTitle,
+          payment_amount: paymentBreakdown.totalAmount === 0
+        }
+      });
+    } catch (error) {
+      console.error("Error previewing MOU:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: error.message
+      });
+    }
+  }
+
+  /**
+   * Test MOU generation - manually trigger and return full details
+   * POST /api/conversations/:id/mou/test
+   * Useful for testing MOU generation
+   */
+  async testMOU(req, res) {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id;
+
+      // Check access
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("id, brand_owner_id, influencer_id")
+        .eq("id", id)
+        .single();
+
+      if (convError || !conversation) {
+        return res.status(404).json({
+          success: false,
+          message: "Conversation not found"
+        });
+      }
+
+      // Only admin can test MOU generation
+      if (req.user?.role !== "admin") {
+        return res.status(403).json({
+          success: false,
+          message: "Only admin can test MOU generation"
+        });
+      }
+
+      // Generate MOU
+      const mouService = require('../services/mouService');
+      const mouResult = await mouService.generateMOU(id);
+
+      if (mouResult.success) {
+        return res.json({
+          success: true,
+          message: "MOU generated successfully",
+          mou_content: mouResult.mouContent,
+          mou_html: mouResult.mouHtml,
+          generated_at: new Date().toISOString()
+        });
+      } else {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to generate MOU",
+          error: mouResult.error
+        });
+      }
+    } catch (error) {
+      console.error("Error testing MOU:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: error.message
+      });
+    }
+  }
+
+  /**
+   * Get MOU document for a conversation
+   * GET /api/conversations/:id/mou
+   */
+  async getMOU(req, res) {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.id;
+
+      // Fetch conversation to check access
+      const { data: conversation, error: convError } = await supabaseAdmin
+        .from("conversations")
+        .select("id, brand_owner_id, influencer_id, flow_data")
+        .eq("id", id)
+        .single();
+
+      if (convError || !conversation) {
+        return res.status(404).json({
+          success: false,
+          message: "Conversation not found"
+        });
+      }
+
+      // Check if user has access to this conversation
+      if (userId && conversation.brand_owner_id !== userId && conversation.influencer_id !== userId && req.user?.role !== "admin") {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied"
+        });
+      }
+
+      // Check if MOU exists in mou_documents table
+      const { data: existingMOU, error: mouFetchError } = await supabaseAdmin
+        .from("mou_documents")
+        .select("mou_content, mou_html, generated_at")
+        .eq("conversation_id", id)
+        .maybeSingle();
+
+      if (mouFetchError && !mouFetchError.message?.includes("does not exist")) {
+        console.error("Error fetching MOU:", mouFetchError);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch MOU",
+          error: mouFetchError.message
+        });
+      }
+
+      if (!existingMOU || !existingMOU.mou_content) {
+        // Check if payment has been completed (MOU should be generated after payment)
+        const { data: convCheck } = await supabaseAdmin
+          .from("conversations")
+          .select("flow_state, flow_data")
+          .eq("id", id)
+          .single();
+
+        const paymentCompleted = convCheck?.flow_data?.payment_completed || 
+                                 convCheck?.flow_state === "payment_completed" ||
+                                 convCheck?.flow_state === "work_in_progress" ||
+                                 convCheck?.flow_state === "work_submitted" ||
+                                 convCheck?.flow_state === "work_approved";
+
+        if (!paymentCompleted) {
+          return res.status(400).json({
+            success: false,
+            message: "MOU can only be generated after payment is completed"
+          });
+        }
+
+        // Generate MOU if payment is completed but MOU doesn't exist
+        try {
+          const mouService = require('../services/mouService');
+          const mouResult = await mouService.generateMOU(id);
+          
+          if (mouResult.success) {
+            return res.json({
+              success: true,
+              mou_content: mouResult.mouContent,
+              mou_html: mouResult.mouHtml,
+              generated_at: new Date().toISOString()
+            });
+          } else {
+            return res.status(500).json({
+              success: false,
+              message: "Failed to generate MOU",
+              error: mouResult.error
+            });
+          }
+        } catch (mouError) {
+          console.error("Error generating MOU:", mouError);
+          return res.status(500).json({
+            success: false,
+            message: "Failed to generate MOU",
+            error: mouError.message
+          });
+        }
+      }
+
+      // Return existing MOU from mou_documents table
+      return res.json({
+        success: true,
+        mou_content: existingMOU.mou_content,
+        mou_html: existingMOU.mou_html,
+        generated_at: existingMOU.generated_at
+      });
+    } catch (error) {
+      console.error("Error getting MOU:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: error.message
+      });
+    }
+  }
+
   // POST /api/conversations/:id/actions
   async performAction(req, res) {
     try {
