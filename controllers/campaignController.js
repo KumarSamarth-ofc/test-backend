@@ -49,7 +49,7 @@ class CampaignController {
     // Map request status to UI-friendly format
     const mapRequestStatus = (status) => {
       if (!status) return "none";
-      
+
       const pendingStatuses = ["connected", "negotiating", "finalized", "paid", "work_submitted", "work_approved"];
       if (pendingStatuses.includes(status)) return "pending";
       if (status === "completed") return "accepted";
@@ -60,7 +60,7 @@ class CampaignController {
     // Enrich each campaign with request status
     return campaigns.map(campaign => {
       const request = requestMap[campaign.id];
-      
+
       if (!request) {
         return {
           ...campaign,
@@ -91,16 +91,16 @@ class CampaignController {
    */
   static ensureCampaignTitles(campaigns) {
     if (!campaigns) return campaigns;
-    
+
     const campaignsArray = Array.isArray(campaigns) ? campaigns : [campaigns];
-    
+
     campaignsArray.forEach(campaign => {
       if (!campaign.title) {
         console.warn(`⚠️ Campaign ${campaign.id} has no title field`);
         campaign.title = "Untitled Campaign";
       }
     });
-    
+
     return campaigns;
   }
 
@@ -109,23 +109,23 @@ class CampaignController {
    */
   static addInfluencerStats(campaigns) {
     if (!campaigns) return campaigns;
-    
+
     const campaignsArray = Array.isArray(campaigns) ? campaigns : [campaigns];
-    
+
     return campaignsArray.map(campaign => {
       // Extract influencer count from requests_count
-      const influencerCount = Array.isArray(campaign.requests_count) && campaign.requests_count[0] && typeof campaign.requests_count[0].count === 'number' 
-        ? campaign.requests_count[0].count 
+      const influencerCount = Array.isArray(campaign.requests_count) && campaign.requests_count[0] && typeof campaign.requests_count[0].count === 'number'
+        ? campaign.requests_count[0].count
         : 0;
-      
+
       // Calculate sum of proposed amounts from requests
-      const proposedAmountSum = Array.isArray(campaign.requests) 
-        ? campaign.requests.reduce((sum, r) => sum + (parseFloat(r.proposed_amount) || 0), 0) 
+      const proposedAmountSum = Array.isArray(campaign.requests)
+        ? campaign.requests.reduce((sum, r) => sum + (parseFloat(r.proposed_amount) || 0), 0)
         : 0;
-      
+
       // Remove the nested requests_count structure and add clean fields
       const { requests_count, requests, ...rest } = campaign;
-      
+
       return {
         ...rest,
         influencer_count: influencerCount,
@@ -168,6 +168,10 @@ class CampaignController {
       }
 
       // Handle both old format (database columns) and new format (form fields)
+      const languages = formData.languages || (formData.language ? [formData.language] : []);
+      const categories = formData.categories || (formData.category ? [formData.category] : []);
+      const locations = formData.locations || [];
+
       const campaignData = {
         title: formData.name || formData.title,
         description: formData.description || "",
@@ -184,10 +188,11 @@ class CampaignController {
           (formData.contentType ? [formData.contentType] : []),
         // New fields from form
         image_url: imageUrl,
-        language: formData.language || "",
+        languages: languages,
         platform: formData.platform || "",
         content_type: formData.content_type || formData.contentType || "",
-        category: formData.category || null, // Category field (e.g., Technology, Fashion, Food)
+        categories: categories,
+        locations: locations,
         // Package options for product campaigns
         sending_package:
           formData.sending_package ||
@@ -285,10 +290,14 @@ class CampaignController {
         category,
         type,
         campaign_type,
+        // New array filters
+        languages,
+        locations,
+        categories,
       } = req.query;
 
       const offset = (page - 1) * limit;
-      
+
       let baseSelect = supabaseAdmin.from("campaigns").select(`
         *,
         created_by_user:users!campaigns_created_by_fkey (
@@ -302,18 +311,20 @@ class CampaignController {
         requests(proposed_amount)
       `);
 
-      // Generic filters
-      if (min_budget) {
-        baseSelect = baseSelect.gte("budget", parseFloat(min_budget));
-      }
-      if (max_budget) {
-        baseSelect = baseSelect.lte("budget", parseFloat(max_budget));
-      }
-      if (search) {
-        baseSelect = baseSelect.or(
-          `title.ilike.%${search}%,description.ilike.%${search}%`
-        );
-      }
+      // Import filter helpers
+      const { applyCommonFilters, parseArrayParam } = require('../utils/filterHelpers');
+
+      // Apply common filters (budget, languages, locations, categories, search)
+      baseSelect = applyCommonFilters(baseSelect, {
+        min_budget,
+        max_budget,
+        languages,
+        locations,
+        categories: categories || category, // Support both 'categories' and legacy 'category'
+        search
+      });
+
+      // Campaign type filter
       const typeFilter = type || campaign_type;
       if (typeFilter) {
         baseSelect = baseSelect.eq("campaign_type", typeFilter);
@@ -353,13 +364,13 @@ class CampaignController {
           const processedCampaigns = CampaignController.addInfluencerStats(
             CampaignController.ensureCampaignTitles(campaigns || [])
           );
-          
+
           // Add request status for each campaign if user is influencer
           const campaignsWithRequestStatus = await CampaignController.enrichWithRequestStatus(
             processedCampaigns,
             userId
           );
-          
+
           return res.json({
             success: true,
             campaigns: campaignsWithRequestStatus,
@@ -423,13 +434,13 @@ class CampaignController {
           const processedCampaigns = CampaignController.addInfluencerStats(
             CampaignController.ensureCampaignTitles(campaigns || [])
           );
-          
+
           // Add request status for each campaign if user is influencer
           const campaignsWithRequestStatus = await CampaignController.enrichWithRequestStatus(
             processedCampaigns,
             userId
           );
-          
+
           return res.json({
             success: true,
             campaigns: campaignsWithRequestStatus,
@@ -458,12 +469,12 @@ class CampaignController {
           const processedCampaigns = CampaignController.addInfluencerStats(
             CampaignController.ensureCampaignTitles(filtered)
           );
-          
+
           // Add request status for each campaign if user is influencer
-          const campaignsWithRequestStatus = req.user.role === "influencer" 
+          const campaignsWithRequestStatus = req.user.role === "influencer"
             ? await CampaignController.enrichWithRequestStatus(processedCampaigns, req.user.id)
             : processedCampaigns;
-          
+
           return res.json({
             success: true,
             campaigns: campaignsWithRequestStatus,
@@ -508,12 +519,12 @@ class CampaignController {
         const processedCampaigns = CampaignController.addInfluencerStats(
           CampaignController.ensureCampaignTitles(visible)
         );
-        
+
         // Add request status for each campaign if user is influencer
         const campaignsWithRequestStatus = req.user.role === "influencer"
           ? await CampaignController.enrichWithRequestStatus(processedCampaigns, req.user.id)
           : processedCampaigns;
-        
+
         return res.json({
           success: true,
           campaigns: campaignsWithRequestStatus,
@@ -556,12 +567,12 @@ class CampaignController {
         const processedCampaigns = CampaignController.addInfluencerStats(
           CampaignController.ensureCampaignTitles(visible)
         );
-        
+
         // Add request status for each campaign if user is influencer
         const campaignsWithRequestStatus = req.user.role === "influencer"
           ? await CampaignController.enrichWithRequestStatus(processedCampaigns, req.user.id)
           : processedCampaigns;
-        
+
         return res.json({
           success: true,
           campaigns: campaignsWithRequestStatus,
@@ -590,11 +601,11 @@ class CampaignController {
       const userId = req.user.id;
       let query = null;
       console.log(req.user.role)
-      if(req.user.role === "influencer") {
+      if (req.user.role === "influencer") {
         query = supabaseAdmin
-        .from("campaigns")
-        .select(
-          `
+          .from("campaigns")
+          .select(
+            `
                     *,
                     created_by_user:users!campaigns_created_by_fkey (
                         id,
@@ -618,13 +629,13 @@ class CampaignController {
                         )
                     )
                 `
-        )
-        .eq("id", id);
+          )
+          .eq("id", id);
       } else {
         query = supabaseAdmin
-        .from("campaigns")
-        .select(
-        `
+          .from("campaigns")
+          .select(
+            `
                     *,
                     created_by_user:users!campaigns_created_by_fkey (
                         id,
@@ -652,8 +663,8 @@ class CampaignController {
                         )
                     )
                 `
-        )
-        .eq("id", id);
+          )
+          .eq("id", id);
       }
 
       const { data: campaign, error } = await query.single();
@@ -754,8 +765,24 @@ class CampaignController {
         updateData.end_date = formData.expiryDate;
       if (formData.campaign_type !== undefined)
         updateData.campaign_type = formData.campaign_type;
-      if (formData.category !== undefined)
-        updateData.category = formData.category; // Category field (e.g., Technology, Fashion, Food)
+
+      // Handle array fields
+      if (formData.categories !== undefined) {
+        updateData.categories = Array.isArray(formData.categories) ? formData.categories : [formData.categories];
+      } else if (formData.category !== undefined) {
+        updateData.categories = [formData.category];
+      }
+
+      if (formData.languages !== undefined) {
+        updateData.languages = Array.isArray(formData.languages) ? formData.languages : [formData.languages];
+      } else if (formData.language !== undefined) {
+        updateData.languages = [formData.language];
+      }
+
+      if (formData.locations !== undefined) {
+        updateData.locations = Array.isArray(formData.locations) ? formData.locations : [formData.locations];
+      }
+
       if (formData.targetAudience !== undefined)
         updateData.requirements = formData.targetAudience;
       if (formData.contentType !== undefined)
@@ -763,8 +790,6 @@ class CampaignController {
       if (imageUrl !== null) updateData.image_url = imageUrl;
       else if (formData.image !== undefined)
         updateData.image_url = formData.image;
-      if (formData.language !== undefined)
-        updateData.language = formData.language;
       if (formData.platform !== undefined)
         updateData.platform = formData.platform;
       if (formData.contentType !== undefined)
@@ -930,7 +955,7 @@ class CampaignController {
         const { data: allCampaigns } = await supabaseAdmin
           .from("campaigns")
           .select("budget");
-        
+
         allCampaigns?.forEach((campaign) => {
           totalBudget += parseFloat(campaign.budget || 0);
         });
@@ -939,14 +964,14 @@ class CampaignController {
           .from("campaigns")
           .select("budget")
           .eq("created_by", userId);
-        
+
         allCampaigns?.forEach((campaign) => {
           totalBudget += parseFloat(campaign.budget || 0);
         });
       } else if (req.user.role === "influencer") {
         // For influencers, calculate budget from all campaigns in stats
         const allCampaignIds = new Set();
-        
+
         // Get open campaigns
         const { data: openCampaigns } = await supabaseAdmin
           .from("campaigns")
@@ -966,13 +991,13 @@ class CampaignController {
 
         const pendingRequestStatuses = ["connected", "negotiating", "paid", "finalized", "work_submitted", "work_approved"];
         const closedRequestStatuses = ["completed", "cancelled"];
-        
+
         const pendingCampaignIds = new Set(
           (influencerRequests || [])
             .filter((r) => r.campaign_id && pendingRequestStatuses.includes(r.status))
             .map((r) => r.campaign_id)
         );
-        
+
         const closedCampaignIds = new Set(
           (influencerRequests || [])
             .filter((r) => r.campaign_id && closedRequestStatuses.includes(r.status))
@@ -1108,7 +1133,7 @@ class CampaignController {
 
       // Check if we have button_id OR if action looks like a button ID
       const buttonToMap = button_id || action;
-      
+
       if (buttonToMap) {
         console.log("🔍 [DEBUG] Processing campaign influencer button mapping for:", buttonToMap);
         console.log("🔍 [DEBUG] Original action:", action);
@@ -1248,7 +1273,7 @@ class CampaignController {
 
       // Check if we have button_id OR if action looks like a button ID
       const buttonToMap = button_id || action;
-      
+
       if (buttonToMap) {
         console.log("🔍 [DEBUG] Processing campaign brand owner button mapping for:", buttonToMap);
         console.log("🔍 [DEBUG] Original action:", action);
@@ -1546,11 +1571,11 @@ class CampaignController {
    */
   async verifyAutomatedFlowPayment(req, res) {
     try {
-      const { 
-        razorpay_order_id, 
-        razorpay_payment_id, 
-        razorpay_signature, 
-        conversation_id 
+      const {
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature,
+        conversation_id
       } = req.body;
       const userId = req.user.id;
 
@@ -1614,18 +1639,18 @@ class CampaignController {
       // Fetch actual payment amount from Razorpay (amount is in paise)
       let paymentAmount = 1000; // Default amount in paise
       let request = null;
-      
+
       try {
         const Razorpay = require("razorpay");
         const razorpay = new Razorpay({
           key_id: process.env.RAZORPAY_KEY_ID,
           key_secret: process.env.RAZORPAY_KEY_SECRET,
         });
-        
+
         const razorpayOrder = await razorpay.orders.fetch(razorpay_order_id);
         // Razorpay returns amount in paise
         paymentAmount = razorpayOrder.amount;
-        
+
         console.log(`✅ [DEBUG] Fetched payment amount from Razorpay: ${paymentAmount} paise (₹${paymentAmount / 100})`);
       } catch (razorpayError) {
         console.error("⚠️ [DEBUG] Failed to fetch Razorpay order, falling back to request amount:", razorpayError.message);
@@ -1636,13 +1661,13 @@ class CampaignController {
             .select("id, final_agreed_amount, influencer_id, campaign_id, bid_id")
             .eq("id", conversation.request_id)
             .single();
-          
+
           request = requestData;
           // final_agreed_amount is in rupees, convert to paise
           paymentAmount = Math.round((request?.final_agreed_amount || 1) * 100);
         }
       }
-      
+
       // Get request details if not already fetched
       if (!request && conversation.request_id) {
         const { data: requestData } = await supabaseAdmin
@@ -1650,7 +1675,7 @@ class CampaignController {
           .select("id, final_agreed_amount, influencer_id, campaign_id, bid_id")
           .eq("id", conversation.request_id)
           .single();
-        
+
         request = requestData;
       }
 
@@ -1749,7 +1774,7 @@ class CampaignController {
               notes: `Payment sent for conversation ${conversation_id}`
             }
           );
-          
+
           if (trackResult.success) {
             console.log(`✅ [DEBUG] Brand owner transaction created: ${trackResult.transaction.id}`);
           } else {
@@ -1863,7 +1888,7 @@ class CampaignController {
           // Continue anyway as the payment is processed
         } else {
           escrowHold = newEscrowHold;
-          
+
           // Use enhanced balance service to freeze funds in escrow
           const freezeResult = await enhancedBalanceService.freezeFunds(
             conversation.influencer_id,
@@ -1951,7 +1976,7 @@ class CampaignController {
         const finalAmount = adminPaymentRecord.final_amount_paise / 100;
         const totalAmount = adminPaymentRecord.total_amount_paise / 100;
         const commissionAmount = adminPaymentRecord.commission_amount_paise / 100;
-        
+
         const messageText = `💳 **Payment Received - Admin Processing Required**
 
 💰 **Total Amount:** ₹${totalAmount}
@@ -2019,7 +2044,7 @@ class CampaignController {
           console.error("❌ Failed to send advance payment notification:", advanceMsgError);
         } else {
           console.log(`✅ [PAYMENT VERIFICATION] Advance payment notification sent to influencer: ${conversation.influencer_id}`);
-          
+
           // Emit socket event for the advance payment message
           const io = req.app.get('io');
           if (io && advanceMsg) {
@@ -2063,7 +2088,7 @@ class CampaignController {
           console.error("❌ Failed to send advance payment notification:", advanceMsgError);
         } else {
           console.log(`✅ [PAYMENT VERIFICATION] Advance payment notification sent to influencer: ${conversation.influencer_id}`);
-          
+
           // Emit socket event for the advance payment message
           const io = req.app.get('io');
           if (io && advanceMsg) {
@@ -2111,8 +2136,8 @@ class CampaignController {
       // Send FCM notification for payment completion
       const fcmService = require('../services/fcmService');
       await fcmService.sendFlowStateNotification(
-        conversation_id, 
-        conversation.influencer_id, 
+        conversation_id,
+        conversation.influencer_id,
         "payment_completed",
         "Payment completed! You can now start working on the campaign."
       );

@@ -29,6 +29,9 @@ const adminWalletRoutes = require("./routes/adminWallet");
 const notificationRoutes = require("./routes/notifications");
 const commissionSettingsRoutes = require("./routes/commissionSettings");
 const adminSettingsRoutes = require("./routes/adminSettings");
+const enhancedWalletRoutes = require("./routes/enhancedWallet");
+const socialPlatformRoutes = require("./routes/socialPlatforms");
+const influencerRoutes = require("./routes/influencers");
 
 const app = express();
 const server = http.createServer(app);
@@ -37,40 +40,40 @@ const io = socketIo(server, {
     origin: process.env.CORS_ORIGIN
       ? process.env.CORS_ORIGIN.split(",")
       : [
-          "http://localhost:3000",
-          "http://localhost:3001",
-          "http://localhost:5173",
-          "http://localhost:8081",
-          "http://localhost:8080",
-          /^http:\/\/192\.168\.\d+\.\d+:\d+$/, // Local network
-          /^http:\/\/10\.\d+\.\d+\.\d+:\d+$/, // Local network
-          /^http:\/\/172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:\d+$/, // Local network
-          // Production URLs - add your actual production frontend URL
-          /^https:\/\/.*\.railway\.app$/, // Railway deployments
-          /^https:\/\/.*\.onrender\.com$/, // Render deployments
-          /^https:\/\/.*\.vercel\.app$/, // Vercel deployments
-          /^https:\/\/.*\.netlify\.app$/, // Netlify deployments
-        ],
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:5173",
+        "http://localhost:8081",
+        "http://localhost:8080",
+        /^http:\/\/192\.168\.\d+\.\d+:\d+$/, // Local network
+        /^http:\/\/10\.\d+\.\d+\.\d+:\d+$/, // Local network
+        /^http:\/\/172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:\d+$/, // Local network
+        // Production URLs - add your actual production frontend URL
+        /^https:\/\/.*\.railway\.app$/, // Railway deployments
+        /^https:\/\/.*\.onrender\.com$/, // Render deployments
+        /^https:\/\/.*\.vercel\.app$/, // Vercel deployments
+        /^https:\/\/.*\.netlify\.app$/, // Netlify deployments
+      ],
     methods: ["GET", "POST"],
     credentials: true,
     allowedHeaders: ["Authorization", "Content-Type"],
   },
   transports: ['websocket', 'polling'], // Support both WebSocket and polling
   allowEIO3: true, // Support legacy Socket.IO clients
-  
+
   // Connection timeout (30 seconds to establish connection)
   connectTimeout: 30000,
-  
+
   // Enable heartbeat to keep connections alive
   // Wait 60 seconds for client response to ping
   pingTimeout: 60000,
-  
+
   // Send ping every 25 seconds to check connection health
   pingInterval: 25000,
-  
+
   // Max HTTP buffer size (for large messages like images)
   maxHttpBufferSize: 1e8, // 100MB
-  
+
   // Upgrade timeout from HTTP to WebSocket
   upgradeTimeout: 10000,
 });
@@ -106,12 +109,12 @@ app.get("/test-socket", (req, res) => {
     hasIo: !!io,
     connectedClients: io.engine.clientsCount || 0
   };
-  
+
   // Emit test message to all connected clients
   if (io) {
     io.emit("test_message", testMessage);
   }
-  
+
   res.json(testMessage);
 });
 
@@ -135,30 +138,30 @@ app.post("/api/test-socket-notification", async (req, res) => {
   try {
     const { user_id, title, message, notification_id } = req.body;
     const io = app.get("io");
-    
+
     if (!user_id) {
       return res.status(400).json({
         success: false,
         message: "user_id is required"
       });
     }
-    
+
     if (!io) {
       return res.status(500).json({
         success: false,
         message: "Socket.IO not available"
       });
     }
-    
+
     // Check if user is online
     const isOnline = messageHandler.isUserOnline(user_id);
     const onlineUsersCount = messageHandler.getOnlineUsersCount();
-    
+
     console.log(`📊 [TEST] User ${user_id} - Online: ${isOnline}, Total online users: ${onlineUsersCount}`);
-    
+
     // Check if this is a force send request
     const forceSend = req.body.force_send === true;
-    
+
     // Store notification in database first (regardless of online status)
     const notificationService = require('./services/notificationService');
     const storeResult = await notificationService.storeNotification({
@@ -208,13 +211,13 @@ app.post("/api/test-socket-notification", async (req, res) => {
         user_id: user_id
       }
     };
-    
+
     // Send notification to specific user's room
     io.to(`user_${user_id}`).emit('notification', notificationData);
-    
+
     console.log(`📡 [TEST] Sent socket notification to user_${user_id}:`, notificationData);
     console.log(`💾 [TEST] Stored notification in database:`, storeResult.notification.id);
-    
+
     res.json({
       success: true,
       message: "Socket notification sent to online user",
@@ -225,7 +228,7 @@ app.post("/api/test-socket-notification", async (req, res) => {
       online_users_count: onlineUsersCount,
       delivery_method: "socket"
     });
-    
+
   } catch (error) {
     console.error('❌ Error in test-socket-notification:', error);
     res.status(500).json({
@@ -241,20 +244,20 @@ app.post("/api/test-socket-notification-all", async (req, res) => {
   try {
     const { title, message } = req.body;
     const io = app.get("io");
-    
+
     if (!io) {
       return res.status(500).json({
         success: false,
         message: "Socket.IO not available"
       });
     }
-    
+
     // Get all online users
     const onlineUsers = messageHandler.getOnlineUsersWithSockets();
     const onlineUsersCount = messageHandler.getOnlineUsersCount();
-    
+
     console.log(`📊 [TEST-ALL] Found ${onlineUsersCount} online users:`, onlineUsers.map(u => u.userId));
-    
+
     if (onlineUsersCount === 0) {
       return res.json({
         success: true,
@@ -264,12 +267,12 @@ app.post("/api/test-socket-notification-all", async (req, res) => {
         delivery_method: "none"
       });
     }
-    
+
     const notificationService = require('./services/notificationService');
     const results = [];
     let successCount = 0;
     let errorCount = 0;
-    
+
     // Send notification to each online user
     for (const user of onlineUsers) {
       try {
@@ -303,10 +306,10 @@ app.post("/api/test-socket-notification-all", async (req, res) => {
               sent_to_all: true
             }
           };
-          
+
           // Send socket notification
           io.to(user.room).emit('notification', notificationData);
-          
+
           results.push({
             user_id: user.userId,
             socket_id: user.socketId,
@@ -314,7 +317,7 @@ app.post("/api/test-socket-notification-all", async (req, res) => {
             notification_id: storeResult.notification.id,
             delivery_method: 'socket'
           });
-          
+
           successCount++;
           console.log(`📡 [TEST-ALL] Sent notification to user_${user.userId} (${user.socketId})`);
         } else {
@@ -339,9 +342,9 @@ app.post("/api/test-socket-notification-all", async (req, res) => {
         errorCount++;
       }
     }
-    
+
     console.log(`📊 [TEST-ALL] Completed: ${successCount} successful, ${errorCount} failed`);
-    
+
     res.json({
       success: true,
       message: `Test notifications sent to ${successCount} active users`,
@@ -357,7 +360,7 @@ app.post("/api/test-socket-notification-all", async (req, res) => {
         success_rate: onlineUsersCount > 0 ? ((successCount / onlineUsersCount) * 100).toFixed(2) + '%' : '0%'
       }
     });
-    
+
   } catch (error) {
     console.error('❌ Error in test-socket-notification-all:', error);
     res.status(500).json({
@@ -415,8 +418,8 @@ app.post("/api/debug/direct-send", async (req, res) => {
 
     if (saveError) {
       console.error('❌ [DEBUG] direct-send save error:', saveError);
-      return res.status(500).json({ 
-        success: false, 
+      return res.status(500).json({
+        success: false,
         error: 'Failed to save message',
         details: {
           message: saveError.message || null,
@@ -498,7 +501,7 @@ app.get("/api/online-users", (req, res) => {
   try {
     const onlineUsers = messageHandler.getOnlineUsersWithSockets();
     const onlineUsersCount = messageHandler.getOnlineUsersCount();
-    
+
     res.json({
       success: true,
       online_users_count: onlineUsersCount,
@@ -519,7 +522,7 @@ app.get("/api/online-users", (req, res) => {
 app.get("/api/admin-check", async (req, res) => {
   try {
     const { supabaseAdmin } = require('./supabase/client');
-    
+
     // Check if any admin user exists
     const { data: adminUsers, error } = await supabaseAdmin
       .from("users")
@@ -616,7 +619,7 @@ app.get("/test-fcm", (req, res) => {
 app.post("/test-message", async (req, res) => {
   try {
     const { conversationId, senderId, receiverId, message } = req.body;
-    
+
     if (!conversationId || !senderId || !receiverId || !message) {
       return res.status(400).json({
         success: false,
@@ -634,7 +637,7 @@ app.post("/test-message", async (req, res) => {
 
     // Get conversation context
     const { supabaseAdmin } = require('./supabase/client');
-  const { data: conversation, error: convError } = await supabaseAdmin
+    const { data: conversation, error: convError } = await supabaseAdmin
       .from("conversations")
       .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data")
       .eq("id", conversationId)
@@ -648,13 +651,13 @@ app.post("/test-message", async (req, res) => {
     }
 
     // Prepare conversation context
-  const conversationContext = conversation ? {
+    const conversationContext = conversation ? {
       id: conversation.id,
       chat_status: conversation.chat_status,
       flow_state: conversation.flow_state,
       awaiting_role: conversation.awaiting_role,
-      conversation_type: conversation.campaign_id ? 'campaign' : 
-                        conversation.bid_id ? 'bid' : 'direct',
+      conversation_type: conversation.campaign_id ? 'campaign' :
+        conversation.bid_id ? 'bid' : 'direct',
       current_action_data: conversation.current_action_data
     } : null;
 
@@ -706,7 +709,7 @@ app.post("/test-message", async (req, res) => {
       conversation_context: conversationContext,
       action: 'message_sent'
     });
-    
+
     io.to(`user_${receiverId}`).emit('conversation_list_updated', {
       conversation_id: conversationId,
       message: testMessage,
@@ -747,7 +750,7 @@ app.post("/test-message", async (req, res) => {
       conversationContext,
       events: [
         'new_message',
-        'notification', 
+        'notification',
         'message_sent',
         'conversation_list_updated',
         'unread_count_updated',
@@ -778,16 +781,19 @@ app.use("/api/conversations", conversationRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/subscriptions", subscriptionRoutes);
-app.use("/api/reports", reportRoutes);
+app.use("/api/notifications", notificationRoutes);
 app.use("/api/fcm", fcmRoutes);
-app.use("/api/coupons", couponRoutes);
 app.use("/api/attachments", attachmentRoutes);
-app.use("/api/files", directStorageRoutes);
+app.use("/api/storage", directStorageRoutes);
 app.use("/api/admin/payments", adminPaymentRoutes);
 app.use("/api/admin/wallet", adminWalletRoutes);
-app.use("/api/admin/commission", commissionSettingsRoutes);
+app.use("/api/wallet", enhancedWalletRoutes);
 app.use("/api/admin/settings", adminSettingsRoutes);
-app.use("/api/notifications", notificationRoutes);
+app.use("/api/admin/commission-settings", commissionSettingsRoutes);
+app.use("/api/coupons", couponRoutes);
+app.use("/api/social-platforms", socialPlatformRoutes);
+app.use("/api/reports", reportRoutes);
+app.use("/api/influencers", influencerRoutes);
 
 // 404 handler for API routes
 app.use("/api/*", (req, res) => {
@@ -814,7 +820,7 @@ notificationService.setMessageHandler(messageHandler);
 
 io.on("connection", (socket) => {
   messageHandler.handleConnection(socket);
-  
+
   socket.on("disconnect", (reason) => {
     console.log(`❌ Client disconnected: ${socket.id}, reason: ${reason}`);
     console.log(`📊 Remaining connections: ${io.engine.clientsCount}`);

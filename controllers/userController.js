@@ -196,7 +196,7 @@ class UserController {
 
             // Process influencers data based on subscription status
             let processedInfluencers = influencers || [];
-            
+
             if (userRole === 'brand_owner' && !hasPremiumAccess) {
                 // Mask sensitive data for non-premium brand owners
                 processedInfluencers = processedInfluencers.map(influencer => ({
@@ -240,7 +240,7 @@ class UserController {
      * List brand owners (admin-only) with filtering and pagination
      */
     async listBrandOwners(req, res) {
-    
+
         try {
             const {
                 page = 1,
@@ -401,9 +401,9 @@ class UserController {
                 .single();
 
             if (error) {
-                return res.status(500).json({ 
-                    success: false, 
-                    message: 'Failed to fetch verification status' 
+                return res.status(500).json({
+                    success: false,
+                    message: 'Failed to fetch verification status'
                 });
             }
 
@@ -449,9 +449,9 @@ class UserController {
                 }
             });
         } catch (error) {
-            res.status(500).json({ 
-                success: false, 
-                message: 'Internal server error' 
+            res.status(500).json({
+                success: false,
+                message: 'Internal server error'
             });
         }
     }
@@ -488,8 +488,8 @@ class UserController {
             if (error) {
                 console.error('❌ [getRegistrationStatus] Supabase query error:', error);
                 console.error('Error details:', JSON.stringify(error, null, 2));
-                return res.status(500).json({ 
-                    success: false, 
+                return res.status(500).json({
+                    success: false,
                     message: 'Failed to fetch user data',
                     error: process.env.NODE_ENV === 'development' ? error.message : undefined
                 });
@@ -524,10 +524,10 @@ class UserController {
                 console.log('🔍 [getRegistrationStatus] Social platforms found:', {
                     hasSocialPlatforms,
                     count: socialPlatformsCount,
-                    platforms: allPlatforms?.map(p => ({ 
-                        id: p.id, 
-                        platform_name: p.platform_name, 
-                        username: p.username 
+                    platforms: allPlatforms?.map(p => ({
+                        id: p.id,
+                        platform_name: p.platform_name,
+                        username: p.username
                     })) || []
                 });
             }
@@ -542,7 +542,7 @@ class UserController {
                 date_of_birth: user.date_of_birth ? '✓' : '✗',
                 hasSocialPlatforms: hasSocialPlatforms ? '✓' : '✗'
             });
-            
+
             let statusResponse;
             if (user.role === 'influencer') {
                 console.log('🔍 [getRegistrationStatus] Calling getInfluencerRegistrationStatus...');
@@ -575,7 +575,7 @@ class UserController {
                 next_screen: statusResponse.next_screen,
                 remaining_steps: statusResponse.remaining_steps?.map(s => s.step_id) || []
             });
-            
+
             // Validate response structure
             if (!statusResponse.role || statusResponse.role !== user.role) {
                 console.error('❌ [getRegistrationStatus] ROLE MISMATCH! User role:', user.role, 'Response role:', statusResponse.role);
@@ -584,13 +584,13 @@ class UserController {
                     message: 'Role mismatch in registration status response'
                 });
             }
-            
+
             return res.json(statusResponse);
         } catch (error) {
             console.error('❌ [getRegistrationStatus] Error fetching registration status:', error);
             console.error('❌ [getRegistrationStatus] Error stack:', error.stack);
-            res.status(500).json({ 
-                success: false, 
+            res.status(500).json({
+                success: false,
                 message: 'Internal server error',
                 error: process.env.NODE_ENV === 'development' ? error.message : undefined
             });
@@ -643,7 +643,7 @@ class UserController {
         const userName = user.name ? String(user.name).trim() : '';
         const userGender = user.gender ? String(user.gender).trim() : '';
         const userDOB = user.date_of_birth || null;
-        
+
         console.log('🔍 [getInfluencerRegistrationStatus] Basic info validation:', {
             name: userName || 'MISSING',
             nameLength: userName.length,
@@ -654,7 +654,7 @@ class UserController {
             rawGender: user.gender,
             rawDOB: user.date_of_birth
         });
-        
+
         if (userName.length > 0 && userGender.length > 0 && userDOB) {
             completedSteps.push({
                 step_id: 'basic_info',
@@ -764,26 +764,105 @@ class UserController {
             total++;
         }
 
-        // 7. Languages (Influencer-specific) - Optional
-        // Note: Languages are optional for now, so we don't count it in the total steps
+        // 7. Languages (Influencer-specific) - Required
+        if (user.languages && user.languages.length > 0) {
+            completedSteps.push({
+                step_id: 'languages',
+                step_name: 'Languages',
+                completed_at: user.updated_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            remainingSteps.push({
+                step_id: 'languages',
+                step_name: 'Add languages you speak',
+                description: 'Select languages',
+                screen_name: stepScreenMap['languages'],
+                priority: 'medium'
+            });
+            missingRequiredFields.push({
+                field_name: 'languages',
+                field_label: 'Languages',
+                category: 'influencer',
+                screen_name: stepScreenMap['languages']
+            });
+            total++;
+        }
 
-        // 8. Categories (Influencer-specific) - Optional
-        // Note: Categories are optional for now, so we don't count it in the total steps
+        // 8. Categories (Influencer-specific) - Required
+        if (user.categories && user.categories.length > 0) {
+            completedSteps.push({
+                step_id: 'categories',
+                step_name: 'Categories',
+                completed_at: user.updated_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            remainingSteps.push({
+                step_id: 'categories',
+                step_name: 'Select content categories',
+                description: 'Select categories',
+                screen_name: stepScreenMap['categories'],
+                priority: 'medium'
+            });
+            missingRequiredFields.push({
+                field_name: 'categories',
+                field_label: 'Categories',
+                category: 'influencer',
+                screen_name: stepScreenMap['categories']
+            });
+            total++;
+        }
 
-        // 9. Pricing Range (Influencer-specific) - Optional
-        // Note: Pricing is optional for now, so we don't count it in the total steps
+        // 9. Pricing Range (Influencer-specific) - Required
+        if (user.min_range || user.max_range) {
+            completedSteps.push({
+                step_id: 'pricing',
+                step_name: 'Pricing Range',
+                completed_at: user.updated_at || new Date().toISOString()
+            });
+            completed++; total++;
+        } else {
+            remainingSteps.push({
+                step_id: 'pricing',
+                step_name: 'Set your budget range',
+                description: 'Set pricing',
+                screen_name: stepScreenMap['pricing'],
+                priority: 'medium'
+            });
+            missingRequiredFields.push({
+                field_name: 'pricing',
+                field_label: 'Pricing Range',
+                category: 'influencer',
+                screen_name: stepScreenMap['pricing']
+            });
+            total++;
+        }
 
         // 10. Verification Document (Optional - not counted in completion)
         // Note: Verification image is optional, shown in optional_fields
 
         // Optional fields (shown but not counted in completion)
         const optionalFields = [];
+
+        // 1. Profile Image
+        if (!user.profile_image_url) {
+            optionalFields.push({
+                field_name: 'profile_image_url',
+                field_label: 'Profile Image',
+                category: 'common',
+                screen_name: stepScreenMap['profile_image'],
+                description: 'Upload a profile picture'
+            });
+        }
+
+        // 2. Verification Document
         if (!user.verification_image_url) {
             optionalFields.push({
                 field_name: 'verification_image_url',
                 field_label: 'Verification Document',
                 category: 'common',
-                screen_name: 'Kyc',
+                screen_name: stepScreenMap['kyc_pan'],
                 description: 'Upload a verification document (PAN, Aadhaar, etc.)'
             });
         }
@@ -846,7 +925,7 @@ class UserController {
         const userName = user.name ? String(user.name).trim() : '';
         const userGender = user.gender ? String(user.gender).trim() : '';
         const userDOB = user.date_of_birth || null;
-        
+
         console.log('🔍 [getBrandOwnerRegistrationStatus] Basic info validation:', {
             name: userName || 'MISSING',
             nameLength: userName.length,
@@ -857,7 +936,7 @@ class UserController {
             rawGender: user.gender,
             rawDOB: user.date_of_birth
         });
-        
+
         if (userName.length > 0 && userGender.length > 0 && userDOB) {
             completedSteps.push({
                 step_id: 'basic_info',
@@ -919,7 +998,7 @@ class UserController {
         // 5. Brand Details (Brand Owner-specific)
         // Only brand_name is required (from schema), business_type and business_name don't exist
         const brandName = user.brand_name ? String(user.brand_name).trim() : '';
-        
+
         console.log('🔍 [getBrandOwnerRegistrationStatus] Brand name validation:', {
             brandName: brandName || 'MISSING',
             brandNameLength: brandName.length,
@@ -927,7 +1006,7 @@ class UserController {
             brandNameType: typeof user.brand_name,
             brandNameTruthy: !!user.brand_name
         });
-        
+
         if (brandName.length > 0) {
             completedSteps.push({
                 step_id: 'business_details',
@@ -947,6 +1026,12 @@ class UserController {
                 field_name: 'brand_name',
                 field_label: 'Brand Name',
                 category: 'brand_owner',
+                priority: 'medium'
+            });
+            missingRequiredFields.push({
+                field_name: 'brand_description',
+                field_label: 'Brand Description',
+                category: 'brand_owner',
                 screen_name: stepScreenMap['business_details']
             });
             total++;
@@ -956,14 +1041,19 @@ class UserController {
         // Note: Based on schema, only brand_name, brand_description, and brand_profile_image_url exist
         // business_type, gst_number, business_registration_number don't exist in this schema
         const optionalFields = [];
-        if (!user.brand_description) {
+
+        // 1. Profile Image
+        if (!user.profile_image_url) {
             optionalFields.push({
-                field_name: 'brand_description',
-                field_label: 'Brand Description',
-                category: 'brand_owner',
-                screen_name: stepScreenMap['business_details']
+                field_name: 'profile_image_url',
+                field_label: 'Profile Image',
+                category: 'common',
+                screen_name: stepScreenMap['profile_image'],
+                description: 'Upload a profile picture'
             });
         }
+
+        // 2. Verification Document
         if (!user.verification_image_url) {
             optionalFields.push({
                 field_name: 'verification_image_url',
@@ -1013,7 +1103,7 @@ class UserController {
                 'pan_verified_at',      // PAN verification timestamp is set by verifyPAN endpoint only
                 'pan_holder_name'       // PAN holder name is set by verifyPAN endpoint only
             ];
-            
+
             restrictedFields.forEach(field => delete updateData[field]);
 
             // Validate PAN number format if provided
@@ -1083,7 +1173,7 @@ class UserController {
 
             // Upload file to storage
             const { uploadImageToStorage, deleteImageFromStorage } = require('../utils/imageUpload');
-            
+
             // Get current user to check for existing verification image
             const { data: currentUser } = await supabaseAdmin
                 .from('users')
@@ -1155,7 +1245,7 @@ class UserController {
         if (!user.address_line1) missing.push('address');
         if (!user.bio) missing.push('bio');
         if (socialPlatformsCount === 0) missing.push('social_media_profiles');
-        
+
         // Role-specific missing fields
         if (user.role === 'brand_owner') {
             // Brand owners don't need UPI ID, but need brand name
@@ -1287,7 +1377,7 @@ class UserController {
             // Ensure social_platforms is always an array
             // If relation didn't return platforms, fetch them separately (fallback)
             let socialPlatforms = user.social_platforms || [];
-            
+
             if (!socialPlatforms || socialPlatforms.length === 0) {
                 console.log('⚠️ [getUserProfile] Social platforms not found in relation, fetching separately...');
                 const { data: platformsData, error: platformsError } = await supabaseAdmin
@@ -1295,7 +1385,7 @@ class UserController {
                     .select('id, platform_name, platform, username, profile_link, followers_count, engagement_rate, is_connected, created_at, updated_at')
                     .eq('user_id', userId)
                     .order('created_at', { ascending: false });
-                
+
                 if (!platformsError && platformsData) {
                     socialPlatforms = platformsData;
                     console.log('✅ [getUserProfile] Fetched platforms separately:', socialPlatforms.length);

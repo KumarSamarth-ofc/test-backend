@@ -243,8 +243,11 @@ class FCMService {
           priority: 'high',
           notification: {
             sound: 'default',
+            defaultSound: true,
             channelId: 'stoory_notifications',
-            priority: 'high'
+            priority: 'high',
+            visibility: 'public', // Show on lock screen
+            icon: 'ic_notification' // Ensure icon is set (matches Flutter default)
           }
         },
         apns: {
@@ -263,7 +266,8 @@ class FCMService {
               sound: 'default',
               badge: notification.badge || 1,
               category: 'MESSAGE_CATEGORY',
-              'mutable-content': 1
+              'mutable-content': 1,
+              'interruption-level': 'active' // iOS 15+ immediate delivery
               // Do NOT set 'content-available' to avoid silent pushes
             },
             // Add custom data for iOS
@@ -271,6 +275,9 @@ class FCMService {
           }
         },
         webpush: {
+          headers: {
+            Urgency: 'high'
+          },
           notification: {
             icon: notification.icon || '/icon-192x192.png',
             badge: '/badge-72x72.png',
@@ -292,7 +299,7 @@ class FCMService {
             token: tokens[i],
             ...message
           });
-          
+
           successful.push(tokens[i]);
           console.log(`✅ Successfully sent to token ${tokens[i].substring(0, 20)}...`);
         } catch (error) {
@@ -332,19 +339,19 @@ class FCMService {
       // Check if receiver is actively viewing this conversation
       // If they're in the room, they'll get socket notification, skip FCM
       let shouldSkip = false;
-      
+
       if (io && io.sockets && io.sockets.adapter) {
         try {
           const roomName = `room:${conversationId}`;
           const userRoom = `user_${receiverId}`;
-          
+
           // Get all sockets in the user room
           const userRoomSockets = io.sockets.adapter.rooms.get(userRoom);
-          
+
           if (userRoomSockets && userRoomSockets.size > 0) {
             // Check if any of user's sockets are in the conversation room
             const conversationRoom = io.sockets.adapter.rooms.get(roomName);
-            
+
             if (conversationRoom && conversationRoom.size > 0) {
               // Check if any of user's sockets are in the conversation room
               for (const socketId of userRoomSockets) {
@@ -361,7 +368,7 @@ class FCMService {
           // If we can't check, default to sending FCM (safer)
         }
       }
-      
+
       if (shouldSkip) {
         return { success: true, sent: 0, failed: 0, skipped: true };
       }
@@ -387,8 +394,8 @@ class FCMService {
 
       const notification = {
         title: `${senderName} sent you a message`,
-        body: message.message.length > 100 
-          ? message.message.substring(0, 100) + '...' 
+        body: message.message.length > 100
+          ? message.message.substring(0, 100) + '...'
           : message.message,
         data: {
           type: 'message',

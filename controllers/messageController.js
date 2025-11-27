@@ -32,7 +32,7 @@ class MessageController {
         console.error("❌ Error code:", userError.code);
         console.error("❌ Error details:", JSON.stringify(userError, null, 2));
         console.error("❌ Error hint:", userError.hint);
-        
+
         // Check for specific error types
         if (userError.code === 'PGRST116' || userError.message?.includes('does not exist')) {
           return res.status(404).json({
@@ -40,7 +40,7 @@ class MessageController {
             message: "User not found"
           });
         }
-        
+
         // Check if it's a column error
         if (userError.message?.includes('column') || userError.hint?.includes('column')) {
           console.error('❌ Possible missing "role" column in users table');
@@ -50,7 +50,7 @@ class MessageController {
             error: process.env.NODE_ENV === 'development' ? userError.message : undefined
           });
         }
-        
+
         return res.status(500).json({
           success: false,
           message: "Failed to fetch user details",
@@ -138,8 +138,7 @@ class MessageController {
       }
 
       console.log(
-        `📊 Found ${
-          conversations?.length || 0
+        `📊 Found ${conversations?.length || 0
         } conversations (${queryDescription})`
       );
 
@@ -544,7 +543,7 @@ class MessageController {
 
       // Emit real-time update
       const io = req.app.get("io");
-      
+
       // Get conversation context for emit (moved outside if block for broader scope)
       let conversationContext = null;
       if (io) {
@@ -563,9 +562,9 @@ class MessageController {
           chat_status: conversation.chat_status,
           flow_state: conversation.flow_state,
           awaiting_role: conversation.awaiting_role,
-          conversation_type: conversation.campaign_id ? 'campaign' : 
-                            conversation.bid_id ? 'bid' : 'direct',
-          
+          conversation_type: conversation.campaign_id ? 'campaign' :
+            conversation.bid_id ? 'bid' : 'direct',
+
           current_action_data: conversation.current_action_data
         } : null;
 
@@ -583,7 +582,7 @@ class MessageController {
             .eq('id', senderId)
             .eq('is_deleted', false)
             .single();
-          
+
           if (!senderError && sender && sender.name) {
             senderName = sender.name;
           }
@@ -708,13 +707,13 @@ class MessageController {
         } else {
           console.error(`❌ FCM notification failed:`, result.error);
         }
-      }).catch(error => { 
+      }).catch(error => {
         console.error(`❌ FCM notification error:`, error);
       });
 
       // Emit conversation list update to both users
       if (io) {
-        
+
         // Emit to individual user rooms
         io.to(`user_${senderId}`).emit('conversation_list_updated', {
           conversation_id: conversationId,
@@ -723,7 +722,7 @@ class MessageController {
           action: 'message_sent',
           timestamp: new Date().toISOString()
         });
-        
+
         io.to(`user_${receiverId}`).emit('conversation_list_updated', {
           conversation_id: conversationId,
           message: newMessage,
@@ -740,7 +739,7 @@ class MessageController {
           action: 'message_sent',
           timestamp: new Date().toISOString()
         });
-        
+
         io.to(`global_${receiverId}`).emit('conversation_list_updated', {
           conversation_id: conversationId,
           message: newMessage,
@@ -1053,11 +1052,11 @@ class MessageController {
 
       if (conversationError) {
         console.error("Failed to create conversation:", conversationError);
-        
+
         // If it's a duplicate key error, try to find the existing conversation
         if (conversationError.code === '23505') {
           console.log("Duplicate key error - looking for existing conversation");
-          
+
           const { data: existingConv, error: findError } = await supabaseAdmin
             .from("conversations")
             .select("*")
@@ -1067,7 +1066,7 @@ class MessageController {
             .is("campaign_id", null)
             .is("bid_id", null)
             .single();
-          
+
           if (existingConv) {
             return res.status(200).json({
               success: true,
@@ -1077,7 +1076,7 @@ class MessageController {
             });
           }
         }
-        
+
         return res.status(500).json({
           success: false,
           message: "Failed to create direct connection",
@@ -1140,7 +1139,7 @@ class MessageController {
 
         // Store notifications in database and send to both users
         const notificationService = require('../services/notificationService');
-        
+
         // Store notification for brand owner
         notificationService.storeNotification({
           user_id: brandOwnerId,
@@ -1185,6 +1184,41 @@ class MessageController {
           console.error(`❌ Error storing influencer notification:`, error);
         });
 
+        // Send FCM notifications to both users
+        const fcmService = require('../services/fcmService');
+
+        // Send FCM to brand owner
+        fcmService.sendFlowStateNotification(
+          conversation.id,
+          brandOwnerId,
+          "real_time",
+          "Direct connection established"
+        ).then(result => {
+          if (result.success) {
+            console.log(`✅ FCM sent to brand owner: ${result.sent} successful`);
+          } else {
+            console.error(`❌ FCM failed for brand owner:`, result.error);
+          }
+        }).catch(error => {
+          console.error(`❌ FCM error for brand owner:`, error);
+        });
+
+        // Send FCM to influencer
+        fcmService.sendFlowStateNotification(
+          conversation.id,
+          influencerId,
+          "real_time",
+          "Direct connection established"
+        ).then(result => {
+          if (result.success) {
+            console.log(`✅ FCM sent to influencer: ${result.sent} successful`);
+          } else {
+            console.error(`❌ FCM failed for influencer:`, result.error);
+          }
+        }).catch(error => {
+          console.error(`❌ FCM error for influencer:`, error);
+        });
+
         // Send individual notifications to both users with context
         io.to(`user_${brandOwnerId}`).emit("notification", {
           type: "direct_connection_created",
@@ -1197,7 +1231,7 @@ class MessageController {
         });
 
         io.to(`user_${influencerId}`).emit("notification", {
-          type: "direct_connection_created", 
+          type: "direct_connection_created",
           data: {
             conversation_id: conversation.id,
             message: "Direct connection established",
@@ -1578,13 +1612,13 @@ class MessageController {
           subtitle: contextSubtitle,
           details: sourceData
             ? [
-                sourceData.title,
-                sourceData.description,
-                sourceType === "campaign"
-                  ? `Budget: ₹${sourceData.budget}`
-                  : `Budget: ₹${sourceData.min_budget} - ₹${sourceData.max_budget}`,
-                sourceData.requirements,
-              ].filter(Boolean)
+              sourceData.title,
+              sourceData.description,
+              sourceType === "campaign"
+                ? `Budget: ₹${sourceData.budget}`
+                : `Budget: ₹${sourceData.min_budget} - ₹${sourceData.max_budget}`,
+              sourceData.requirements,
+            ].filter(Boolean)
             : [],
           actions: availableActions,
         },
@@ -1616,7 +1650,7 @@ class MessageController {
       const { conversation_id } = req.params;
       const { button_id, additional_data, data } = req.body;
       const userId = req.user.id;
-      
+
       // Handle both data formats from frontend (data or additional_data)
       const buttonData = additional_data || data || {};
 
@@ -1675,16 +1709,16 @@ class MessageController {
         // Route to appropriate automated flow handler
         const automatedFlowService = require('../utils/automatedFlowService');
         const adminPaymentFlowService = require('../utils/adminPaymentFlowService');
-        
+
         try {
           let result;
-          
+
           // Handle admin payment actions
           if (isAdmin && (button_id === 'process_advance_payment' || button_id === 'process_final_payment')) {
             // Get admin payment tracking ID from button data or conversation flow_data
-            const adminPaymentTrackingId = buttonData?.admin_payment_tracking_id || 
-                                          conversation.flow_data?.admin_payment_tracking_id;
-            
+            const adminPaymentTrackingId = buttonData?.admin_payment_tracking_id ||
+              conversation.flow_data?.admin_payment_tracking_id;
+
             if (!adminPaymentTrackingId) {
               return res.status(400).json({
                 success: false,
@@ -1699,7 +1733,7 @@ class MessageController {
                 adminPaymentTrackingId,
                 screenshotUrl
               );
-              
+
               if (result.success) {
                 // Update conversation state to work_in_progress
                 await supabaseAdmin
@@ -1718,7 +1752,7 @@ class MessageController {
                 adminPaymentTrackingId,
                 screenshotUrl
               );
-              
+
               if (result.success) {
                 // Update conversation state to closed
                 await supabaseAdmin
@@ -1732,7 +1766,7 @@ class MessageController {
                   .eq("id", conversation_id);
               }
             }
-            
+
             if (result && result.success) {
               return res.json(result);
             } else {
@@ -1742,14 +1776,14 @@ class MessageController {
               });
             }
           }
-          
+
           if (userId === conversation.brand_owner_id) {
             // Map button IDs to automated flow actions
             let action = button_id;
             let data = {};
-            
+
             // Handle special button mappings
-            
+
             if (button_id === 'agree_negotiation') {
               action = 'handle_negotiation';
               data = { action: 'agree' };
@@ -1790,15 +1824,15 @@ class MessageController {
               // Use additional_data for unmapped buttons
               data = additional_data || {};
             }
-            
+
             result = await automatedFlowService.handleBrandOwnerAction(conversation_id, action, data);
           } else if (currentUser.role === 'influencer' || userId === conversation.influencer_id) {
             // Map button IDs to automated flow actions for influencers
             let action = button_id;
             let data = {};
-            
+
             // Handle special button mappings for influencers
-            
+
             if (button_id === 'accept_offer') {
               action = 'accept_offer';
             } else if (button_id === 'reject_offer') {
@@ -1830,10 +1864,10 @@ class MessageController {
               // Use buttonData for unmapped buttons
               data = buttonData || {};
             }
-            
+
             result = await automatedFlowService.handleInfluencerAction(conversation_id, action, data);
           }
-          
+
           if (result && result.success) {
             return res.json(result);
           } else {
@@ -2013,9 +2047,9 @@ class MessageController {
           chat_status: updatedConversation.chat_status,
           flow_state: updatedConversation.flow_state,
           awaiting_role: updatedConversation.awaiting_role,
-          conversation_type: updatedConversation.campaign_id ? 'campaign' : 
-                            updatedConversation.bid_id ? 'bid' : 'direct',
-          
+          conversation_type: updatedConversation.campaign_id ? 'campaign' :
+            updatedConversation.bid_id ? 'bid' : 'direct',
+
           current_action_data: updatedConversation.current_action_data
         } : null;
 
@@ -2068,7 +2102,7 @@ class MessageController {
         message: "Internal server error",
       });
     }
-  } 
+  }
   async handleTextInput(req, res) {
     try {
       const { conversation_id } = req.params;
@@ -2406,8 +2440,8 @@ class MessageController {
       if (user_id) {
         // For direct messages, check if conversation exists between current user and target user
         query = query.or(`brand_owner_id.eq.${user_id},influencer_id.eq.${user_id}`)
-                     .is("campaign_id", null)
-                     .is("bid_id", null);
+          .is("campaign_id", null)
+          .is("bid_id", null);
       }
 
       const { data: conversation, error } = await query.maybeSingle();
@@ -2479,8 +2513,8 @@ class MessageController {
         }
         if (!conv.bid_id && !conv.campaign_id) {
           // Direct conversation - map by other user's ID
-          const otherUserId = conv.brand_owner_id === userId 
-            ? conv.influencer_id 
+          const otherUserId = conv.brand_owner_id === userId
+            ? conv.influencer_id
             : conv.brand_owner_id;
           if (otherUserId) {
             index.direct[otherUserId] = conv.id;
@@ -2915,11 +2949,11 @@ const validateSendMessage = [
   body()
     .custom((value, { req }) => {
       const { message, media_url } = req.body;
-      
+
       if (!message && !media_url) {
         throw new Error("Either message or media_url must be provided");
       }
-      
+
       return true;
     })
     .withMessage("Either message or media_url must be provided"),

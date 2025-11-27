@@ -49,7 +49,7 @@ class BidController {
     // Map request status to UI-friendly format
     const mapRequestStatus = (status) => {
       if (!status) return "none";
-      
+
       const pendingStatuses = ["connected", "negotiating", "finalized", "paid", "work_submitted", "work_approved"];
       if (pendingStatuses.includes(status)) return "pending";
       if (status === "completed") return "accepted";
@@ -60,7 +60,7 @@ class BidController {
     // Enrich each bid with request status
     return bids.map(bid => {
       const request = requestMap[bid.id];
-      
+
       if (!request) {
         return {
           ...bid,
@@ -91,23 +91,23 @@ class BidController {
    */
   static addInfluencerStats(bids) {
     if (!bids) return bids;
-    
+
     const bidsArray = Array.isArray(bids) ? bids : [bids];
-    
+
     return bidsArray.map(bid => {
       // Extract influencer count from requests_count
-      const influencerCount = Array.isArray(bid.requests_count) && bid.requests_count[0] && typeof bid.requests_count[0].count === 'number' 
-        ? bid.requests_count[0].count 
+      const influencerCount = Array.isArray(bid.requests_count) && bid.requests_count[0] && typeof bid.requests_count[0].count === 'number'
+        ? bid.requests_count[0].count
         : 0;
-      
+
       // Calculate sum of proposed amounts from requests
-      const proposedAmountSum = Array.isArray(bid.requests) 
-        ? bid.requests.reduce((sum, r) => sum + (parseFloat(r.proposed_amount) || 0), 0) 
+      const proposedAmountSum = Array.isArray(bid.requests)
+        ? bid.requests.reduce((sum, r) => sum + (parseFloat(r.proposed_amount) || 0), 0)
         : 0;
-      
+
       // Remove the nested requests_count structure and add clean fields
       const { requests_count, requests, ...rest } = bid;
-      
+
       return {
         ...rest,
         influencer_count: influencerCount,
@@ -133,10 +133,11 @@ class BidController {
         min_budget,
         max_budget,
         requirements,
-        language,
+        languages, // Changed from language
         platform,
         content_type,
-        category,
+        categories, // Changed from category
+        locations, // Added locations
         expiry_date,
       } = req.body;
 
@@ -160,16 +161,22 @@ class BidController {
         imageUrl = url;
       }
 
+      // Ensure array fields are arrays
+      const languagesArray = Array.isArray(languages) ? languages : (languages ? [languages] : []);
+      const categoriesArray = Array.isArray(categories) ? categories : (categories ? [categories] : []);
+      const locationsArray = Array.isArray(locations) ? locations : (locations ? [locations] : []);
+
       const bidData = {
         title,
         description: description || "",
         min_budget: parseFloat(min_budget),
         max_budget: parseFloat(max_budget),
         requirements: requirements || null,
-        language: language || null,
+        languages: languagesArray,
         platform: platform || null,
         content_type: content_type || null,
-        category: category || null,
+        categories: categoriesArray,
+        locations: locationsArray,
         expiry_date: expiry_date ? new Date(expiry_date).toISOString() : null,
         image_url: imageUrl,
       };
@@ -252,6 +259,10 @@ class BidController {
         min_budget,
         max_budget,
         search,
+        // New array filters
+        languages,
+        locations,
+        categories,
       } = req.query;
 
       const offset = (page - 1) * limit;
@@ -268,18 +279,18 @@ class BidController {
                     requests(proposed_amount)
                 `);
 
-      // Generic filters
-      if (min_budget) {
-        baseSelect = baseSelect.gte("min_budget", parseFloat(min_budget));
-      }
-      if (max_budget) {
-        baseSelect = baseSelect.lte("max_budget", parseFloat(max_budget));
-      }
-      if (search) {
-        baseSelect = baseSelect.or(
-          `title.ilike.%${search}%,description.ilike.%${search}%`
-        );
-      }
+      // Import filter helpers
+      const { applyCommonFilters } = require('../utils/filterHelpers');
+
+      // Apply common filters (budget, languages, locations, categories, search)
+      baseSelect = applyCommonFilters(baseSelect, {
+        min_budget,
+        max_budget,
+        languages,
+        locations,
+        categories,
+        search
+      });
 
       // Role-based server-driven filtering
       if (req.user.role === "influencer") {
@@ -315,13 +326,13 @@ class BidController {
           }
 
           const processedBids = BidController.addInfluencerStats(bids || []);
-          
+
           // Add request status for each bid if user is influencer
           const bidsWithRequestStatus = await BidController.enrichWithRequestStatus(
             processedBids,
             userId
           );
-          
+
           return res.json({
             success: true,
             bids: bidsWithRequestStatus,
@@ -356,9 +367,9 @@ class BidController {
             .filter((r) => r.bid_id && allowedReqStatuses.includes(r.status))
             .map((r) => r.bid_id);
           const idsSet = new Set(filteredIds);
-          
+
           console.log(`[LISTING DEBUG] Status: ${normalizedStatus}, Filtered bid IDs: ${Array.from(idsSet).join(', ')}`);
-          
+
           if (idsSet.size === 0) {
             return res.json({
               success: true,
@@ -378,7 +389,7 @@ class BidController {
           const { data: bids, error } = await query
             .order("created_at", { ascending: false })
             .range(offset, offset + limit - 1);
-          
+
           console.log(`[LISTING DEBUG] Found ${bids?.length || 0} bids after status filter`);
 
           if (error) {
@@ -388,13 +399,13 @@ class BidController {
           }
 
           const processedBids = BidController.addInfluencerStats(bids || []);
-          
+
           // Add request status for each bid if user is influencer
           const bidsWithRequestStatus = await BidController.enrichWithRequestStatus(
             processedBids,
             userId
           );
-          
+
           return res.json({
             success: true,
             bids: bidsWithRequestStatus,
@@ -419,13 +430,13 @@ class BidController {
           const interactedSet = new Set(interactedBidIds);
           const filtered = (bids || []).filter((b) => !interactedSet.has(b.id));
           const processedBids = BidController.addInfluencerStats(filtered);
-          
+
           // Add request status for each bid if user is influencer
           const bidsWithRequestStatus = await BidController.enrichWithRequestStatus(
             processedBids,
             userId
           );
-          
+
           return res.json({
             success: true,
             bids: bidsWithRequestStatus,
@@ -467,12 +478,12 @@ class BidController {
           return new Date(b.created_at) - new Date(a.created_at);
         });
         const processedBids = BidController.addInfluencerStats(visible);
-        
+
         // Add request status for each bid if user is influencer
         const bidsWithRequestStatus = req.user.role === "influencer"
           ? await BidController.enrichWithRequestStatus(processedBids, req.user.id)
           : processedBids;
-        
+
         return res.json({
           success: true,
           bids: bidsWithRequestStatus,
@@ -512,12 +523,12 @@ class BidController {
           return new Date(b.created_at) - new Date(a.created_at);
         });
         const processedBids = BidController.addInfluencerStats(visible);
-        
+
         // Add request status for each bid if user is influencer
         const bidsWithRequestStatus = req.user.role === "influencer"
           ? await BidController.enrichWithRequestStatus(processedBids, req.user.id)
           : processedBids;
-        
+
         return res.json({
           success: true,
           bids: bidsWithRequestStatus,
@@ -546,11 +557,11 @@ class BidController {
       const userId = req.user.id;
       let query = null;
 
-      if(req.user.role === "influencer") {
+      if (req.user.role === "influencer") {
         query = supabaseAdmin
-        .from("bids")
-        .select(
-          `
+          .from("bids")
+          .select(
+            `
                     *,
                     created_by_user:users!bids_created_by_fkey (
                         id,
@@ -574,13 +585,13 @@ class BidController {
                         )
                     )
                 `
-        )
-        .eq("id", id);
+          )
+          .eq("id", id);
       } else {
         query = supabaseAdmin
-        .from("bids")
-        .select(
-          `
+          .from("bids")
+          .select(
+            `
                     *,
                     created_by_user:users!bids_created_by_fkey (
                         id,
@@ -608,8 +619,8 @@ class BidController {
                         )
                     )
                 `
-        )
-        .eq("id", id);
+          )
+          .eq("id", id);
       }
 
       const { data: bid, error } = await query.single();
@@ -672,10 +683,11 @@ class BidController {
         min_budget,
         max_budget,
         requirements,
-        language,
+        languages, // Changed from language
         platform,
         content_type,
-        category,
+        categories, // Changed from category
+        locations, // Added locations
         expiry_date,
       } = req.body;
 
@@ -708,10 +720,11 @@ class BidController {
       if (max_budget !== undefined)
         updateData.max_budget = parseFloat(max_budget);
       if (requirements !== undefined) updateData.requirements = requirements;
-      if (language !== undefined) updateData.language = language;
+      if (languages !== undefined) updateData.languages = Array.isArray(languages) ? languages : (languages ? [languages] : []);
       if (platform !== undefined) updateData.platform = platform;
       if (content_type !== undefined) updateData.content_type = content_type;
-      if (category !== undefined) updateData.category = category;
+      if (categories !== undefined) updateData.categories = Array.isArray(categories) ? categories : (categories ? [categories] : []);
+      if (locations !== undefined) updateData.locations = Array.isArray(locations) ? locations : (locations ? [locations] : []);
       if (expiry_date !== undefined)
         updateData.expiry_date = expiry_date
           ? new Date(expiry_date).toISOString()
@@ -866,7 +879,7 @@ class BidController {
         const { data: allBids } = await supabaseAdmin
           .from("bids")
           .select("min_budget, max_budget");
-        
+
         allBids?.forEach((bid) => {
           totalBudget += parseFloat(bid.max_budget || bid.min_budget || 0);
         });
@@ -875,14 +888,14 @@ class BidController {
           .from("bids")
           .select("min_budget, max_budget")
           .eq("created_by", userId);
-        
+
         allBids?.forEach((bid) => {
           totalBudget += parseFloat(bid.max_budget || bid.min_budget || 0);
         });
       } else if (req.user.role === "influencer") {
         // For influencers, calculate budget from all bids in stats
         const allBidIds = new Set();
-        
+
         // Get open bids
         const { data: openBids } = await supabaseAdmin
           .from("bids")
@@ -902,13 +915,13 @@ class BidController {
 
         const pendingRequestStatuses = ["connected", "negotiating", "paid", "finalized", "work_submitted", "work_approved"];
         const closedRequestStatuses = ["completed", "cancelled"];
-        
+
         const pendingBidIds = new Set(
           (influencerRequests || [])
             .filter((r) => r.bid_id && pendingRequestStatuses.includes(r.status))
             .map((r) => r.bid_id)
         );
-        
+
         const closedBidIds = new Set(
           (influencerRequests || [])
             .filter((r) => r.bid_id && closedRequestStatuses.includes(r.status))
@@ -1212,7 +1225,7 @@ class BidController {
 
       // Check if we have button_id OR if action looks like a button ID
       const buttonToMap = button_id || action;
-      
+
       if (buttonToMap) {
 
         // Map button IDs to automated flow actions (same logic as message controller)
@@ -1252,7 +1265,7 @@ class BidController {
         } else if (buttonToMap === 'reject_negotiated_price') {
           mappedAction = 'reject_negotiated_price';
           mappedData = additional_data || {};
-          
+
           // Use additional_data for unmapped buttons
           mappedData = additional_data || {};
         }
@@ -1430,11 +1443,11 @@ class BidController {
    */
   async verifyAutomatedFlowPayment(req, res) {
     try {
-      const { 
-        razorpay_order_id, 
-        razorpay_payment_id, 
-        razorpay_signature, 
-        conversation_id 
+      const {
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature,
+        conversation_id
       } = req.body;
       const userId = req.user.id;
 
@@ -1492,18 +1505,18 @@ class BidController {
       // Fetch actual payment amount from Razorpay (amount is in paise)
       let paymentAmount = 1000; // Default amount in paise
       let request = null;
-      
+
       try {
         const Razorpay = require("razorpay");
         const razorpay = new Razorpay({
           key_id: process.env.RAZORPAY_KEY_ID,
           key_secret: process.env.RAZORPAY_KEY_SECRET,
         });
-        
+
         const razorpayOrder = await razorpay.orders.fetch(razorpay_order_id);
         // Razorpay returns amount in paise
         paymentAmount = razorpayOrder.amount;
-        
+
         console.log(`✅ [DEBUG] Fetched payment amount from Razorpay: ${paymentAmount} paise (₹${paymentAmount / 100})`);
       } catch (razorpayError) {
         console.error("⚠️ [DEBUG] Failed to fetch Razorpay order, falling back to request amount:", razorpayError.message);
@@ -1514,13 +1527,13 @@ class BidController {
             .select("id, final_agreed_amount, influencer_id, campaign_id, bid_id")
             .eq("id", conversation.request_id)
             .single();
-          
+
           request = requestData;
           // final_agreed_amount is in rupees, convert to paise
           paymentAmount = Math.round((request?.final_agreed_amount || 1) * 100);
         }
       }
-      
+
       // Get request details if not already fetched
       if (!request && conversation.request_id) {
         const { data: requestData } = await supabaseAdmin
@@ -1528,7 +1541,7 @@ class BidController {
           .select("id, final_agreed_amount, influencer_id, campaign_id, bid_id")
           .eq("id", conversation.request_id)
           .single();
-        
+
         request = requestData;
       }
 
@@ -1627,7 +1640,7 @@ class BidController {
               notes: `Payment sent for conversation ${conversation_id}`
             }
           );
-          
+
           if (trackResult.success) {
             console.log(`✅ [DEBUG] Brand owner transaction created: ${trackResult.transaction.id}`);
           } else {
@@ -1741,7 +1754,7 @@ class BidController {
           // Continue anyway as the payment is processed
         } else {
           escrowHold = newEscrowHold;
-          
+
           // Use enhanced balance service to freeze funds in escrow
           const freezeResult = await enhancedBalanceService.freezeFunds(
             conversation.influencer_id,
@@ -1833,7 +1846,7 @@ class BidController {
       if (request) {
         const { error: requestUpdateError } = await supabaseAdmin
           .from("requests")
-          .update({ 
+          .update({
             status: "paid",
             payment_date: new Date().toISOString()
           })
@@ -1922,14 +1935,14 @@ class BidController {
 
       // Create appropriate message based on flow
       let messageText, messageType, actionRequired, actionData;
-      
+
       if (adminPaymentRecord) {
         // Admin payment flow: create message with admin action buttons
         const advanceAmount = adminPaymentRecord.advance_amount_paise / 100;
         const finalAmount = adminPaymentRecord.final_amount_paise / 100;
         const totalAmount = adminPaymentRecord.total_amount_paise / 100;
         const commissionAmount = adminPaymentRecord.commission_amount_paise / 100;
-        
+
         messageText = `💳 **Payment Received - Admin Processing Required**
 
 💰 **Total Amount:** ₹${totalAmount}
@@ -2008,7 +2021,7 @@ class BidController {
         console.error("❌ Failed to send advance payment notification:", advanceMsgError);
       } else {
         console.log(`✅ [PAYMENT VERIFICATION] Advance payment notification sent to influencer: ${conversation.influencer_id}`);
-        
+
         // Emit socket event for the advance payment message
         if (io && advanceMsg) {
           io.to(`room:${conversation_id}`).emit('chat:new', {
@@ -2019,7 +2032,7 @@ class BidController {
 
       // Emit realtime events (final contract)
       const io = req.app.get("io");
-      
+
       // Emit stats updates after status change
       if (io && conversation.brand_owner_id && conversation.influencer_id) {
         const { emitStatsUpdatesToBothUsers } = require('../utils/statsUpdates');
@@ -2053,7 +2066,7 @@ class BidController {
         });
 
         io.to(`user_${conversation.influencer_id}`).emit("notification", {
-          type: "payment_completed", 
+          type: "payment_completed",
           data: {
             conversation_id: conversation_id,
             message: "Payment completed successfully",
@@ -2323,7 +2336,7 @@ class BidController {
       // Note: automatedFlowService.handleWorkReview already emits all necessary socket events
       // including conversation_state_changed, chat:new, conversations:upsert with correct chat_status
       // So we don't need to emit duplicate events here. Only emit payment status update if needed.
-      
+
       const io = req.app.get("io");
       if (io && result.flow_state === "work_approved") {
         // Emit payment status update if work is approved

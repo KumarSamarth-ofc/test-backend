@@ -1,5 +1,8 @@
 const { supabaseAdmin } = require("../supabase/client");
 const adminPaymentFlowService = require("../utils/adminPaymentFlowService");
+const notificationService = require("../services/notificationService");
+const fcmService = require("../services/fcmService");
+const conversationListUtils = require("../utils/conversationListUpdates");
 
 // Small helper to emit via Socket.IO
 function getIO(req) {
@@ -340,11 +343,11 @@ class ConversationController {
           .eq("id", id)
           .single();
 
-        const paymentCompleted = convCheck?.flow_data?.payment_completed || 
-                                 convCheck?.flow_state === "payment_completed" ||
-                                 convCheck?.flow_state === "work_in_progress" ||
-                                 convCheck?.flow_state === "work_submitted" ||
-                                 convCheck?.flow_state === "work_approved";
+        const paymentCompleted = convCheck?.flow_data?.payment_completed ||
+          convCheck?.flow_state === "payment_completed" ||
+          convCheck?.flow_state === "work_in_progress" ||
+          convCheck?.flow_state === "work_submitted" ||
+          convCheck?.flow_state === "work_approved";
 
         if (!paymentCompleted) {
           return res.status(400).json({
@@ -357,7 +360,7 @@ class ConversationController {
         try {
           const mouService = require('../services/mouService');
           const mouResult = await mouService.generateMOU(id);
-          
+
           if (mouResult.success) {
             return res.json({
               success: true,
@@ -431,9 +434,9 @@ class ConversationController {
       // Work submission actions are now handled by automatedFlowService via button-click endpoint
       // This ensures consistency with the existing automated flow system
       if (action === "submit_work" || action === "request_revision" || action === "approve_work") {
-        return res.status(400).json({ 
-          success: false, 
-          error: `Action '${action}' should be called via /api/messages/conversations/:conversation_id/button-click endpoint for automated flow consistency` 
+        return res.status(400).json({
+          success: false,
+          error: `Action '${action}' should be called via /api/messages/conversations/:conversation_id/button-click endpoint for automated flow consistency`
         });
       }
 
@@ -470,6 +473,53 @@ class ConversationController {
               chat_status: 'automated'
             }
           });
+
+          // Send notifications for automated message
+          const receiverId = createdMessage.receiver_id || (conv.brand_owner_id === userId ? conv.influencer_id : conv.brand_owner_id);
+          if (receiverId) {
+            // Get sender name
+            const { data: sender } = await supabaseAdmin.from('users').select('name').eq('id', userId).single();
+            const senderName = sender?.name || 'System';
+
+            // Store notification
+            await notificationService.storeNotification({
+              user_id: receiverId,
+              type: 'message',
+              title: `Conversation closed by ${senderName}`,
+              message: createdMessage.message,
+              data: {
+                conversation_id: id,
+                message: createdMessage,
+                conversation_context: {
+                  id: id,
+                  chat_status: newState,
+                  flow_state: newState,
+                  awaiting_role: awaitingRole
+                },
+                sender_id: userId,
+                receiver_id: receiverId,
+                sender_name: senderName
+              },
+              action_url: `/conversations/${id}`
+            }, io);
+
+            // Send FCM notification
+            await fcmService.sendMessageNotification(
+              id,
+              createdMessage,
+              userId,
+              receiverId,
+              io
+            );
+
+            // Update conversation lists
+            await conversationListUtils.emitConversationsUpsertToBothUsers(
+              io,
+              id,
+              updatedConv,
+              createdMessage
+            );
+          }
         }
       }
 
