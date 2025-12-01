@@ -1,5 +1,8 @@
 const { supabaseAdmin } = require("../supabase/client");
 const socketEmitter = require("../services/socketEmitter");
+const notificationService = require("../services/notificationService");
+const fcmService = require("../services/fcmService");
+const conversationListUtils = require("./conversationListUpdates");
 
 // System user ID for automated messages
 const SYSTEM_USER_ID =
@@ -18,15 +21,107 @@ class AutomatedFlowService {
   }
 
   /**
-   * Helper to emit automated message via socket
+   * Helper to emit automated message via socket, send notifications, and update lists
    */
-  emitAutomatedMessage(conversationId, message, reason = 'automated') {
+  async emitAutomatedMessage(conversationId, message, reason = 'automated') {
     try {
       console.log(`🤖 [AUTO] chat:automated -> room:${conversationId} msg:${message?.id || 'n/a'} reason:${reason}`);
-      socketEmitter.emitToConversation(conversationId, 'chat:automated', {
-        message,
-        reason
-      });
+
+      // 1. Emit to conversation room
+      if (this.io) {
+        // Emit both chat:automated (for specific listeners) and chat:new (for general chat view)
+        this.io.to(`room:${conversationId}`).emit('chat:automated', {
+          message,
+          reason
+        });
+        // Also emit chat:new so standard chat views pick it up immediately
+        this.io.to(`room:${conversationId}`).emit('chat:new', {
+          message
+        });
+      }
+
+      // 2. Handle notifications and list updates
+      if (message && message.receiver_id) {
+        const receiverId = message.receiver_id;
+        const senderId = message.sender_id;
+
+        // Fetch sender name
+        let senderName = 'System';
+        if (senderId && senderId !== SYSTEM_USER_ID) {
+          const { data: sender } = await supabaseAdmin.from('users').select('name').eq('id', senderId).single();
+          if (sender) senderName = sender.name;
+        }
+
+        // Fetch conversation context
+        const { data: conversation } = await supabaseAdmin
+          .from("conversations")
+          .select("id, chat_status, flow_state, awaiting_role, campaign_id, bid_id, current_action_data, brand_owner_id, influencer_id, updated_at, created_at")
+          .eq("id", conversationId)
+          .single();
+
+        if (conversation) {
+          const conversationContext = {
+            id: conversation.id,
+            chat_status: conversation.chat_status,
+            flow_state: conversation.flow_state,
+            awaiting_role: conversation.awaiting_role,
+            conversation_type: conversation.campaign_id ? 'campaign' :
+              conversation.bid_id ? 'bid' : 'direct',
+            current_action_data: conversation.current_action_data
+          };
+
+          // Determine notification title
+          let title = `${senderName} sent you a message`;
+          if (message.action_data && message.action_data.title) {
+            // Strip markdown **
+            title = message.action_data.title.replace(/\*\*/g, '');
+          }
+
+          // Store notification
+          await notificationService.storeNotification({
+            user_id: receiverId,
+            type: 'message',
+            title: title,
+            message: message.message,
+            data: {
+              conversation_id: conversationId,
+              message: message,
+              conversation_context: conversationContext,
+              sender_id: senderId,
+              receiver_id: receiverId,
+              sender_name: senderName
+            },
+            action_url: `/conversations/${conversationId}`
+          }, this.io);
+
+          // Send FCM
+          await fcmService.sendMessageNotification(
+            conversationId,
+            message,
+            senderId,
+            receiverId,
+            this.io
+          );
+
+          // Update conversation lists for both users
+          await conversationListUtils.emitConversationsUpsertToBothUsers(
+            this.io,
+            conversationId,
+            conversation,
+            message
+          );
+
+          // Emit unread count update for receiver
+          const unreadCount = await conversationListUtils.getUnreadCount(conversationId, receiverId);
+          conversationListUtils.emitUnreadCountUpdated(
+            this.io,
+            receiverId,
+            conversationId,
+            unreadCount,
+            'increment'
+          );
+        }
+      }
     } catch (error) {
       console.error('Failed to emit automated message:', error);
     }
@@ -56,8 +151,8 @@ class AutomatedFlowService {
       const totalAmountPaise = Math.round(agreedAmount * 100);
       const commissionAmountPaise = Math.round((totalAmountPaise * commissionPercentage) / 100);
       const netAmountPaise = totalAmountPaise - commissionAmountPaise;
-      const advanceAmountPaise = Math.round(netAmountPaise * 0.30); // 30%
-      const finalAmountPaise = netAmountPaise - advanceAmountPaise; // 70%
+      const advanceAmountPaise = 0; // 0%
+      const finalAmountPaise = netAmountPaise; // 100%
 
       return {
         total_amount_paise: totalAmountPaise,
@@ -71,8 +166,8 @@ class AutomatedFlowService {
           total: `₹${(totalAmountPaise / 100).toFixed(2)}`,
           commission: `₹${(commissionAmountPaise / 100).toFixed(2)} (${commissionPercentage}%)`,
           net_to_influencer: `₹${(netAmountPaise / 100).toFixed(2)}`,
-          advance: `₹${(advanceAmountPaise / 100).toFixed(2)} (30%)`,
-          final: `₹${(finalAmountPaise / 100).toFixed(2)} (70%)`
+          advance: `₹0.00 (0%)`,
+          final: `₹${(finalAmountPaise / 100).toFixed(2)} (100%)`
         }
       };
     } catch (error) {
@@ -297,25 +392,10 @@ class AutomatedFlowService {
 
       // Emit socket event for new message
       if (messages && messages[0]) {
-        this.emitAutomatedMessage(conversation.id, messages[0]);
+        await this.emitAutomatedMessage(conversation.id, messages[0]);
       }
 
-      // Send FCM notification to influencer
-      const fcmService = require('../services/fcmService');
-      fcmService.sendFlowStateNotification(
-        conversation.id, 
-        influencerId, 
-        "influencer_responding",
-        "You have a new connection request"
-      ).then(result => {
-        if (result.success) {
-          console.log(`✅ FCM notification sent to influencer: ${result.sent} successful, ${result.failed} failed`);
-        } else {
-          console.error(`❌ FCM notification failed:`, result.error);
-        }
-      }).catch(error => {
-        console.error(`❌ FCM notification error:`, error);
-      });
+      // FCM notification handled by emitAutomatedMessage
 
       console.log(
         "✅ Bid conversation initialized successfully:",
@@ -445,7 +525,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             },
             {
               id: "reject_connection",
-              text: "Reject Connection", 
+              text: "Reject Connection",
               style: "danger",
               action: "reject_connection",
             }
@@ -472,25 +552,10 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       // Emit socket event for new message
       if (messages && messages[0]) {
-        this.emitAutomatedMessage(conversation.id, messages[0]);
+        await this.emitAutomatedMessage(conversation.id, messages[0]);
       }
 
-      // Send FCM notification to influencer
-      const fcmService = require('../services/fcmService');
-      fcmService.sendFlowStateNotification(
-        conversation.id, 
-        influencerId, 
-        "influencer_responding",
-        "You have a new campaign connection"
-      ).then(result => {
-        if (result.success) {
-          console.log(`✅ FCM notification sent to influencer: ${result.sent} successful, ${result.failed} failed`);
-        } else {
-          console.error(`❌ FCM notification failed:`, result.error);
-        }
-      }).catch(error => {
-        console.error(`❌ FCM notification error:`, error);
-      });
+      // FCM notification handled by emitAutomatedMessage
 
       console.log(
         "✅ Campaign conversation initialized successfully:",
@@ -597,11 +662,11 @@ Please respond to confirm your interest and availability for this campaign.`,
 
           const rejectNegHistory = Array.isArray(conversation.negotiation_history) ? conversation.negotiation_history : [];
           rejectNegHistory.push({ event: "negotiation_rejected", by: "brand_owner", at: new Date().toISOString() });
-              await supabaseAdmin
-                .from("conversations")
+          await supabaseAdmin
+            .from("conversations")
             .update({ negotiation_history: rejectNegHistory })
-                .eq("id", conversationId);
-          
+            .eq("id", conversationId);
+
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
@@ -626,8 +691,8 @@ Please respond to confirm your interest and availability for this campaign.`,
         case "send_project_details":
           // Brand owner sends project details - influencer needs to review and accept/reject
           newFlowState = "influencer_reviewing";
-            newAwaitingRole = "influencer";
-            
+          newAwaitingRole = "influencer";
+
           const projectDetails = data.details || data.project_details || "";
           console.log("🧩 [AF] send_project_details computed:", { projectDetails });
 
@@ -639,21 +704,21 @@ Please respond to confirm your interest and availability for this campaign.`,
           };
           console.log("🧩 [AF] send_project_details flow_data update:", updatedFlowData);
 
-            newMessage = {
-              conversation_id: conversationId,
-              sender_id: conversation.brand_owner_id,
-              receiver_id: conversation.influencer_id,
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.brand_owner_id,
+            receiver_id: conversation.influencer_id,
             message: `📋 **Project Details**\n\n${projectDetails}\n\nPlease review the project details and confirm if you're interested in proceeding.`,
-              message_type: "automated",
-              action_required: true,
-              action_data: {
+            message_type: "automated",
+            action_required: true,
+            action_data: {
               title: "📋 **Review Project Details**",
               subtitle: "Please review the project details above and decide:",
-                buttons: [
-                  {
+              buttons: [
+                {
                   id: "accept_project_details",
                   text: "Accept Project",
-                    style: "success",
+                  style: "success",
                   action: "accept_project_details",
                 },
                 {
@@ -665,9 +730,9 @@ Please respond to confirm your interest and availability for this campaign.`,
               ],
               flow_state: "influencer_reviewing",
               message_type: "influencer_project_review",
-                visible_to: "influencer",
-              },
-            };
+              visible_to: "influencer",
+            },
+          };
           console.log("📝 [AF] send_project_details newMessage:", newMessage);
 
           // Update flow_data with project details
@@ -684,7 +749,7 @@ Please respond to confirm your interest and availability for this campaign.`,
 
           // Try to get price from input, then from request, then from flow_data
           let priceOffer = data.price ? parseFloat(data.price) : null;
-          
+
           // If no price provided, try to get from request's proposed_amount
           if (!priceOffer && conversation.request_id) {
             const { data: requestData } = await supabaseAdmin
@@ -692,24 +757,24 @@ Please respond to confirm your interest and availability for this campaign.`,
               .select("proposed_amount")
               .eq("id", conversation.request_id)
               .single();
-            
+
             if (requestData && requestData.proposed_amount) {
               priceOffer = parseFloat(requestData.proposed_amount);
               console.log("🧮 [AF] send_price_offer using proposed_amount from request:", priceOffer);
             }
           }
-          
+
           // If still no price, try from flow_data
           if (!priceOffer && conversation.flow_data && conversation.flow_data.price_offer) {
             priceOffer = parseFloat(conversation.flow_data.price_offer);
             console.log("🧮 [AF] send_price_offer using price_offer from flow_data:", priceOffer);
           }
-          
+
           // If still no price, throw error
           if (!priceOffer || isNaN(priceOffer)) {
             throw new Error("Price offer is required. Either provide price in data.price, or ensure proposed_amount exists in the request.");
           }
-          
+
           console.log("🧮 [AF] send_price_offer final price:", { input: data.price, priceOffer });
 
           // Update flow_data with price offer
@@ -760,20 +825,20 @@ Please respond to confirm your interest and availability for this campaign.`,
           console.log("📝 [AF] send_price_offer newMessage:", newMessage);
 
           // Update flow_data with price offer and update request if exists
-            if (conversation.request_id) {
+          if (conversation.request_id) {
             await supabaseAdmin
-                .from("requests")
+              .from("requests")
               .update({
                 proposed_amount: priceOffer,
               })
               .eq("id", conversation.request_id);
           }
 
-                  await supabaseAdmin
-                    .from("conversations")
+          await supabaseAdmin
+            .from("conversations")
             .update({ flow_data: priceFlowData })
-                    .eq("id", conversationId);
-                  break;
+            .eq("id", conversationId);
+          break;
 
         case "proceed_to_payment":
           // Brand owner proceeds to payment - create Razorpay order
@@ -781,14 +846,14 @@ Please respond to confirm your interest and availability for this campaign.`,
           newAwaitingRole = "brand_owner";
 
           const paymentAmount = data.price || conversation.flow_data?.agreed_price || conversation.flow_data?.negotiated_price || 0;
-          
+
           // Calculate payment breakdown
           const paymentBreakdown = await this.calculatePaymentBreakdown(paymentAmount);
 
           // Create Razorpay order for frontend to use
           let razorpayOrder = null;
           const Razorpay = require("razorpay");
-          
+
           if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
             const razorpay = new Razorpay({
               key_id: process.env.RAZORPAY_KEY_ID,
@@ -813,19 +878,19 @@ Please respond to confirm your interest and availability for this campaign.`,
               };
 
               razorpayOrder = await razorpay.orders.create(orderOptions);
-              
+
               // Store order ID in flow_data for later reference
               const orderFlowData = {
                 ...(conversation.flow_data || {}),
                 razorpay_order_id: razorpayOrder.id,
                 payment_order_created_at: new Date().toISOString()
               };
-              
+
               await supabaseAdmin
                 .from("conversations")
                 .update({ flow_data: orderFlowData })
                 .eq("id", conversationId);
-              
+
             } catch (orderError) {
               console.error("❌ Failed to create Razorpay order:", orderError);
               // Don't throw - allow flow to continue, frontend can retry
@@ -952,18 +1017,18 @@ Please respond to confirm your interest and availability for this campaign.`,
         case "reject_negotiated_price":
           // Brand owner rejects negotiated price; allow influencer to try again
           newFlowState = "influencer_negotiation_input";
-            newAwaitingRole = "influencer";
+          newAwaitingRole = "influencer";
 
           const rejectedNegPrice = data.price ? parseFloat(data.price) : (conversation.flow_data?.negotiated_price || null);
 
-            newMessage = {
-              conversation_id: conversationId,
-              sender_id: conversation.brand_owner_id,
-              receiver_id: conversation.influencer_id,
+          newMessage = {
+            conversation_id: conversationId,
+            sender_id: conversation.brand_owner_id,
+            receiver_id: conversation.influencer_id,
             message: `❌ **Negotiated Price Rejected**\n\nBrand owner rejected the negotiated price of ₹${rejectedNegPrice}. Please propose another amount.`,
-              message_type: "automated",
-              action_required: true,
-              action_data: {
+            message_type: "automated",
+            action_required: true,
+            action_data: {
               title: "💬 Propose New Price",
               subtitle: "Enter a different negotiated price.",
               input_field: { id: "negotiated_price", type: "number", placeholder: "Enter price in ₹", required: true, min: 0 },
@@ -979,7 +1044,7 @@ Please respond to confirm your interest and availability for this campaign.`,
           // Brand owner rejects work (final rejection)
           newFlowState = "work_rejected";
           newAwaitingRole = null;
-          
+
           newMessage = {
             conversation_id: conversationId,
             sender_id: conversation.brand_owner_id,
@@ -1035,7 +1100,7 @@ Please respond to confirm your interest and availability for this campaign.`,
       // Stop updating negotiation_round; negotiations can continue indefinitely
 
       console.log("🔄 [DEBUG] Updating conversation with data:", updateData);
-      
+
       const { error: updateError } = await supabaseAdmin
         .from("conversations")
         .update(updateData)
@@ -1043,30 +1108,30 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       if (updateError) {
         console.error("❌ [DEBUG] Failed to update conversation:", updateError);
-        
+
         // Check if it's a constraint violation for flow_state
         if (updateError.message && updateError.message.includes("check constraint") && updateError.message.includes("flow_state")) {
           console.error("❌ [DEBUG] Flow state constraint violation! The database doesn't support the new flow state yet.");
           console.error("❌ [DEBUG] This means the database migration hasn't been applied.");
           console.error("❌ [DEBUG] Falling back to influencer_price_response state...");
-          
+
           // Fallback to a supported state
           const fallbackUpdateData = {
             ...updateData,
             flow_state: "influencer_price_response"
           };
-          
+
           const { error: fallbackError } = await supabaseAdmin
             .from("conversations")
             .update(fallbackUpdateData)
             .eq("id", conversationId);
-            
+
           if (fallbackError) {
             console.error("❌ [DEBUG] Fallback update also failed:", fallbackError);
             throw new Error(`Failed to update conversation: ${updateError.message}`);
           } else {
             newFlowState = "influencer_price_response"; // Update the local variable too
-            
+
             // Also update the message action_data to reflect the fallback state
             if (newMessage && newMessage.action_data) {
               newMessage.action_data.flow_state = "influencer_price_response";
@@ -1097,14 +1162,14 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       // Emit socket events for new messages
       if (createdMessages && createdMessages.length > 0) {
-        createdMessages.forEach(msg => {
-          this.emitAutomatedMessage(conversationId, msg);
-        });
+        for (const msg of createdMessages) {
+          await this.emitAutomatedMessage(conversationId, msg);
+        }
       }
 
       // Set current_action_data based on the action and flow state
       let currentActionData = {};
-      
+
       if (action === "proceed_to_payment" && newMessage && newMessage.action_data) {
         const a = { ...newMessage.action_data };
         if (a.razorpay_order && !a.razorpayOrder) a.razorpayOrder = a.razorpay_order;
@@ -1158,19 +1223,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         current_action_data_keys: currentActionData ? Object.keys(currentActionData) : null
       });
 
-      // Send FCM notification to the target user
-      const fcmService = require('../services/fcmService');
-      const targetUserId = newAwaitingRole === 'influencer' ? conversation.influencer_id : conversation.brand_owner_id;
-      if (targetUserId) {
-        fcmService.sendFlowStateNotification(conversationId, targetUserId, newFlowState).then(result => {
-          if (result.success) {
-          } else {
-            console.error(`❌ FCM brand owner action notification failed:`, result.error);
-          }
-        }).catch(error => {
-          console.error(`❌ FCM brand owner action notification error:`, error);
-        });
-      }
+      // FCM notification handled by emitAutomatedMessage
 
       // Emit WebSocket events for real-time updates
       if (this.io) {
@@ -1458,9 +1511,9 @@ Please respond to confirm your interest and availability for this campaign.`,
           };
 
           // Update conversation to closed state
-            await supabaseAdmin
-              .from("conversations")
-              .update({
+          await supabaseAdmin
+            .from("conversations")
+            .update({
               flow_state: "price_rejected",
               chat_status: "closed"
             })
@@ -1470,7 +1523,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         case "send_counter_offer":
           // Legacy alias -> treat as negotiated price send
           action = "send_negotiated_price";
-          // fallthrough
+        // fallthrough
 
         case "send_negotiated_price":
           // Influencer proposes a negotiated price
@@ -1486,10 +1539,10 @@ Please respond to confirm your interest and availability for this campaign.`,
           const negHist = Array.isArray(conversation.negotiation_history) ? conversation.negotiation_history : [];
           negHist.push({ event: "negotiated_price_submitted", by: "influencer", price: negotiatedPrice, at: new Date().toISOString() });
 
-              await supabaseAdmin
-                .from("conversations")
+          await supabaseAdmin
+            .from("conversations")
             .update({ negotiation_history: negHist, flow_data: { ...(conversation.flow_data || {}), negotiated_price: negotiatedPrice } })
-                .eq("id", conversationId);
+            .eq("id", conversationId);
 
           const negotiatedBreakdown = await this.calculatePaymentBreakdown(negotiatedPrice);
 
@@ -1525,48 +1578,17 @@ Please respond to confirm your interest and availability for this campaign.`,
 
         case "submit_work":
         case "resubmit_work":
-          // Influencer submits work
-          newFlowState = "work_submitted";
-          newAwaitingRole = "brand_owner";
+          // Delegate to handleWorkSubmission for consistent logic including attachments
+          // Note: data should contain deliverables, description, submission_notes, attachments
+          // If called from button click, these might be in data or additional_data
+          const submissionResult = await this.handleWorkSubmission(conversationId, {
+            deliverables: data.deliverables || [],
+            description: data.description || data.message || "Work submitted via chat",
+            submission_notes: data.submission_notes,
+            attachments: data.attachments || []
+          });
 
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.influencer_id,
-            receiver_id: conversation.brand_owner_id,
-            message: `📤 **Work Submitted**\n\nWork has been submitted for review. Please review and provide feedback.`,
-            message_type: "automated",
-            action_required: true,
-            action_data: {
-              title: "📋 **Work Review Required**",
-              subtitle: "Please review the submitted work and take action.",
-              buttons: [
-                  {
-                    id: "approve_work",
-                    text: "Approve Work",
-                    action: "approve_work",
-                    style: "success"
-                },
-                {
-                    id: "request_revision",
-                    text: "Request Revision",
-                    action: "request_revision",
-                    style: "warning"
-                }
-              ],
-              flow_state: "work_submitted",
-              message_type: "work_review",
-              visible_to: "brand_owner",
-            },
-          };
-
-          // Update conversation to automated mode
-          await supabaseAdmin
-            .from("conversations")
-            .update({
-              chat_status: "automated"
-            })
-            .eq("id", conversationId);
-          break;
+          return submissionResult;
 
         default:
           throw new Error(`Unknown action: ${action}`);
@@ -1587,20 +1609,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         );
       }
 
-      // Send FCM notification for flow state change
-      const fcmService = require('../services/fcmService');
-      const targetUserId = newAwaitingRole === 'influencer' ? conversation.influencer_id : conversation.brand_owner_id;
-      if (targetUserId) {
-        fcmService.sendFlowStateNotification(conversationId, targetUserId, newFlowState).then(result => {
-          if (result.success) {
-            console.log(`✅ FCM flow state notification sent: ${result.sent} successful, ${result.failed} failed`);
-          } else {
-            console.error(`❌ FCM flow state notification failed:`, result.error);
-          }
-        }).catch(error => {
-          console.error(`❌ FCM flow state notification error:`, error);
-        });
-      }
+      // FCM notification handled by emitAutomatedMessage
 
       // Create messages
       const messagesToInsert = [newMessage];
@@ -1616,14 +1625,14 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       // Emit socket events for new messages
       if (createdMessages && createdMessages.length > 0) {
-        createdMessages.forEach(msg => {
-          this.emitAutomatedMessage(conversationId, msg);
-        });
+        for (const msg of createdMessages) {
+          await this.emitAutomatedMessage(conversationId, msg);
+        }
       }
 
       // Set current_action_data based on the action and flow state
       let currentActionData = {};
-      
+
       if (action === "submit_work" || action === "resubmit_work") {
         // Show work submission status for brand owner
         currentActionData = {
@@ -1688,7 +1697,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             this.io.to(`room:${conversationId}`).emit('chat:new', {
               message: result.message
             });
-            
+
             // Also emit as automated message
             this.emitAutomatedMessage(conversationId, result.message);
           }
@@ -1708,27 +1717,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             } : undefined
           });
 
-          // Emit conversations:upsert for both users (standardized list update)
-          const conversationListUtils = require('./conversationListUpdates');
-          if (result.message && updatedConv) {
-            // Emit for influencer (submitter)
-            const influencerPayload = await conversationListUtils.buildConversationsUpsertPayload({
-              conversationId,
-              currentUserId: conversation.influencer_id,
-              lastMessage: result.message,
-              conversation: updatedConv
-            });
-            conversationListUtils.emitConversationsUpsert(this.io, conversation.influencer_id, influencerPayload);
-
-            // Emit for brand owner (reviewer)
-            const brandOwnerPayload = await conversationListUtils.buildConversationsUpsertPayload({
-              conversationId,
-              currentUserId: conversation.brand_owner_id,
-              lastMessage: result.message,
-              conversation: updatedConv
-            });
-            conversationListUtils.emitConversationsUpsert(this.io, conversation.brand_owner_id, brandOwnerPayload);
-          }
+          // conversations:upsert handled by emitAutomatedMessage
 
           console.log("✅ [DEBUG] WebSocket events emitted for influencer action:", conversationId);
         } catch (socketError) {
@@ -1796,9 +1785,6 @@ Please respond to confirm your interest and availability for this campaign.`,
           `• Total Amount: ${paymentBreakdown.display.total}\n` +
           `• Platform Fee: ${paymentBreakdown.display.commission}\n` +
           `• Influencer Net: ${paymentBreakdown.display.net_to_influencer}\n\n` +
-          `💳 **Payment Schedule:**\n` +
-          `• Advance (30%): ${paymentBreakdown.display.advance}\n` +
-          `• Final (70%): ${paymentBreakdown.display.final}\n\n` +
           `The collaboration is now active and work can begin.`,
         message_type: "automated",
         action_required: false,
@@ -1829,19 +1815,9 @@ Please respond to confirm your interest and availability for this campaign.`,
         }
       };
 
-      // Create advance payment notification message for influencer
-      const advancePaymentMessage = {
-        conversation_id: conversationId,
-        sender_id: SYSTEM_USER_ID,
-        receiver_id: conversation.influencer_id,
-        message: `💰 **Advance Payment Update**\n\nYour advance payment (30% of net amount) will be sent by the admin soon. You will be notified once the payment is processed.`,
-        message_type: "automated",
-        action_required: false,
-      };
-
       const { data: messages, error: messageError } = await supabaseAdmin
         .from("messages")
-        .insert([confirmationMessage, workStartMessage, advancePaymentMessage])
+        .insert([confirmationMessage, workStartMessage])
         .select();
 
       if (messageError) {
@@ -2065,7 +2041,7 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       // Check if this is a resubmission
       const isResubmission = conversation.flow_state === "work_in_progress" && conversation.revision_count > 0;
-      
+
       // Update conversation to work_submitted state
       const updateData = {
         flow_state: "work_submitted",
@@ -2242,30 +2218,10 @@ Please respond to confirm your interest and availability for this campaign.`,
             this.io.to(`room:${conversationId}`).emit('chat:new', {
               message: message
             });
-            this.emitAutomatedMessage(conversationId, message);
+            await this.emitAutomatedMessage(conversationId, message);
           }
 
-          // Emit conversation list updates for both users
-          const conversationListUtils = require('./conversationListUpdates');
-          if (message && updatedConv) {
-            // Emit for influencer
-            const influencerPayload = await conversationListUtils.buildConversationsUpsertPayload({
-              conversationId,
-              currentUserId: conversation.influencer_id,
-              lastMessage: message,
-              conversation: updatedConv
-            });
-            conversationListUtils.emitConversationsUpsert(this.io, conversation.influencer_id, influencerPayload);
-
-            // Emit for brand owner
-            const brandOwnerPayload = await conversationListUtils.buildConversationsUpsertPayload({
-              conversationId,
-              currentUserId: conversation.brand_owner_id,
-              lastMessage: message,
-              conversation: updatedConv
-            });
-            conversationListUtils.emitConversationsUpsert(this.io, conversation.brand_owner_id, brandOwnerPayload);
-          }
+          // conversations:upsert handled by emitAutomatedMessage
 
           // Emit global conversation update
           this.emitGlobalConversationUpdate(conversation, conversationId, {
@@ -2334,13 +2290,13 @@ Please respond to confirm your interest and availability for this campaign.`,
           // Admin payment flow: transition to admin final payment pending
           newFlowState = "admin_final_payment_pending";
           newAwaitingRole = "admin";
-          
+
           const finalAmount = adminPaymentRecord.final_amount_paise / 100;
           const totalAmount = adminPaymentRecord.total_amount_paise / 100;
           const commissionAmount = adminPaymentRecord.commission_amount_paise / 100;
-          
+
           messageText = `✅ **Work Approved!**\n\n🎉 Great work! The collaboration work has been approved.${feedback ? `\n\n**Feedback:** ${feedback}` : ''}\n\n💳 **Final Payment Required**\n\n💰 **Final Amount:** ₹${finalAmount}\n💼 **Total Commission:** ₹${commissionAmount}\n💵 **Total Paid:** ₹${totalAmount}\n\n⏳ **Status:** Waiting for admin to process final payment...`;
-          
+
           actionData = {
             title: "✅ **Work Approved - Final Payment Required**",
             subtitle: "Please process the final payment to complete the collaboration:",
@@ -2367,9 +2323,9 @@ Please respond to confirm your interest and availability for this campaign.`,
           // Direct payment flow: close conversation
           newFlowState = "work_approved";
           newAwaitingRole = null; // Work completed, no further action needed
-          
+
           messageText = `✅ **Work Approved!**\n\n🎉 Great work! The collaboration has been completed successfully.${feedback ? `\n\n**Feedback:** ${feedback}` : ''}\n\n✨ **Collaboration Status: CLOSED**`;
-          
+
           actionData = {
             title: "🎉 **Collaboration Completed**",
             subtitle: "The work has been approved and the collaboration is now complete. This conversation is closed.",
@@ -2445,22 +2401,22 @@ Please respond to confirm your interest and availability for this campaign.`,
         // Get current revision count
         const currentRevisionCount = conversation.revision_count || 0;
         const maxRevisions = conversation.max_revisions || 3;
-        
+
         // Check if this is the final revision
         const isFinalRevision = currentRevisionCount >= (maxRevisions - 1);
-        
+
         newFlowState = isFinalRevision ? "work_final_review" : "work_in_progress";
         newAwaitingRole = "influencer";
-        
-        const revisionText = isFinalRevision 
+
+        const revisionText = isFinalRevision
           ? `🔄 **Final Revision Requested** (${currentRevisionCount + 1}/${maxRevisions})\n\nThis is your final chance to make changes. Please address the feedback and resubmit your work:${feedback ? `\n\n**Feedback:** ${feedback}` : ''}`
           : `🔄 **Revision Requested** (${currentRevisionCount + 1}/${maxRevisions})\n\nPlease make the following changes and resubmit your work:${feedback ? `\n\n**Feedback:** ${feedback}` : ''}`;
-        
+
         messageText = revisionText;
-        
+
         actionData = {
           title: isFinalRevision ? "⚠️ **Final Revision Required**" : "📝 **Work Revision Required**",
-          subtitle: isFinalRevision 
+          subtitle: isFinalRevision
             ? "This is your final revision. Please address all feedback carefully:"
             : "Please address the feedback and resubmit your work:",
           buttons: [
@@ -2475,9 +2431,9 @@ Please respond to confirm your interest and availability for this campaign.`,
       } else if (action === "reject_final_work") {
         newFlowState = "work_rejected";
         newAwaitingRole = "influencer";
-        
+
         messageText = `❌ **Work Rejected**\n\nAfter ${conversation.revision_count || 0} revision attempts, the work has been rejected. You can choose to continue working or reject the project.${feedback ? `\n\n**Final Feedback:** ${feedback}` : ''}`;
-        
+
         actionData = {
           title: "❌ **Work Rejected**",
           subtitle: "The work has been rejected after maximum revisions. Choose your next action:",
@@ -2521,7 +2477,7 @@ Please respond to confirm your interest and availability for this campaign.`,
       if (action === "request_revision") {
         const currentRevisionCount = conversation.revision_count || 0;
         updateData.revision_count = currentRevisionCount + 1;
-        
+
         // Add to revision history
         const revisionHistory = conversation.revision_history || [];
         revisionHistory.push({
@@ -2580,7 +2536,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             conversation_id: conversationId,
             sender_id: SYSTEM_USER_ID,
             receiver_id: conversation.influencer_id,
-            message: advanceSent 
+            message: advanceSent
               ? `✅ **Advance Payment Status**\n\nYour advance payment (30% of net amount: ₹${advanceAmount}) has already been sent.`
               : `💰 **Advance Payment Update**\n\nYour advance payment (30% of net amount: ₹${advanceAmount}) will be sent by the admin soon. You will be notified once the payment is processed.`,
             message_type: "automated",
@@ -2621,7 +2577,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             // Don't throw - main message is created, this is just a notification
           } else {
             console.log(`✅ [WORK APPROVAL] Final payment notification sent to influencer: ${conversation.influencer_id}`);
-            
+
             // Emit socket event for the final payment message
             if (this.io && finalPaymentMsg) {
               this.io.to(`room:${conversationId}`).emit('chat:new', {
@@ -2652,7 +2608,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             // For other states, check what chat_status should be (preserve if was real_time)
             chatStatusForEmit = updateData.chat_status || conversation.chat_status || 'automated';
           }
-          
+
           // Emit conversation state change to conversation room
           console.log(`🔀 [STATE] conversation_state_changed -> room:${conversationId} flow:${newFlowState} awaiting:${newAwaitingRole} chat_status:${chatStatusForEmit}`);
           this.io.to(`room:${conversationId}`).emit('conversation_state_changed', {
@@ -2671,7 +2627,7 @@ Please respond to confirm your interest and availability for this campaign.`,
             this.io.to(`room:${conversationId}`).emit('chat:new', {
               message: message
             });
-            
+
             // Also emit as automated message
             this.emitAutomatedMessage(conversationId, message);
           }
@@ -2735,8 +2691,8 @@ Please respond to confirm your interest and availability for this campaign.`,
       const targetUserId = newAwaitingRole === 'influencer' ? conversation.influencer_id : conversation.brand_owner_id;
       if (targetUserId) {
         fcmService.sendFlowStateNotification(
-          conversationId, 
-          targetUserId, 
+          conversationId,
+          targetUserId,
           newFlowState,
           messageText
         ).then(result => {
@@ -2771,7 +2727,7 @@ Please respond to confirm your interest and availability for this campaign.`,
   async handleAdminAction(conversationId, action, data = {}) {
     try {
       const conversation = await this.getConversation(conversationId);
-      
+
       switch (action) {
         case 'receive_brand_owner_payment':
           return await this.receiveBrandOwnerPayment(conversationId, data);
@@ -2797,7 +2753,7 @@ Please respond to confirm your interest and availability for this campaign.`,
   async receiveBrandOwnerPayment(conversationId, data) {
     try {
       const { amount, currency = "INR", reference, attachments = [], notes, commission_percent } = data;
-      
+
       if (!amount || amount <= 0) {
         throw new Error("Valid amount required");
       }
@@ -2820,7 +2776,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         .insert(payload)
         .select()
         .single();
-      
+
       if (txnErr) {
         throw new Error(`Transaction failed: ${txnErr.message}`);
       }
@@ -2877,7 +2833,7 @@ Please respond to confirm your interest and availability for this campaign.`,
   async releaseAdvance(conversationId, data) {
     try {
       const { amount, currency = "INR", payout_reference, attachments = [], notes, commission_percent } = data;
-      
+
       if (!amount || amount <= 0) {
         throw new Error("Valid amount required");
       }
@@ -2904,7 +2860,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         .insert(payout)
         .select()
         .single();
-      
+
       if (txnErr) {
         throw new Error(`Transaction failed: ${txnErr.message}`);
       }
@@ -2996,13 +2952,13 @@ Please respond to confirm your interest and availability for this campaign.`,
   async releaseFinal(conversationId, data) {
     try {
       const { amount, currency = "INR", payout_reference, attachments = [], notes, commission_percent } = data;
-      
+
       if (!amount || amount <= 0) {
         throw new Error("Valid amount required");
       }
 
       const conversation = await this.getConversation(conversationId);
-      
+
       if (conversation.flow_state !== "admin_final_payment_pending") {
         throw new Error("Final can be released only after work is approved and awaiting admin payment");
       }
@@ -3027,7 +2983,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         .insert(payout)
         .select()
         .single();
-      
+
       if (txnErr) {
         throw new Error(`Transaction failed: ${txnErr.message}`);
       }
@@ -3132,7 +3088,7 @@ Please respond to confirm your interest and availability for this campaign.`,
   async refundFinal(conversationId, data) {
     try {
       const { amount, currency = "INR", refund_reference, attachments = [], notes, commission_percent } = data;
-      
+
       if (!amount || amount <= 0) {
         throw new Error("Valid amount required");
       }
@@ -3159,7 +3115,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         .insert(refund)
         .select()
         .single();
-      
+
       if (txnErr) {
         throw new Error(`Transaction failed: ${txnErr.message}`);
       }
@@ -3348,7 +3304,7 @@ Please respond to confirm your interest and availability for this campaign.`,
 
       // Get conversation and validate state
       const conversation = await this.getConversation(conversationId);
-      
+
       // Route to appropriate handler
       let result;
       switch (userRole) {

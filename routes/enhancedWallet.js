@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const enhancedWalletController = require('../controllers/enhancedWalletController');
-const { authenticateToken } = require('../middleware/security');
+const { authenticateToken } = require('../utils/auth');
 
 // Apply authentication to all routes
 router.use(authenticateToken);
