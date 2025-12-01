@@ -271,7 +271,7 @@ class FCMService {
               },
               sound: 'default',
               badge: notification.badge || 1,
-              category: 'MESSAGE_CATEGORY',
+              // category: 'MESSAGE_CATEGORY', // Removed to prevent "View/Dismiss" buttons
               'mutable-content': 1,
               'interruption-level': 'active' // iOS 15+ immediate delivery
               // Do NOT set 'content-available' to avoid silent pushes
@@ -391,6 +391,7 @@ class FCMService {
       const notification = {
         title: `${senderName} sent you a message`,
         body: message.message || 'New message',
+        clickAction: `/conversations/${conversationId}`, // Add deep link for chat screen
         data: {
           type: 'message',
           conversationId: conversationId, // REQUIRED per spec

@@ -1578,48 +1578,17 @@ Please respond to confirm your interest and availability for this campaign.`,
 
         case "submit_work":
         case "resubmit_work":
-          // Influencer submits work
-          newFlowState = "work_submitted";
-          newAwaitingRole = "brand_owner";
+          // Delegate to handleWorkSubmission for consistent logic including attachments
+          // Note: data should contain deliverables, description, submission_notes, attachments
+          // If called from button click, these might be in data or additional_data
+          const submissionResult = await this.handleWorkSubmission(conversationId, {
+            deliverables: data.deliverables || [],
+            description: data.description || data.message || "Work submitted via chat",
+            submission_notes: data.submission_notes,
+            attachments: data.attachments || []
+          });
 
-          newMessage = {
-            conversation_id: conversationId,
-            sender_id: conversation.influencer_id,
-            receiver_id: conversation.brand_owner_id,
-            message: `📤 **Work Submitted**\n\nWork has been submitted for review. Please review and provide feedback.`,
-            message_type: "automated",
-            action_required: true,
-            action_data: {
-              title: "📋 **Work Review Required**",
-              subtitle: "Please review the submitted work and take action.",
-              buttons: [
-                {
-                  id: "approve_work",
-                  text: "Approve Work",
-                  action: "approve_work",
-                  style: "success"
-                },
-                {
-                  id: "request_revision",
-                  text: "Request Revision",
-                  action: "request_revision",
-                  style: "warning"
-                }
-              ],
-              flow_state: "work_submitted",
-              message_type: "work_review",
-              visible_to: "brand_owner",
-            },
-          };
-
-          // Update conversation to automated mode
-          await supabaseAdmin
-            .from("conversations")
-            .update({
-              chat_status: "automated"
-            })
-            .eq("id", conversationId);
-          break;
+          return submissionResult;
 
         default:
           throw new Error(`Unknown action: ${action}`);
