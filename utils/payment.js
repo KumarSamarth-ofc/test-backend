@@ -83,7 +83,7 @@ class PaymentService {
       const newBalance = (wallet.balance_paise || 0) + paymentAmount;
       const { error: walletUpdateError } = await supabaseAdmin
         .from("wallets")
-        .update({ 
+        .update({
           balance_paise: newBalance,
           balance: newBalance / 100 // Keep old balance field for compatibility
         })
@@ -117,14 +117,33 @@ class PaymentService {
         throw new Error(`Failed to create payment order: ${orderError.message}`);
       }
 
-      // Note: Transaction records will be created by the calling controller
-      // to avoid duplicate transaction creation
+      // Create transaction record
+      const { error: transactionError } = await supabaseAdmin
+        .from("transactions")
+        .insert({
+          wallet_id: wallet.id,
+          amount: paymentAmount / 100,
+          amount_paise: paymentAmount,
+          type: "credit",
+          status: "completed",
+          razorpay_payment_id: razorpay_payment_id,
+          razorpay_order_id: razorpay_order_id,
+          conversation_id: conversation_id,
+          campaign_id: conversation.campaign_id,
+          bid_id: conversation.bid_id,
+          request_id: conversation.request?.id
+        });
+
+      if (transactionError) {
+        console.error("Failed to create transaction record:", transactionError);
+        // Don't fail the payment, just log the error
+      }
 
       // Update request status to "paid" if request exists
       if (conversation.request) {
         const { error: requestUpdateError } = await supabaseAdmin
           .from("requests")
-          .update({ 
+          .update({
             status: "paid",
             updated_at: new Date().toISOString()
           })
@@ -187,7 +206,7 @@ class PaymentService {
   async createPaymentOrder(orderData) {
     try {
       const { conversationId, amount, paymentType } = orderData;
-      
+
       // Get conversation details
       const { data: conversation, error: convError } = await supabaseAdmin
         .from("conversations")

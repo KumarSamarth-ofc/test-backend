@@ -1,6 +1,7 @@
 const { supabaseAdmin } = require("../supabase/client");
 const paymentService = require("../utils/payment");
 const fcmService = require("../services/fcmService");
+const notificationService = require("../services/notificationService");
 const { body, validationResult } = require("express-validator");
 
 class RequestController {
@@ -180,7 +181,7 @@ class RequestController {
         }
       }
 
-      // Send FCM notification to brand owner
+      // Send notification to brand owner
       try {
         const influencerName = request.influencer?.name || "An influencer";
         const sourceTitle = source.title || (sourceType === 'campaign' ? 'Campaign' : 'Bid');
@@ -188,19 +189,21 @@ class RequestController {
         const notificationBody = `${influencerName} sent a request for ${sourceTitle}`;
         const imageUrl = source.image_url || request.influencer?.profile_image_url;
 
-        await fcmService.sendRequestNotification(
-          source.created_by,
-          notificationTitle,
-          notificationBody,
-          imageUrl,
-          {
+        await notificationService.storeAndDeliverNotification({
+          user_id: source.created_by,
+          type: 'request',
+          title: notificationTitle,
+          message: notificationBody,
+          data: {
             requestId: request.id,
             campaignId: sourceType === 'campaign' ? sourceId : null,
             bidId: sourceType === 'bid' ? sourceId : null,
             influencerId: userId,
-            sourceType: sourceType
-          }
-        );
+            sourceType: sourceType,
+            imageUrl: imageUrl
+          },
+          action_url: `/requests/${request.id}`
+        });
       } catch (notifyError) {
         console.error("Failed to send request notification:", notifyError);
         // Don't fail the request if notification fails

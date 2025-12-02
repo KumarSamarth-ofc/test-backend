@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require("../supabase/client");
+const fcmService = require("./fcmService");
 
 class NotificationService {
   constructor() {
@@ -71,6 +72,34 @@ class NotificationService {
 
       console.log(`📊 [NOTIFICATION] User ${user_id} - Online: ${isOnline}, Delivery: ${deliveryInfo.delivery_method}`);
 
+      // Send FCM if needed
+      if (deliveryInfo.should_send_fcm) {
+        // Prepare notification object for FCM
+        const fcmNotification = {
+          title: title,
+          body: message,
+          clickAction: action_url,
+          data: {
+            type: type,
+            ...data
+          }
+        };
+
+        // Extract imageUrl if present in data (common pattern in this app)
+        if (data && data.imageUrl) {
+          fcmNotification.imageUrl = data.imageUrl;
+        }
+
+        // Send async (don't await to avoid blocking response)
+        fcmService.sendNotificationToUser(user_id, fcmNotification)
+          .then(result => {
+            console.log(`📊 [NOTIFICATION] FCM delivery to ${user_id}: ${result.success ? 'Sent' : 'Failed'}`);
+          })
+          .catch(err => {
+            console.error('❌ [NOTIFICATION] FCM delivery error:', err);
+          });
+      }
+
       return {
         success: true,
         notification,
@@ -116,10 +145,10 @@ class NotificationService {
 
         if (existingNotification) {
           console.log(`ℹ️ Duplicate notification detected (conversation: ${data.conversation_id}, sender: ${data.sender_id}), skipping`);
-          return { 
-            success: true, 
+          return {
+            success: true,
             notification: existingNotification,
-            duplicate: true 
+            duplicate: true
           };
         }
       }
@@ -192,11 +221,11 @@ class NotificationService {
       if (status) {
         query = query.eq('status', status);
       }
-      
+
       if (type) {
         query = query.eq('type', type);
       }
-      
+
       if (unread_only) {
         query = query.is('read_at', null);
       }
@@ -206,7 +235,7 @@ class NotificationService {
         .from('notifications')
         .select('*', { count: 'exact', head: true })
         .eq('user_id', userId);
-      
+
       if (status) {
         countQuery.eq('status', status);
       }

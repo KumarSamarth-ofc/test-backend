@@ -2075,16 +2075,40 @@ Please respond to confirm your interest and availability for this campaign.`,
         throw new Error("Conversation not found");
       }
 
+      // Handle attachments if provided
+      let attachmentIds = [];
+      if (submissionData.attachments && Array.isArray(submissionData.attachments) && submissionData.attachments.length > 0) {
+        // If attachments are provided as IDs, use them directly
+        attachmentIds = submissionData.attachments.filter(id => typeof id === 'string');
+        console.log(`📎 [WORK SUBMISSION] Attachments linked: ${attachmentIds.length}`);
+      }
+
+      // Update request with work submission details
+      if (conversation.request_id) {
+        const { error: reqUpdateError } = await supabaseAdmin
+          .from("requests")
+          .update({
+            work_submission_link: submissionData.deliverables,
+            work_description: submissionData.description || submissionData.submission_notes,
+            work_files: attachmentIds,
+            work_submission_date: submissionData.submitted_at,
+            status: "work_submitted"
+          })
+          .eq("id", conversation.request_id);
+
+        if (reqUpdateError) {
+          console.error("❌ Failed to update request with work submission:", reqUpdateError);
+          // Continue to update conversation state, but log error
+        }
+      }
+
       // Check if this is a resubmission
       const isResubmission = conversation.flow_state === "work_in_progress" && conversation.revision_count > 0;
 
       // Update conversation to work_submitted state
       const updateData = {
         flow_state: "work_submitted",
-        awaiting_role: "brand_owner",
-        work_submission: submissionData,
-        work_submitted: true,
-        submission_date: submissionData.submitted_at
+        awaiting_role: "brand_owner"
       };
 
       // If this is a resubmission, update revision history
@@ -2107,13 +2131,7 @@ Please respond to confirm your interest and availability for this campaign.`,
         throw new Error(`Failed to update conversation: ${updateError.message}`);
       }
 
-      // Handle attachments if provided
-      let attachmentIds = [];
-      if (submissionData.attachments && Array.isArray(submissionData.attachments) && submissionData.attachments.length > 0) {
-        // If attachments are provided as IDs, use them directly
-        attachmentIds = submissionData.attachments.filter(id => typeof id === 'string');
-        console.log(`📎 [WORK SUBMISSION] Attachments linked: ${attachmentIds.length}`);
-      }
+
 
       // Build message text with work submission details
       let messageText = `📤 **Work Submitted**${isResubmission ? ` (Revision ${conversation.revision_count || 0})` : ''}\n\n`;

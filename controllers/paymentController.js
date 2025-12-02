@@ -1,4 +1,5 @@
 const paymentService = require("../utils/payment");
+const enhancedBalanceService = require("../utils/enhancedBalanceService");
 const { supabaseAdmin } = require("../supabase/client");
 const { validationResult } = require("express-validator");
 const crypto = require("crypto");
@@ -257,7 +258,11 @@ class PaymentController {
       const { data: request, error: requestError } = await supabaseAdmin
         .from("requests")
         .select(
-          "id, brand_owner_id, influencer_id, final_agreed_amount, status"
+          `
+          id, influencer_id, final_agreed_amount, status, campaign_id, bid_id,
+          campaigns (created_by),
+          bids (created_by)
+          `
         )
         .eq("id", request_id)
         .single();
@@ -270,7 +275,8 @@ class PaymentController {
       }
 
       // Check if user is brand owner
-      if (request.brand_owner_id !== userId) {
+      const brandOwnerId = request.campaigns?.created_by || request.bids?.created_by;
+      if (brandOwnerId !== userId) {
         return res.status(403).json({
           success: false,
           message: "Only brand owner can make payments",
@@ -320,51 +326,52 @@ class PaymentController {
         });
       }
 
-      // Get influencer's wallet
-      const { data: wallet, error: walletError } = await supabaseAdmin
-        .from("wallets")
-        .select("id, frozen_balance_paise")
-        .eq("user_id", request.influencer_id)
-        .single();
+      // 1. Add funds to wallet
+      const amountPaise = Math.round(amount * 100);
+      const addFundsResult = await enhancedBalanceService.addFunds(
+        request.influencer_id,
+        amountPaise,
+        {
+          razorpay_payment_id,
+          campaign_id: request.campaign_id,
+          bid_id: request.bid_id,
+          notes: "Payment received for request",
+          brand_owner_id: userId,
+        }
+      );
 
-      if (walletError) {
+      if (!addFundsResult.success) {
         return res.status(500).json({
           success: false,
-          message: "Failed to get influencer wallet",
+          message: "Failed to add funds to wallet",
+          error: addFundsResult.error,
         });
       }
 
-      // Freeze amount in influencer's wallet
-      const { error: freezeError } = await supabaseAdmin
-        .from("wallets")
-        .update({
-          frozen_balance_paise: (wallet.frozen_balance_paise || 0) + Math.round(amount * 100),
-        })
-        .eq("id", wallet.id);
+      // 2. Freeze funds in escrow
+      // Generate a temporary hold ID since we don't have an escrow_holds table record yet
+      // In a full implementation, we should create an escrow_hold record first
+      const escrowHoldId = `hold_${request_id}_${Date.now()}`;
 
-      if (freezeError) {
-        return res.status(500).json({
-          success: false,
-          message: "Failed to freeze payment",
-        });
-      }
-
-      // Record freeze transaction
-      const { error: transactionError } = await supabaseAdmin
-        .from("transactions")
-        .insert({
-          wallet_id: wallet.id,
-          amount: amount,
-          type: "freeze",
-          status: "completed",
-          razorpay_payment_id: razorpay_payment_id,
+      const freezeResult = await enhancedBalanceService.freezeFunds(
+        request.influencer_id,
+        amountPaise,
+        escrowHoldId,
+        {
           request_id: request_id,
-        });
+          campaign_id: request.campaign_id,
+          bid_id: request.bid_id,
+          razorpay_payment_id,
+        }
+      );
 
-      if (transactionError) {
+      if (!freezeResult.success) {
+        // TODO: Rollback addFunds if freeze fails (requires transaction support or manual rollback)
+        console.error("Failed to freeze funds after adding:", freezeResult.error);
         return res.status(500).json({
           success: false,
-          message: "Failed to record transaction",
+          message: "Failed to freeze payment in escrow",
+          error: freezeResult.error,
         });
       }
 
@@ -431,7 +438,7 @@ class PaymentController {
         });
 
         io.to(`user_${conversation.influencer_id}`).emit("notification", {
-          type: "payment_completed", 
+          type: "payment_completed",
           data: {
             conversation_id: conversation.id,
             message: "Payment completed successfully",
@@ -471,7 +478,11 @@ class PaymentController {
       const { data: request, error: requestError } = await supabaseAdmin
         .from("requests")
         .select(
-          "id, brand_owner_id, influencer_id, final_agreed_amount, status"
+          `
+          id, influencer_id, final_agreed_amount, status, campaign_id, bid_id,
+          campaigns (created_by),
+          bids (created_by)
+          `
         )
         .eq("id", request_id)
         .single();
@@ -484,7 +495,8 @@ class PaymentController {
       }
 
       // Check if user is brand owner
-      if (request.brand_owner_id !== userId) {
+      const brandOwnerId = request.campaigns?.created_by || request.bids?.created_by;
+      if (brandOwnerId !== userId) {
         return res.status(403).json({
           success: false,
           message: "Only brand owner can release payment",
@@ -499,59 +511,30 @@ class PaymentController {
         });
       }
 
-      // Get influencer's wallet
-      const { data: wallet, error: walletError } = await supabaseAdmin
-        .from("wallets")
-        .select("id, frozen_balance_paise, balance_paise")
-        .eq("user_id", request.influencer_id)
-        .single();
+      // Release funds using enhancedBalanceService
+      const amountPaise = Math.round(request.final_agreed_amount * 100);
 
-      if (walletError) {
-        return res.status(500).json({
-          success: false,
-          message: "Failed to get influencer wallet",
-        });
-      }
+      // We need to find the escrow hold ID or use a placeholder if we didn't track it properly before
+      // For now, we'll use a placeholder as the previous implementation didn't strictly track hold IDs
+      const escrowHoldId = `hold_${request_id}_release`;
 
-      // Check if enough frozen balance
-      if ((wallet.frozen_balance_paise || 0) < Math.round(request.final_agreed_amount * 100)) {
+      const releaseResult = await enhancedBalanceService.releaseFunds(
+        request.influencer_id,
+        amountPaise,
+        escrowHoldId,
+        {
+          request_id: request_id,
+          campaign_id: request.campaign_id,
+          bid_id: request.bid_id,
+          notes: "Payment released for approved work"
+        }
+      );
+
+      if (!releaseResult.success) {
         return res.status(400).json({
           success: false,
-          message: "Insufficient frozen balance",
-        });
-      }
-
-      // Move money from frozen to available balance
-      const { error: unfreezeError } = await supabaseAdmin
-        .from("wallets")
-        .update({
-          frozen_balance_paise: (wallet.frozen_balance_paise || 0) - Math.round(request.final_agreed_amount * 100),
-          balance: wallet.balance + request.final_agreed_amount,
-        })
-        .eq("id", wallet.id);
-
-      if (unfreezeError) {
-        return res.status(500).json({
-          success: false,
-          message: "Failed to unfreeze payment",
-        });
-      }
-
-      // Record unfreeze transaction
-      const { error: transactionError } = await supabaseAdmin
-        .from("transactions")
-        .insert({
-          wallet_id: wallet.id,
-          amount: request.final_agreed_amount,
-          type: "unfreeze",
-          status: "completed",
-          request_id: request_id,
-        });
-
-      if (transactionError) {
-        return res.status(500).json({
-          success: false,
-          message: "Failed to record unfreeze transaction",
+          message: "Failed to release payment",
+          error: releaseResult.error
         });
       }
 
@@ -561,7 +544,7 @@ class PaymentController {
         data: {
           request_id: request_id,
           amount_released: request.final_agreed_amount,
-          new_balance: wallet.balance + request.final_agreed_amount,
+          new_balance: releaseResult.new_balance / 100,
         },
       });
     } catch (error) {
@@ -608,68 +591,48 @@ class PaymentController {
         });
       }
 
-      // Get or create influencer's wallet
-      let { data: wallet, error: walletError } = await supabaseAdmin
-        .from("wallets")
-        .select("id, balance_paise, frozen_balance_paise")
-        .eq("user_id", request.influencer_id)
-        .single();
-
-      if (walletError) {
-        // Create wallet if doesn't exist
-        const { data: newWallet, error: createError } = await supabaseAdmin
-          .from("wallets")
-          .insert({
-            user_id: request.influencer_id,
-            balance: 0,
-            frozen_balance_paise: 0,
-          })
-          .select()
-          .single();
-
-        if (createError) {
-          return res.status(500).json({
-            success: false,
-            message: "Failed to create wallet",
-          });
+      // 1. Add funds
+      const amountPaise = Math.round(parseFloat(amount) * 100);
+      const addFundsResult = await enhancedBalanceService.addFunds(
+        request.influencer_id,
+        amountPaise,
+        {
+          razorpay_order_id: "test_order_123",
+          razorpay_payment_id: "test_payment_456",
+          campaign_id: request.campaign_id,
+          bid_id: request.bid_id,
+          notes: "Test payment",
+          brand_owner_id: userId
         }
-        wallet = newWallet;
-      }
+      );
 
-      // Freeze amount in influencer's wallet
-      const { error: freezeError } = await supabaseAdmin
-        .from("wallets")
-        .update({
-          frozen_balance_paise: (wallet.frozen_balance_paise || 0) + Math.round(parseFloat(amount) * 100),
-        })
-        .eq("id", wallet.id);
-
-      if (freezeError) {
+      if (!addFundsResult.success) {
         return res.status(500).json({
           success: false,
-          message: "Failed to freeze payment",
+          message: "Failed to add funds",
+          error: addFundsResult.error
         });
       }
 
-      // Record transaction
-      const { error: transactionError } = await supabaseAdmin
-        .from("transactions")
-        .insert({
-          wallet_id: wallet.id,
-          amount: parseFloat(amount),
-          type: "freeze",
-          status: "completed",
+      // 2. Freeze funds
+      const escrowHoldId = `test_hold_${request_id}_${Date.now()}`;
+      const freezeResult = await enhancedBalanceService.freezeFunds(
+        request.influencer_id,
+        amountPaise,
+        escrowHoldId,
+        {
           request_id: request_id,
           campaign_id: request.campaign_id,
           bid_id: request.bid_id,
-          razorpay_order_id: "test_order_123",
-          razorpay_payment_id: "test_payment_456",
-        });
+          razorpay_payment_id: "test_payment_456"
+        }
+      );
 
-      if (transactionError) {
+      if (!freezeResult.success) {
         return res.status(500).json({
           success: false,
-          message: "Failed to record transaction",
+          message: "Failed to freeze funds",
+          error: freezeResult.error
         });
       }
 
@@ -699,11 +662,12 @@ class PaymentController {
 
       res.json({
         success: true,
-        message: "Test payment processed successfully. Money frozen in escrow.",
+        message: "Test payment processed successfully",
         data: {
           request_id: request_id,
-          amount: amount,
-          frozen_balance_paise: (wallet.frozen_balance_paise || 0) + Math.round(parseFloat(amount) * 100),
+          amount_frozen: amount,
+          chat_enabled: true,
+          status: "completed",
         },
       });
     } catch (error) {
@@ -741,15 +705,15 @@ class PaymentController {
         // Withdrawable amounts (money user can withdraw)
         withdrawable_balance: balanceSummary.available_rupees || (wallet.balance_paise || 0) / 100,
         withdrawable_balance_paise: wallet.balance_paise || 0,
-        
+
         // Frozen amounts (money held in escrow)
         frozen_balance: balanceSummary.frozen_rupees || (wallet.frozen_balance_paise || 0) / 100,
         frozen_balance_paise: wallet.frozen_balance_paise || 0,
-        
+
         // Total amounts (withdrawable + frozen)
         total_balance: balanceSummary.total_rupees || ((wallet.balance_paise || 0) + (wallet.frozen_balance_paise || 0)) / 100,
         total_balance_paise: (wallet.balance_paise || 0) + (wallet.frozen_balance_paise || 0),
-        
+
         // Legacy fields for compatibility
         available_balance: balanceSummary.available_rupees || (wallet.balance_paise || 0) / 100,
         balance_paise: wallet.balance_paise || 0,
