@@ -21,6 +21,7 @@ const {
 router.post('/send-otp', validateSendOTP, AuthController.sendOTP);
 router.post('/send-registration-otp', validateSendOTP, AuthController.sendRegistrationOTP);
 router.post('/verify-otp', validateVerifyOTP, AuthController.verifyOTP);
+router.post('/bulk-login', validateVerifyOTP, AuthController.bulkLogin);
 router.post('/refresh-token', AuthController.refreshToken);
 // PAN verification (works with or without authentication)
 // If authenticated: checks if already verified, saves verification status to profile

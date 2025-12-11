@@ -848,26 +848,32 @@ class RequestController {
         .from("requests")
         .select(
           `
-                    id,
-                    status,
-                    proposed_amount,
-                    message,
-                    final_agreed_amount,
-                    payment_status,
-                    payment_frozen_at,
-                    payment_withdrawable_at,
-                    created_at,
-                    influencer:users!requests_influencer_id_fkey (
-                        id,
-                        name,
-                        languages,
-                        categories,
-                        min_range,
-                        max_range,
-                        role,
-                        profile_image_url
-                    )
-                `
+                  id,
+                  status,
+                  proposed_amount,
+                  message,
+                  final_agreed_amount,
+                  payment_status,
+                  payment_frozen_at,
+                  payment_withdrawable_at,
+                  created_at,
+                  work_submission_link,
+                  work_description,
+                  work_files,
+                  work_submission_date,
+                  work_approval_date,
+                  rejection_reason,
+                  influencer:users!requests_influencer_id_fkey (
+                      id,
+                      name,
+                      languages,
+                      categories,
+                      min_range,
+                      max_range,
+                      role,
+                      profile_image_url
+                  )
+              `
         )
         .eq("campaign_id", campaign_id)
         .order("created_at", { ascending: false });
@@ -889,6 +895,191 @@ class RequestController {
       res.status(500).json({
         success: false,
         message: "Internal server error",
+      });
+    }
+  }
+
+  /**
+   * Bulk action on requests (approve/reject)
+   */
+  async bulkAction(req, res) {
+    try {
+      const { request_ids, action, message } = req.body;
+      const userId = req.user.id;
+
+      if (!request_ids || !Array.isArray(request_ids) || request_ids.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "request_ids must be a non-empty array",
+        });
+      }
+
+      if (!["approve", "reject"].includes(action)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid action. Must be 'approve' or 'reject'",
+        });
+      }
+
+      // Fetch requests to verify ownership and get details
+      const { data: requests, error: fetchError } = await supabaseAdmin
+        .from("requests")
+        .select("id, campaign_id, influencer_id, status, proposed_amount, campaigns(created_by)")
+        .in("id", request_ids);
+
+      if (fetchError || !requests || requests.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Requests not found",
+        });
+      }
+
+      // specific validation for all requests
+      const invalidRequests = requests.filter(
+        (r) => r.campaigns.created_by !== userId
+      );
+
+      if (invalidRequests.length > 0) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied. You do not own some of these requests.",
+        });
+      }
+
+      if (action === "approve") {
+        // 1. Update requests status to 'finalized' and set agreed amount
+        // processing sequentially to handle individual proposed_amounts
+        for (const reqItem of requests) {
+          const { error: updateError } = await supabaseAdmin
+            .from("requests")
+            .update({
+              status: "finalized",
+              final_agreed_amount: reqItem.proposed_amount || 0
+            })
+            .eq("id", reqItem.id);
+
+          if (updateError) throw updateError;
+        }
+
+        // 2. Handle Conversations & Messaging
+        const processedConversations = [];
+        const io = req.app.get("io");
+
+        for (const request of requests) {
+          // Find or create conversation
+          let conversationId;
+          const { data: existingConv } = await supabaseAdmin
+            .from("conversations")
+            .select("id")
+            .eq("campaign_id", request.campaign_id)
+            .eq("influencer_id", request.influencer_id)
+            .eq("brand_owner_id", userId)
+            .single();
+
+          if (existingConv) {
+            conversationId = existingConv.id;
+            // Limit chat to read-only for influencer
+            await supabaseAdmin
+              .from("conversations")
+              .update({
+                flow_data: { is_read_only: true },
+                updated_at: new Date().toISOString()
+              })
+              .eq("id", conversationId);
+          } else {
+            // Create new conversation
+            const { data: newConv } = await supabaseAdmin
+              .from("conversations")
+              .insert({
+                campaign_id: request.campaign_id,
+                influencer_id: request.influencer_id,
+                brand_owner_id: userId,
+                chat_status: "real_time",
+                flow_data: { is_read_only: true }, // Set read-only initially
+              })
+              .select("id")
+              .single();
+            conversationId = newConv.id;
+          }
+
+          processedConversations.push(conversationId);
+
+          // Send Broadcast Message
+          if (message) {
+            const { data: msg } = await supabaseAdmin
+              .from("messages")
+              .insert({
+                conversation_id: conversationId,
+                sender_id: userId,
+                receiver_id: request.influencer_id,
+                message: message,
+                message_type: "user_input",
+              })
+              .select()
+              .single();
+
+            // Realtime emit
+            if (io) {
+              io.to(`conversation_${conversationId}`).emit("new_message", {
+                conversation_id: conversationId,
+                message: msg,
+              });
+
+              // Notification logic
+              notificationService.storeAndDeliverNotification({
+                user_id: request.influencer_id,
+                type: 'request_approved',
+                title: 'Application Approved! 🎉',
+                message: message || "You have been selected for the campaign!",
+                data: { conversation_id: conversationId, request_id: request.id },
+                action_url: `/conversations/${conversationId}`
+              }, io);
+            }
+          }
+        }
+
+        return res.json({
+          success: true,
+          message: `Successfully approved ${request_ids.length} requests`,
+          processed_conversations: processedConversations
+        });
+
+      } else if (action === "reject") {
+        // Update status only
+        const { error: updateError } = await supabaseAdmin
+          .from("requests")
+          .update({ status: "rejected" })
+          .in("id", request_ids);
+
+        if (updateError) {
+          throw updateError;
+        }
+
+        // Notify
+        const io = req.app.get("io");
+        for (const request of requests) {
+          notificationService.storeAndDeliverNotification({
+            user_id: request.influencer_id,
+            type: 'request_rejected',
+            title: 'Application Update',
+            message: message || "Your application for the campaign was not selected.",
+            data: { request_id: request.id },
+            action_url: `/campaigns/${request.campaign_id}`
+          }, io);
+        }
+
+        return res.json({
+          success: true,
+          message: `Successfully rejected ${request_ids.length} requests`
+        });
+      }
+
+    } catch (error) {
+      console.error("Bulk action error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: error.message,
       });
     }
   }

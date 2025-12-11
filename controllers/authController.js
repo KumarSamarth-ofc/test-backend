@@ -405,6 +405,84 @@ class AuthController {
   }
 
   /**
+   * Bulk Login - Restricted to Brand Owners and Admins
+   * Verifies OTP and checks if user has appropriate role
+   */
+  async bulkLogin(req, res) {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { phone, token, userData } = req.body;
+
+      console.log('🔍 [BulkLogin] Request:', {
+        phone,
+        token: token ? '***' : 'missing',
+        userData: userData ? 'provided' : 'not provided'
+      });
+
+      //Reuse existing verifyOTP service logic
+      const result = await authService.verifyOTP(phone, token, userData);
+
+      if (!result.success) {
+        return res.status(400).json({
+          success: false,
+          message: result.message,
+        });
+      }
+
+      const userRole = result.user?.role;
+
+      // START: Role Validation Logic
+      if (userRole !== 'brand_owner' && userRole !== 'admin') {
+        console.warn(`⛔ [BulkLogin] Access Denied for user ${result.user?.id} with role verification failed: ${userRole}`);
+        return res.status(403).json({
+          success: false,
+          message: "Access restricted to brand owners and admins only.",
+          error_code: "FORBIDDEN_ROLE"
+        });
+      }
+      // END: Role Validation Logic
+
+      console.log(`✅ [BulkLogin] Access Granted for user ${result.user?.id} (${userRole})`);
+
+      // Set cookies
+      const cookieOptions = {
+        httpOnly: true, // Prevents client-side JS from reading the cookie
+        secure: process.env.NODE_ENV === 'production', // Use secure cookies in production
+        sameSite: process.env.NODE_ENV === 'production' ? 'Strict' : 'Lax',
+        maxAge: 24 * 60 * 60 * 1000 // 1 day in milliseconds
+      };
+
+      const refreshCookieOptions = {
+        ...cookieOptions,
+        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days in milliseconds
+      };
+
+      // Set the tokens in cookies
+      res.cookie('token', result.token, cookieOptions);
+      res.cookie('refreshToken', result.refreshToken, refreshCookieOptions);
+
+      res.json({
+        success: true,
+        user: result.user,
+        token: result.token,
+        refreshToken: result.refreshToken,
+        message: "Bulk login successful",
+      });
+
+    } catch (error) {
+      console.error('❌ [ERROR] Bulk Login Error:', error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
+  /**
    * Send OTP for changing phone number
    */
   async sendChangePhoneOTP(req, res) {

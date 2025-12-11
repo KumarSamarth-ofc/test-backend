@@ -19,7 +19,14 @@ router.post(
   validateCreateCampaign,
   CampaignController.createCampaign
 );
-router.get("/", CampaignController.getCampaigns);
+const BulkCampaignController = require("../controllers/bulkCampaignController");
+
+router.get("/", (req, res, next) => {
+  if (req.query.type === 'BULK') {
+    return BulkCampaignController.getBulkCampaigns(req, res);
+  }
+  return CampaignController.getCampaigns(req, res);
+});
 router.get("/stats", CampaignController.getCampaignStats);
 router.get("/:id", CampaignController.getCampaign);
 router.put(

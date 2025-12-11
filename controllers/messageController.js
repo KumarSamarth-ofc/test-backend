@@ -472,7 +472,7 @@ class MessageController {
       // Validate conversation exists and user has access
       const { data: conversation, error: convError } = await supabaseAdmin
         .from("conversations")
-        .select("id, brand_owner_id, influencer_id, campaign_id")
+        .select("id, brand_owner_id, influencer_id, campaign_id, flow_data")
         .eq("id", conversationId)
         .single();
 
@@ -491,6 +491,18 @@ class MessageController {
         return res.status(403).json({
           success: false,
           message: "Access denied to this conversation",
+        });
+      }
+
+      // Check for read-only restriction (Influencer cannot reply if restricted)
+      if (
+        conversation.flow_data &&
+        conversation.flow_data.is_read_only === true &&
+        req.user.role === "influencer"
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "This conversation is currently read-only. You cannot reply at this stage.",
         });
       }
 

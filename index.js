@@ -11,6 +11,7 @@ const MessageHandler = require("./sockets/messageHandler");
 // Import routes
 const authRoutes = require("./routes/auth");
 const campaignRoutes = require("./routes/campaigns");
+const dashboardRoutes = require("./routes/dashboard");
 
 const requestRoutes = require("./routes/requests");
 const conversationRoutes = require("./routes/conversations");
@@ -773,6 +774,7 @@ app.post("/webhook/razorpay", SubscriptionController.handleWebhook);
 // API routes
 app.use("/api/auth", authRoutes);
 app.use("/api/campaigns", campaignRoutes);
+app.use("/api/dashboard", dashboardRoutes);
 
 app.use("/api/requests", requestRoutes);
 app.use("/api/messages", messageRoutes);

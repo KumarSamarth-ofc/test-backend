@@ -59,6 +59,13 @@ router.get(
   RequestController.getCampaignInfluencerCount
 );
 
+// Bulk actions for campaign requests
+router.post(
+  "/bulk-action",
+  authService.requireRole("brand_owner"),
+  RequestController.bulkAction
+);
+
 // New escrow and work management routes
 router.post(
   "/:id/finalize-agreement",
