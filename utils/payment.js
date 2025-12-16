@@ -38,8 +38,7 @@ class PaymentService {
             id,
             final_agreed_amount,
             influencer_id,
-            campaign_id,
-            bid_id
+            campaign_id
           ),
           influencer:users!conversations_influencer_id_fkey (
             id,
@@ -83,7 +82,7 @@ class PaymentService {
       const newBalance = (wallet.balance_paise || 0) + paymentAmount;
       const { error: walletUpdateError } = await supabaseAdmin
         .from("wallets")
-        .update({ 
+        .update({
           balance_paise: newBalance,
           balance: newBalance / 100 // Keep old balance field for compatibility
         })
@@ -105,7 +104,7 @@ class PaymentService {
           razorpay_payment_id: razorpay_payment_id,
           razorpay_signature: razorpay_signature,
           metadata: {
-            conversation_type: conversation.bid_id ? "bid" : "campaign",
+            conversation_type: "campaign",
             brand_owner_id: conversation.brand_owner_id,
             influencer_id: conversation.influencer_id
           }
@@ -117,14 +116,32 @@ class PaymentService {
         throw new Error(`Failed to create payment order: ${orderError.message}`);
       }
 
-      // Note: Transaction records will be created by the calling controller
-      // to avoid duplicate transaction creation
+      // Create transaction record
+      const { error: transactionError } = await supabaseAdmin
+        .from("transactions")
+        .insert({
+          wallet_id: wallet.id,
+          amount: paymentAmount / 100,
+          amount_paise: paymentAmount,
+          type: "credit",
+          status: "completed",
+          razorpay_payment_id: razorpay_payment_id,
+          razorpay_order_id: razorpay_order_id,
+          conversation_id: conversation_id,
+          campaign_id: conversation.campaign_id,
+          request_id: conversation.request?.id
+        });
+
+      if (transactionError) {
+        console.error("Failed to create transaction record:", transactionError);
+        // Don't fail the payment, just log the error
+      }
 
       // Update request status to "paid" if request exists
       if (conversation.request) {
         const { error: requestUpdateError } = await supabaseAdmin
           .from("requests")
-          .update({ 
+          .update({
             status: "paid",
             updated_at: new Date().toISOString()
           })
@@ -142,34 +159,11 @@ class PaymentService {
           .from("campaigns")
           .update({ status: "pending" })
           .eq("id", conversation.campaign_id);
-      } else if (conversation.bid_id) {
-        await supabaseAdmin
-          .from("bids")
-          .update({ status: "pending" })
-          .eq("id", conversation.bid_id);
-      }
-
-      // Create escrow hold
-      const { data: escrowHold, error: escrowError } = await supabaseAdmin
-        .from("escrow_holds")
-        .insert({
-          conversation_id: conversation_id,
-          payment_order_id: paymentOrder.id,
-          amount_paise: paymentAmount,
-          status: "held"
-        })
-        .select()
-        .single();
-
-      if (escrowError) {
-        console.error("Escrow hold creation error:", escrowError);
-        // Continue anyway as the payment is processed
       }
 
       return {
         success: true,
         payment_order: paymentOrder,
-        escrow_hold: escrowHold,
         message: "Payment processed successfully",
       };
     } catch (error) {
@@ -187,7 +181,7 @@ class PaymentService {
   async createPaymentOrder(orderData) {
     try {
       const { conversationId, amount, paymentType } = orderData;
-      
+
       // Get conversation details
       const { data: conversation, error: convError } = await supabaseAdmin
         .from("conversations")
@@ -197,8 +191,7 @@ class PaymentService {
             id,
             final_agreed_amount,
             influencer_id,
-            campaign_id,
-            bid_id
+            campaign_id
           )
         `)
         .eq("id", conversationId)
@@ -225,10 +218,10 @@ class PaymentService {
           currency: "INR",
           status: "created",
           metadata: {
-            conversation_type: conversation.bid_id ? "bid" : "campaign",
+            conversation_type: "campaign",
             brand_owner_id: conversation.brand_owner_id,
             influencer_id: conversation.influencer_id,
-            payment_type: paymentType || "bid_collaboration"
+            payment_type: paymentType || "campaign_collaboration"
           }
         })
         .select()
@@ -246,7 +239,7 @@ class PaymentService {
         receipt: `order_${paymentOrder.id}`,
         notes: {
           conversation_id: conversationId,
-          payment_type: paymentType || "bid_collaboration"
+          payment_type: paymentType || "campaign_collaboration"
         }
       };
 

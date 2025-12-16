@@ -50,18 +50,20 @@ router.post(
 );
 
 // Influencer list routes for bids and campaigns
-router.get("/bid/:bid_id/influencers", RequestController.getBidInfluencers);
 router.get(
   "/campaign/:campaign_id/influencers",
   RequestController.getCampaignInfluencers
 );
 router.get(
-  "/bid/:bid_id/influencer-count",
-  RequestController.getBidInfluencerCount
-);
-router.get(
   "/campaign/:campaign_id/influencer-count",
   RequestController.getCampaignInfluencerCount
+);
+
+// Bulk actions for campaign requests
+router.post(
+  "/bulk-action",
+  authService.requireRole("brand_owner"),
+  RequestController.bulkAction
 );
 
 // New escrow and work management routes

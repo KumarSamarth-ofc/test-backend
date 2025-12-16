@@ -1,6 +1,7 @@
 const { supabaseAdmin } = require("../supabase/client");
 const paymentService = require("../utils/payment");
 const fcmService = require("../services/fcmService");
+const notificationService = require("../services/notificationService");
 const { body, validationResult } = require("express-validator");
 
 class RequestController {
@@ -15,7 +16,7 @@ class RequestController {
       }
 
       const userId = req.user.id;
-      const { campaign_id, bid_id } = req.body;
+      const { campaign_id } = req.body;
 
       // Ensure only influencers can apply
       if (req.user.role !== "influencer") {
@@ -25,81 +26,47 @@ class RequestController {
         });
       }
 
-      // Validate that either campaign_id or bid_id is provided, not both
-      if (!campaign_id && !bid_id) {
+      // Validate that campaign_id is provided
+      if (!campaign_id) {
         return res.status(400).json({
           success: false,
-          message: "Either campaign_id or bid_id is required",
+          message: "campaign_id is required",
         });
       }
 
-      if (campaign_id && bid_id) {
-        return res.status(400).json({
+
+
+      // Check if campaign exists and is open
+      const { data: campaign, error: campaignError } = await supabaseAdmin
+        .from("campaigns")
+        .select("status, created_by, title, image_url")
+        .eq("id", campaign_id)
+        .single();
+
+      if (campaignError || !campaign) {
+        return res.status(404).json({
           success: false,
-          message: "Cannot apply to both campaign and bid simultaneously",
+          message: "Campaign not found",
         });
       }
 
-      let source, sourceType, sourceId;
-
-      if (campaign_id) {
-        // Check if campaign exists and is open
-        const { data: campaign, error: campaignError } = await supabaseAdmin
-          .from("campaigns")
-          .select("status, created_by, title, image_url")
-          .eq("id", campaign_id)
-          .single();
-
-        if (campaignError || !campaign) {
-          return res.status(404).json({
-            success: false,
-            message: "Campaign not found",
-          });
-        }
-
-        if (campaign.status !== "open") {
-          return res.status(400).json({
-            success: false,
-            message: "Campaign is not accepting applications",
-          });
-        }
-
-        source = campaign;
-        sourceType = "campaign";
-        sourceId = campaign_id;
-      } else {
-        // Check if bid exists and is open
-        const { data: bid, error: bidError } = await supabaseAdmin
-          .from("bids")
-          .select("status, created_by, title, image_url")
-          .eq("id", bid_id)
-          .single();
-
-        if (bidError || !bid) {
-          return res.status(404).json({
-            success: false,
-            message: "Bid not found",
-          });
-        }
-
-        if (bid.status !== "open") {
-          return res.status(400).json({
-            success: false,
-            message: "Bid is not accepting applications",
-          });
-        }
-
-        source = bid;
-        sourceType = "bid";
-        sourceId = bid_id;
+      if (campaign.status !== "open") {
+        return res.status(400).json({
+          success: false,
+          message: "Campaign is not accepting applications",
+        });
       }
+
+      const source = campaign;
+      const sourceType = "campaign";
+      const sourceId = campaign_id;
 
       // Check if user has already applied
       const { data: existingRequest, error: existingError } =
         await supabaseAdmin
           .from("requests")
           .select("id")
-          .eq(sourceType === "campaign" ? "campaign_id" : "bid_id", sourceId)
+          .eq("campaign_id", sourceId)
           .eq("influencer_id", userId)
           .single();
 
@@ -116,18 +83,10 @@ class RequestController {
         status: "connected",
       };
 
-      if (sourceType === "campaign") {
-        requestData.campaign_id = sourceId;
-        // Store proposed amount for campaign applications if provided
-        if (req.body.proposed_amount) {
-          requestData.proposed_amount = req.body.proposed_amount;
-        }
-      } else {
-        requestData.bid_id = sourceId;
-        // Store proposed amount for bid applications
-        if (req.body.proposed_amount) {
-          requestData.proposed_amount = req.body.proposed_amount;
-        }
+      requestData.campaign_id = sourceId;
+      // Store proposed amount for campaign applications if provided
+      if (req.body.proposed_amount) {
+        requestData.proposed_amount = req.body.proposed_amount;
       }
 
       // Store message if provided
@@ -145,7 +104,6 @@ class RequestController {
                         *,
                         type:campaign_type
                     ),
-                    bids (*),
                     influencer:users!requests_influencer_id_fkey (*)
                 `
         )
@@ -161,7 +119,7 @@ class RequestController {
       // Emit real-time update to bid/campaign room
       const io = req.app.get("io");
       if (io) {
-        if (sourceType === "campaign") {
+        if (io) {
           io.to(`campaign_${sourceId}`).emit("new_influencer_application", {
             type: "campaign",
             campaignId: sourceId,
@@ -169,18 +127,10 @@ class RequestController {
             requestId: request.id,
             timestamp: new Date().toISOString(),
           });
-        } else {
-          io.to(`bid_${sourceId}`).emit("new_influencer_application", {
-            type: "bid",
-            bidId: sourceId,
-            influencerId: userId,
-            requestId: request.id,
-            timestamp: new Date().toISOString(),
-          });
         }
       }
 
-      // Send FCM notification to brand owner
+      // Send notification to brand owner
       try {
         const influencerName = request.influencer?.name || "An influencer";
         const sourceTitle = source.title || (sourceType === 'campaign' ? 'Campaign' : 'Bid');
@@ -188,19 +138,20 @@ class RequestController {
         const notificationBody = `${influencerName} sent a request for ${sourceTitle}`;
         const imageUrl = source.image_url || request.influencer?.profile_image_url;
 
-        await fcmService.sendRequestNotification(
-          source.created_by,
-          notificationTitle,
-          notificationBody,
-          imageUrl,
-          {
+        await notificationService.storeAndDeliverNotification({
+          user_id: source.created_by,
+          type: 'request',
+          title: notificationTitle,
+          message: notificationBody,
+          data: {
             requestId: request.id,
-            campaignId: sourceType === 'campaign' ? sourceId : null,
-            bidId: sourceType === 'bid' ? sourceId : null,
+            campaignId: sourceId,
             influencerId: userId,
-            sourceType: sourceType
-          }
-        );
+            sourceType: "campaign",
+            imageUrl: imageUrl
+          },
+          action_url: `/requests/${request.id}`
+        });
       } catch (notifyError) {
         console.error("Failed to send request notification:", notifyError);
         // Don't fail the request if notification fails
@@ -727,7 +678,7 @@ class RequestController {
       // Check if request exists and user has permission
       const { data: request, error: checkError } = await supabaseAdmin
         .from("requests")
-        .select("influencer_id, campaign_id, bid_id")
+        .select("influencer_id, campaign_id")
         .eq("id", id)
         .single();
 
@@ -787,7 +738,7 @@ class RequestController {
       // Check if request exists
       const { data: request, error: fetchError } = await supabaseAdmin
         .from("requests")
-        .select("influencer_id, campaign_id, bid_id, status")
+        .select("influencer_id, campaign_id, status")
         .eq("id", id)
         .single();
 
@@ -814,13 +765,11 @@ class RequestController {
 
       if (request.campaign_id) {
         conversationQuery = conversationQuery.eq("campaign_id", request.campaign_id);
-      } else if (request.bid_id) {
-        conversationQuery = conversationQuery.eq("bid_id", request.bid_id);
       } else {
         // Should not happen, but safe fallback
         return res.status(400).json({
           success: false,
-          message: "Invalid request data: missing campaign or bid reference",
+          message: "Invalid request data: missing campaign reference",
         });
       }
 
@@ -862,91 +811,7 @@ class RequestController {
   /**
    * Get influencers who applied to a specific bid
    */
-  async getBidInfluencers(req, res) {
-    try {
-      const { bid_id } = req.params;
-      const userId = req.user.id;
 
-      // Check if bid exists and user has permission
-      const { data: bid, error: bidError } = await supabaseAdmin
-        .from("bids")
-        .select("created_by")
-        .eq("id", bid_id)
-        .single();
-
-      if (bidError || !bid) {
-        return res.status(404).json({
-          success: false,
-          message: "Bid not found",
-        });
-      }
-
-      // Only bid creator or admin can view influencers
-      if (bid.created_by !== userId && req.user.role !== "admin") {
-        return res.status(403).json({
-          success: false,
-          message: "Access denied",
-        });
-      }
-
-      // Get influencers who applied to this bid
-      const { data: influencers, error } = await supabaseAdmin
-        .from("requests")
-        .select(
-          `
-                    id,
-                    status,
-                    proposed_amount,
-                    message,
-                    final_agreed_amount,
-                    payment_status,
-                    payment_frozen_at,
-                    payment_withdrawable_at,
-                    created_at,
-                    influencer:users!requests_influencer_id_fkey (
-                        id,
-                        name,
-                        languages,
-                        categories,
-                        min_range,
-                        max_range,
-                        role,
-                        profile_image_url
-                    )
-                `
-        )
-        .eq("bid_id", bid_id)
-        .order("created_at", { ascending: false });
-
-      if (error) {
-        console.error("Database error fetching bid influencers:", error);
-        return res.status(500).json({
-          success: false,
-          message: "Failed to fetch influencers",
-          error: error.message,
-        });
-      }
-
-      console.log("Successfully fetched bid influencers:", {
-        bidId: bid_id,
-        count: influencers.length,
-        influencers: influencers,
-      });
-
-      res.json({
-        success: true,
-        influencers: influencers,
-        total: influencers.length,
-      });
-    } catch (error) {
-      console.error("Error getting bid influencers:", error);
-      res.status(500).json({
-        success: false,
-        message: "Internal server error",
-        error: error.message,
-      });
-    }
-  }
 
   /**
    * Get influencers who applied to a specific campaign
@@ -983,26 +848,32 @@ class RequestController {
         .from("requests")
         .select(
           `
-                    id,
-                    status,
-                    proposed_amount,
-                    message,
-                    final_agreed_amount,
-                    payment_status,
-                    payment_frozen_at,
-                    payment_withdrawable_at,
-                    created_at,
-                    influencer:users!requests_influencer_id_fkey (
-                        id,
-                        name,
-                        languages,
-                        categories,
-                        min_range,
-                        max_range,
-                        role,
-                        profile_image_url
-                    )
-                `
+                  id,
+                  status,
+                  proposed_amount,
+                  message,
+                  final_agreed_amount,
+                  payment_status,
+                  payment_frozen_at,
+                  payment_withdrawable_at,
+                  created_at,
+                  work_submission_link,
+                  work_description,
+                  work_files,
+                  work_submission_date,
+                  work_approval_date,
+                  rejection_reason,
+                  influencer:users!requests_influencer_id_fkey (
+                      id,
+                      name,
+                      languages,
+                      categories,
+                      min_range,
+                      max_range,
+                      role,
+                      profile_image_url
+                  )
+              `
         )
         .eq("campaign_id", campaign_id)
         .order("created_at", { ascending: false });
@@ -1029,57 +900,186 @@ class RequestController {
   }
 
   /**
-   * Get real-time influencer count for a bid
+   * Bulk action on requests (approve/reject)
    */
-  async getBidInfluencerCount(req, res) {
+  async bulkAction(req, res) {
     try {
-      const { bid_id } = req.params;
+      const { request_ids, action, message } = req.body;
       const userId = req.user.id;
 
-      // Check if bid exists and user has permission
-      const { data: bid, error: bidError } = await supabaseAdmin
-        .from("bids")
-        .select("created_by")
-        .eq("id", bid_id)
-        .single();
+      if (!request_ids || !Array.isArray(request_ids) || request_ids.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "request_ids must be a non-empty array",
+        });
+      }
 
-      if (bidError || !bid) {
+      if (!["approve", "reject"].includes(action)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid action. Must be 'approve' or 'reject'",
+        });
+      }
+
+      // Fetch requests to verify ownership and get details
+      const { data: requests, error: fetchError } = await supabaseAdmin
+        .from("requests")
+        .select("id, campaign_id, influencer_id, status, proposed_amount, campaigns(created_by)")
+        .in("id", request_ids);
+
+      if (fetchError || !requests || requests.length === 0) {
         return res.status(404).json({
           success: false,
-          message: "Bid not found",
+          message: "Requests not found",
         });
       }
 
-      // Only bid creator or admin can view count
-      if (bid.created_by !== userId && req.user.role !== "admin") {
+      // specific validation for all requests
+      const invalidRequests = requests.filter(
+        (r) => r.campaigns.created_by !== userId
+      );
+
+      if (invalidRequests.length > 0) {
         return res.status(403).json({
           success: false,
-          message: "Access denied",
+          message: "Access denied. You do not own some of these requests.",
         });
       }
 
-      // Get count of influencers who applied
-      const { count, error } = await supabaseAdmin
-        .from("requests")
-        .select("*", { count: "exact", head: true })
-        .eq("bid_id", bid_id);
+      if (action === "approve") {
+        // 1. Update requests status to 'finalized' and set agreed amount
+        // processing sequentially to handle individual proposed_amounts
+        for (const reqItem of requests) {
+          const { error: updateError } = await supabaseAdmin
+            .from("requests")
+            .update({
+              status: "finalized",
+              final_agreed_amount: reqItem.proposed_amount || 0
+            })
+            .eq("id", reqItem.id);
 
-      if (error) {
-        return res.status(500).json({
-          success: false,
-          message: "Failed to fetch influencer count",
+          if (updateError) throw updateError;
+        }
+
+        // 2. Handle Conversations & Messaging
+        const processedConversations = [];
+        const io = req.app.get("io");
+
+        for (const request of requests) {
+          // Find or create conversation
+          let conversationId;
+          const { data: existingConv } = await supabaseAdmin
+            .from("conversations")
+            .select("id")
+            .eq("campaign_id", request.campaign_id)
+            .eq("influencer_id", request.influencer_id)
+            .eq("brand_owner_id", userId)
+            .single();
+
+          if (existingConv) {
+            conversationId = existingConv.id;
+            // Limit chat to read-only for influencer
+            await supabaseAdmin
+              .from("conversations")
+              .update({
+                flow_data: { is_read_only: true },
+                updated_at: new Date().toISOString()
+              })
+              .eq("id", conversationId);
+          } else {
+            // Create new conversation
+            const { data: newConv } = await supabaseAdmin
+              .from("conversations")
+              .insert({
+                campaign_id: request.campaign_id,
+                influencer_id: request.influencer_id,
+                brand_owner_id: userId,
+                chat_status: "real_time",
+                flow_data: { is_read_only: true }, // Set read-only initially
+              })
+              .select("id")
+              .single();
+            conversationId = newConv.id;
+          }
+
+          processedConversations.push(conversationId);
+
+          // Send Broadcast Message
+          if (message) {
+            const { data: msg } = await supabaseAdmin
+              .from("messages")
+              .insert({
+                conversation_id: conversationId,
+                sender_id: userId,
+                receiver_id: request.influencer_id,
+                message: message,
+                message_type: "user_input",
+              })
+              .select()
+              .single();
+
+            // Realtime emit
+            if (io) {
+              io.to(`conversation_${conversationId}`).emit("new_message", {
+                conversation_id: conversationId,
+                message: msg,
+              });
+
+              // Notification logic
+              notificationService.storeAndDeliverNotification({
+                user_id: request.influencer_id,
+                type: 'request_approved',
+                title: 'Application Approved! 🎉',
+                message: message || "You have been selected for the campaign!",
+                data: { conversation_id: conversationId, request_id: request.id },
+                action_url: `/conversations/${conversationId}`
+              }, io);
+            }
+          }
+        }
+
+        return res.json({
+          success: true,
+          message: `Successfully approved ${request_ids.length} requests`,
+          processed_conversations: processedConversations
+        });
+
+      } else if (action === "reject") {
+        // Update status only
+        const { error: updateError } = await supabaseAdmin
+          .from("requests")
+          .update({ status: "rejected" })
+          .in("id", request_ids);
+
+        if (updateError) {
+          throw updateError;
+        }
+
+        // Notify
+        const io = req.app.get("io");
+        for (const request of requests) {
+          notificationService.storeAndDeliverNotification({
+            user_id: request.influencer_id,
+            type: 'request_rejected',
+            title: 'Application Update',
+            message: message || "Your application for the campaign was not selected.",
+            data: { request_id: request.id },
+            action_url: `/campaigns/${request.campaign_id}`
+          }, io);
+        }
+
+        return res.json({
+          success: true,
+          message: `Successfully rejected ${request_ids.length} requests`
         });
       }
 
-      res.json({
-        success: true,
-        count: count || 0,
-      });
     } catch (error) {
-      console.error("Error getting bid influencer count:", error);
+      console.error("Bulk action error:", error);
       res.status(500).json({
         success: false,
         message: "Internal server error",
+        error: error.message,
       });
     }
   }
@@ -1153,7 +1153,7 @@ class RequestController {
       const { data: request, error: requestError } = await supabaseAdmin
         .from("requests")
         .select(
-          "id, brand_owner_id, influencer_id, status, campaign_id, bid_id"
+          "id, brand_owner_id, influencer_id, status, campaign_id"
         )
         .eq("id", id)
         .single();
@@ -1325,7 +1325,7 @@ class RequestController {
       const { data: request, error: checkError } = await supabaseAdmin
         .from("requests")
         .select(
-          "campaign_id, bid_id, influencer_id, status, final_agreed_amount"
+          "campaign_id, influencer_id, status, final_agreed_amount"
         )
         .eq("id", id)
         .single();
@@ -1346,13 +1346,6 @@ class RequestController {
           .eq("id", request.campaign_id)
           .single();
         brandOwnerId = campaign?.created_by;
-      } else {
-        const { data: bid } = await supabaseAdmin
-          .from("bids")
-          .select("created_by")
-          .eq("id", request.bid_id)
-          .single();
-        brandOwnerId = bid?.created_by;
       }
 
       // Only brand owner can approve work
