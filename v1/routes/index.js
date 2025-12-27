@@ -1,9 +1,12 @@
 const express = require("express");
 const router = express.Router();
 
-// All v1 route modules should be mounted from here
-// Example:
-// const campaigns = require("./campaigns");
-// router.use("/campaigns", campaigns);
+// Mount v1 auth routes
+const authRoutes = require("./auth");
+router.use("/auth", authRoutes); // → /api/v1/auth/*
+
+// Mount v1 campaign routes
+const campaignRoutes = require("./campaigns");
+router.use("/campaigns", campaignRoutes); // → /api/v1/campaigns/*
 
 module.exports = router;

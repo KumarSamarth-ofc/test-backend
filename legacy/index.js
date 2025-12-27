@@ -41,25 +41,25 @@ const io = socketIo(server, {
     origin: process.env.CORS_ORIGIN
       ? process.env.CORS_ORIGIN.split(",")
       : [
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:5173",
-        "http://localhost:8081",
-        "http://localhost:8080",
-        /^http:\/\/192\.168\.\d+\.\d+:\d+$/, // Local network
-        /^http:\/\/10\.\d+\.\d+\.\d+:\d+$/, // Local network
-        /^http:\/\/172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:\d+$/, // Local network
-        // Production URLs - add your actual production frontend URL
-        /^https:\/\/.*\.railway\.app$/, // Railway deployments
-        /^https:\/\/.*\.onrender\.com$/, // Render deployments
-        /^https:\/\/.*\.vercel\.app$/, // Vercel deployments
-        /^https:\/\/.*\.netlify\.app$/, // Netlify deployments
-      ],
+          "http://localhost:3000",
+          "http://localhost:3001",
+          "http://localhost:5173",
+          "http://localhost:8081",
+          "http://localhost:8080",
+          /^http:\/\/192\.168\.\d+\.\d+:\d+$/, // Local network
+          /^http:\/\/10\.\d+\.\d+\.\d+:\d+$/, // Local network
+          /^http:\/\/172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:\d+$/, // Local network
+          // Production URLs - add your actual production frontend URL
+          /^https:\/\/.*\.railway\.app$/, // Railway deployments
+          /^https:\/\/.*\.onrender\.com$/, // Render deployments
+          /^https:\/\/.*\.vercel\.app$/, // Vercel deployments
+          /^https:\/\/.*\.netlify\.app$/, // Netlify deployments
+        ],
     methods: ["GET", "POST"],
     credentials: true,
     allowedHeaders: ["Authorization", "Content-Type"],
   },
-  transports: ['websocket', 'polling'], // Support both WebSocket and polling
+  transports: ["websocket", "polling"], // Support both WebSocket and polling
   allowEIO3: true, // Support legacy Socket.IO clients
 
   // Connection timeout (30 seconds to establish connection)
@@ -95,7 +95,7 @@ app.get("/cors-debug", (req, res) => {
     success: true,
     message: "CORS is working!",
     origin: req.headers.origin,
-    userAgent: req.headers['user-agent'],
+    userAgent: req.headers["user-agent"],
     timestamp: new Date().toISOString(),
   });
 });
@@ -108,7 +108,7 @@ app.get("/test-socket", (req, res) => {
     message: "Socket.IO test message",
     timestamp: new Date().toISOString(),
     hasIo: !!ioInstance,
-    connectedClients: ioInstance?.engine?.clientsCount || 0
+    connectedClients: ioInstance?.engine?.clientsCount || 0,
   };
 
   // Emit test message to all connected clients
@@ -118,7 +118,6 @@ app.get("/test-socket", (req, res) => {
 
   res.json(testMessage);
 });
-
 
 // Setup security middleware
 setupSecurityMiddleware(app);
@@ -143,14 +142,14 @@ app.post("/api/test-socket-notification", async (req, res) => {
     if (!user_id) {
       return res.status(400).json({
         success: false,
-        message: "user_id is required"
+        message: "user_id is required",
       });
     }
 
     if (!ioInstance) {
       return res.status(500).json({
         success: false,
-        message: "Socket.IO not available"
+        message: "Socket.IO not available",
       });
     }
 
@@ -158,33 +157,35 @@ app.post("/api/test-socket-notification", async (req, res) => {
     const isOnline = messageHandler.isUserOnline(user_id);
     const onlineUsersCount = messageHandler.getOnlineUsersCount();
 
-    console.log(`📊 [TEST] User ${user_id} - Online: ${isOnline}, Total online users: ${onlineUsersCount}`);
+    console.log(
+      `📊 [TEST] User ${user_id} - Online: ${isOnline}, Total online users: ${onlineUsersCount}`
+    );
 
     // Check if this is a force send request
     const forceSend = req.body.force_send === true;
 
     // Store notification in database first (regardless of online status)
-    const notificationService = require('../services/notificationService');
+    const notificationService = require("../services/notificationService");
     const storeResult = await notificationService.storeNotification({
       user_id: user_id,
-      type: 'message',
-      title: title || 'Test Notification',
-      message: message || 'This is a test notification',
+      type: "message",
+      title: title || "Test Notification",
+      message: message || "This is a test notification",
       data: {
-        notification_type: 'test',
+        notification_type: "test",
         timestamp: new Date().toISOString(),
         user_id: user_id,
-        test: true
+        test: true,
       },
-      priority: 'medium',
-      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+      priority: "medium",
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
     });
 
     if (!storeResult.success) {
       return res.status(500).json({
         success: false,
         message: "Failed to store notification in database",
-        error: storeResult.error
+        error: storeResult.error,
       });
     }
 
@@ -197,27 +198,33 @@ app.post("/api/test-socket-notification", async (req, res) => {
         is_online: false,
         online_users_count: onlineUsersCount,
         delivery_method: "database_only",
-        database_notification: storeResult.notification
+        database_notification: storeResult.notification,
       });
     }
 
     const notificationData = {
-      type: 'test',
+      type: "test",
       data: {
         id: storeResult.notification.id,
-        title: title || 'Test Notification',
-        body: message || 'This is a test notification',
+        title: title || "Test Notification",
+        body: message || "This is a test notification",
         created_at: new Date().toISOString(),
         test: true,
-        user_id: user_id
-      }
+        user_id: user_id,
+      },
     };
 
     // Send notification to specific user's room
-    ioInstance.to(`user_${user_id}`).emit('notification', notificationData);
+    ioInstance.to(`user_${user_id}`).emit("notification", notificationData);
 
-    console.log(`📡 [TEST] Sent socket notification to user_${user_id}:`, notificationData);
-    console.log(`💾 [TEST] Stored notification in database:`, storeResult.notification.id);
+    console.log(
+      `📡 [TEST] Sent socket notification to user_${user_id}:`,
+      notificationData
+    );
+    console.log(
+      `💾 [TEST] Stored notification in database:`,
+      storeResult.notification.id
+    );
 
     res.json({
       success: true,
@@ -227,15 +234,14 @@ app.post("/api/test-socket-notification", async (req, res) => {
       database_notification: storeResult.notification,
       is_online: true,
       online_users_count: onlineUsersCount,
-      delivery_method: "socket"
+      delivery_method: "socket",
     });
-
   } catch (error) {
-    console.error('❌ Error in test-socket-notification:', error);
+    console.error("❌ Error in test-socket-notification:", error);
     res.status(500).json({
       success: false,
       message: "Internal server error",
-      error: error.message
+      error: error.message,
     });
   }
 });
@@ -249,7 +255,7 @@ app.post("/api/test-socket-notification-all", async (req, res) => {
     if (!ioInstance) {
       return res.status(500).json({
         success: false,
-        message: "Socket.IO not available"
+        message: "Socket.IO not available",
       });
     }
 
@@ -257,7 +263,10 @@ app.post("/api/test-socket-notification-all", async (req, res) => {
     const onlineUsers = messageHandler.getOnlineUsersWithSockets();
     const onlineUsersCount = messageHandler.getOnlineUsersCount();
 
-    console.log(`📊 [TEST-ALL] Found ${onlineUsersCount} online users:`, onlineUsers.map(u => u.userId));
+    console.log(
+      `📊 [TEST-ALL] Found ${onlineUsersCount} online users:`,
+      onlineUsers.map((u) => u.userId)
+    );
 
     if (onlineUsersCount === 0) {
       return res.json({
@@ -265,11 +274,11 @@ app.post("/api/test-socket-notification-all", async (req, res) => {
         message: "No active socket users found",
         online_users_count: 0,
         notifications_sent: 0,
-        delivery_method: "none"
+        delivery_method: "none",
       });
     }
 
-    const notificationService = require('../services/notificationService');
+    const notificationService = require("../services/notificationService");
     const results = [];
     let successCount = 0;
     let errorCount = 0;
@@ -280,71 +289,83 @@ app.post("/api/test-socket-notification-all", async (req, res) => {
         // Store notification in database
         const storeResult = await notificationService.storeNotification({
           user_id: user.userId,
-          type: 'message',
-          title: title || 'Test Notification to All Users',
-          message: message || 'This is a test notification sent to all active users',
+          type: "message",
+          title: title || "Test Notification to All Users",
+          message:
+            message || "This is a test notification sent to all active users",
           data: {
-            notification_type: 'test_all',
+            notification_type: "test_all",
             timestamp: new Date().toISOString(),
             user_id: user.userId,
             test: true,
-            sent_to_all: true
+            sent_to_all: true,
           },
-          priority: 'medium',
-          expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+          priority: "medium",
+          expires_at: new Date(
+            Date.now() + 7 * 24 * 60 * 60 * 1000
+          ).toISOString(),
         });
 
         if (storeResult.success) {
           const notificationData = {
-            type: 'test_all',
+            type: "test_all",
             data: {
               id: storeResult.notification.id,
-              title: title || 'Test Notification to All Users',
-              body: message || 'This is a test notification sent to all active users',
+              title: title || "Test Notification to All Users",
+              body:
+                message ||
+                "This is a test notification sent to all active users",
               created_at: new Date().toISOString(),
               test: true,
               user_id: user.userId,
-              sent_to_all: true
-            }
+              sent_to_all: true,
+            },
           };
 
           // Send socket notification
-          ioInstance.to(user.room).emit('notification', notificationData);
+          ioInstance.to(user.room).emit("notification", notificationData);
 
           results.push({
             user_id: user.userId,
             socket_id: user.socketId,
             success: true,
             notification_id: storeResult.notification.id,
-            delivery_method: 'socket'
+            delivery_method: "socket",
           });
 
           successCount++;
-          console.log(`📡 [TEST-ALL] Sent notification to user_${user.userId} (${user.socketId})`);
+          console.log(
+            `📡 [TEST-ALL] Sent notification to user_${user.userId} (${user.socketId})`
+          );
         } else {
           results.push({
             user_id: user.userId,
             socket_id: user.socketId,
             success: false,
             error: storeResult.error,
-            delivery_method: 'failed'
+            delivery_method: "failed",
           });
           errorCount++;
         }
       } catch (error) {
-        console.error(`❌ [TEST-ALL] Error sending to user_${user.userId}:`, error);
+        console.error(
+          `❌ [TEST-ALL] Error sending to user_${user.userId}:`,
+          error
+        );
         results.push({
           user_id: user.userId,
           socket_id: user.socketId,
           success: false,
           error: error.message,
-          delivery_method: 'failed'
+          delivery_method: "failed",
         });
         errorCount++;
       }
     }
 
-    console.log(`📊 [TEST-ALL] Completed: ${successCount} successful, ${errorCount} failed`);
+    console.log(
+      `📊 [TEST-ALL] Completed: ${successCount} successful, ${errorCount} failed`
+    );
 
     res.json({
       success: true,
@@ -358,16 +379,18 @@ app.post("/api/test-socket-notification-all", async (req, res) => {
         total_users: onlineUsersCount,
         successful: successCount,
         failed: errorCount,
-        success_rate: onlineUsersCount > 0 ? ((successCount / onlineUsersCount) * 100).toFixed(2) + '%' : '0%'
-      }
+        success_rate:
+          onlineUsersCount > 0
+            ? ((successCount / onlineUsersCount) * 100).toFixed(2) + "%"
+            : "0%",
+      },
     });
-
   } catch (error) {
-    console.error('❌ Error in test-socket-notification-all:', error);
+    console.error("❌ Error in test-socket-notification-all:", error);
     res.status(500).json({
       success: false,
       message: "Internal server error",
-      error: error.message
+      error: error.message,
     });
   }
 });
@@ -375,82 +398,116 @@ app.post("/api/test-socket-notification-all", async (req, res) => {
 // Debug: Direct message send via REST (mirrors socket chat:send)
 app.post("/api/debug/direct-send", async (req, res) => {
   try {
-    const { conversationId, senderId, text = '', attachments = null, metadata = null } = req.body;
+    const {
+      conversationId,
+      senderId,
+      text = "",
+      attachments = null,
+      metadata = null,
+    } = req.body;
     if (!conversationId || !senderId) {
-      return res.status(400).json({ success: false, error: "conversationId and senderId are required" });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          error: "conversationId and senderId are required",
+        });
     }
 
-    const { supabaseAdmin } = require('../supabase/client');
+    const { supabaseAdmin } = require("../supabase/client");
     const { data: conversation, error: convError } = await supabaseAdmin
-      .from('conversations')
-      .select('id, brand_owner_id, influencer_id, campaign_id, chat_status, flow_state')
-      .eq('id', conversationId)
+      .from("conversations")
+      .select(
+        "id, brand_owner_id, influencer_id, campaign_id, chat_status, flow_state"
+      )
+      .eq("id", conversationId)
       .single();
 
     if (convError || !conversation) {
-      return res.status(404).json({ success: false, error: 'Conversation not found', details: convError || null, conversationId });
+      return res
+        .status(404)
+        .json({
+          success: false,
+          error: "Conversation not found",
+          details: convError || null,
+          conversationId,
+        });
     }
 
     const isDirect = !conversation.campaign_id;
-    if (!isDirect && conversation.chat_status !== 'real_time' && conversation.flow_state !== 'real_time') {
-      return res.status(409).json({ success: false, error: 'Automated mode for this conversation' });
+    if (
+      !isDirect &&
+      conversation.chat_status !== "real_time" &&
+      conversation.flow_state !== "real_time"
+    ) {
+      return res
+        .status(409)
+        .json({
+          success: false,
+          error: "Automated mode for this conversation",
+        });
     }
 
-    const receiverId = conversation.brand_owner_id === senderId
-      ? conversation.influencer_id
-      : conversation.brand_owner_id;
+    const receiverId =
+      conversation.brand_owner_id === senderId
+        ? conversation.influencer_id
+        : conversation.brand_owner_id;
 
     const messageData = {
       conversation_id: conversationId,
       sender_id: senderId,
       receiver_id: receiverId,
       message: text,
-      message_type: 'user_input',
+      message_type: "user_input",
       attachment_metadata: attachments || metadata || null,
       seen: false,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
     };
 
     const { data: savedMessage, error: saveError } = await supabaseAdmin
-      .from('messages')
+      .from("messages")
       .insert(messageData)
       .select()
       .single();
 
     if (saveError) {
-      console.error('❌ [DEBUG] direct-send save error:', saveError);
+      console.error("❌ [DEBUG] direct-send save error:", saveError);
       return res.status(500).json({
         success: false,
-        error: 'Failed to save message',
+        error: "Failed to save message",
         details: {
           message: saveError.message || null,
           code: saveError.code || null,
           hint: saveError.hint || null,
-          details: saveError.details || null
+          details: saveError.details || null,
         },
-        payload: messageData
+        payload: messageData,
       });
     }
 
-    const ioInstance = app.get('io');
+    const ioInstance = app.get("io");
     if (ioInstance) {
-      console.log(`💾 [DEBUG] direct-send saved ${savedMessage.id} -> emitting to room:${conversationId}`);
-      ioInstance.to(`user_${senderId}`).emit('conversation_list_updated', {
+      console.log(
+        `💾 [DEBUG] direct-send saved ${savedMessage.id} -> emitting to room:${conversationId}`
+      );
+      ioInstance.to(`user_${senderId}`).emit("conversation_list_updated", {
         conversation_id: conversationId,
         message: savedMessage,
-        action: 'message_sent'
+        action: "message_sent",
       });
-      ioInstance.to(`user_${receiverId}`).emit('conversation_list_updated', {
+      ioInstance.to(`user_${receiverId}`).emit("conversation_list_updated", {
         conversation_id: conversationId,
         message: savedMessage,
-        action: 'message_received'
+        action: "message_received",
       });
-      ioInstance.to(`room:${conversationId}`).emit('chat:new', { message: savedMessage });
+      ioInstance
+        .to(`room:${conversationId}`)
+        .emit("chat:new", { message: savedMessage });
     }
 
     return res.json({ success: true, message: savedMessage });
   } catch (e) {
-    console.error('❌ [DEBUG] direct-send exception:', e);
+    console.error("❌ [DEBUG] direct-send exception:", e);
     return res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -459,18 +516,24 @@ app.post("/api/debug/direct-send", async (req, res) => {
 app.get("/api/debug/conversation/:id", async (req, res) => {
   try {
     const conversationId = req.params.id;
-    const { supabaseAdmin } = require('../supabase/client');
+    const { supabaseAdmin } = require("../supabase/client");
     const { data, error } = await supabaseAdmin
-      .from('conversations')
-      .select('id, brand_owner_id, influencer_id, campaign_id, chat_status, flow_state, created_at')
-      .eq('id', conversationId)
+      .from("conversations")
+      .select(
+        "id, brand_owner_id, influencer_id, campaign_id, chat_status, flow_state, created_at"
+      )
+      .eq("id", conversationId)
       .maybeSingle();
 
     if (error) {
-      return res.status(500).json({ success: false, error: error.message, conversationId });
+      return res
+        .status(500)
+        .json({ success: false, error: error.message, conversationId });
     }
     if (!data) {
-      return res.status(404).json({ success: false, found: false, conversationId });
+      return res
+        .status(404)
+        .json({ success: false, found: false, conversationId });
     }
     return res.json({ success: true, found: true, conversation: data });
   } catch (e) {
@@ -481,15 +544,23 @@ app.get("/api/debug/conversation/:id", async (req, res) => {
 // Debug: Issue JWT for a user (development only)
 app.get("/api/debug/token/:userId", async (req, res) => {
   try {
-    const allow = (process.env.ALLOW_DEBUG_TOKEN || 'false').toLowerCase() === 'true';
-    if ((process.env.NODE_ENV || 'development') === 'production' && !allow) {
-      return res.status(403).json({ success: false, error: 'Disabled in production' });
+    const allow =
+      (process.env.ALLOW_DEBUG_TOKEN || "false").toLowerCase() === "true";
+    if ((process.env.NODE_ENV || "development") === "production" && !allow) {
+      return res
+        .status(403)
+        .json({ success: false, error: "Disabled in production" });
     }
     const userId = req.params.userId;
-    const authService = require('../utils/auth');
+    const authService = require("../utils/auth");
     const result = await authService.refreshToken(userId);
     if (!result.success) {
-      return res.status(404).json({ success: false, error: result.message || 'Failed to issue token' });
+      return res
+        .status(404)
+        .json({
+          success: false,
+          error: result.message || "Failed to issue token",
+        });
     }
     return res.json({ success: true, token: result.token });
   } catch (e) {
@@ -507,14 +578,14 @@ app.get("/api/online-users", (req, res) => {
       success: true,
       online_users_count: onlineUsersCount,
       online_users: onlineUsers,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('❌ Error getting online users:', error);
+    console.error("❌ Error getting online users:", error);
     res.status(500).json({
       success: false,
       message: "Internal server error",
-      error: error.message
+      error: error.message,
     });
   }
 });
@@ -522,7 +593,7 @@ app.get("/api/online-users", (req, res) => {
 // Admin user check endpoint
 app.get("/api/admin-check", async (req, res) => {
   try {
-    const { supabaseAdmin } = require('../supabase/client');
+    const { supabaseAdmin } = require("../supabase/client");
 
     // Check if any admin user exists
     const { data: adminUsers, error } = await supabaseAdmin
@@ -536,13 +607,16 @@ app.get("/api/admin-check", async (req, res) => {
       adminUsers: adminUsers || [],
       count: adminUsers?.length || 0,
       error: error || null,
-      message: adminUsers?.length > 0 ? `${adminUsers.length} admin user(s) found` : "No admin users found"
+      message:
+        adminUsers?.length > 0
+          ? `${adminUsers.length} admin user(s) found`
+          : "No admin users found",
     });
   } catch (error) {
     res.status(500).json({
       success: false,
       error: error.message,
-      message: "Error checking admin users"
+      message: "Error checking admin users",
     });
   }
 });
@@ -573,16 +647,19 @@ adminPaymentFlowService.setSocketIO(io);
 
 // Automatic expiry sweep (mark campaigns/bids as expired when timeline exceeded and no requests)
 (() => {
-  const ENABLE_EXPIRY_SWEEP = (process.env.ENABLE_EXPIRY_SWEEP || 'true').toLowerCase() === 'true';
-  const SWEEP_MINUTES = parseInt(process.env.EXPIRY_SWEEP_MINUTES || '30', 10);
+  const ENABLE_EXPIRY_SWEEP =
+    (process.env.ENABLE_EXPIRY_SWEEP || "true").toLowerCase() === "true";
+  const SWEEP_MINUTES = parseInt(process.env.EXPIRY_SWEEP_MINUTES || "30", 10);
   if (!ENABLE_EXPIRY_SWEEP) {
     console.log("⏳ [ExpirySweep] Disabled via ENABLE_EXPIRY_SWEEP env");
     return;
   }
-  const { supabaseAdmin } = require('../supabase/client');
-  const runSweep = async (reason = 'scheduled') => {
+  const { supabaseAdmin } = require("../supabase/client");
+  const runSweep = async (reason = "scheduled") => {
     try {
-      const { data, error } = await supabaseAdmin.rpc('sweep_expired_campaigns_and_bids');
+      const { data, error } = await supabaseAdmin.rpc(
+        "sweep_expired_campaigns_and_bids"
+      );
       if (error) {
         console.error(`❌ [ExpirySweep] Failed (${reason}):`, error);
         return;
@@ -594,24 +671,26 @@ adminPaymentFlowService.setSocketIO(io);
     }
   };
   // Run once on startup (delayed slightly to ensure DB is ready)
-  setTimeout(() => runSweep('startup'), 5000);
+  setTimeout(() => runSweep("startup"), 5000);
   // Schedule periodic sweeps
-  setInterval(() => runSweep('interval'), SWEEP_MINUTES * 60 * 1000);
+  setInterval(() => runSweep("interval"), SWEEP_MINUTES * 60 * 1000);
 })();
 
 // Test endpoint for FCM status (no auth required)
 app.get("/test-fcm", (req, res) => {
   try {
-    const fcmService = require('../services/fcmService');
+    const fcmService = require("../services/fcmService");
     res.json({
       success: true,
       fcmInitialized: fcmService.initialized,
-      message: fcmService.initialized ? 'FCM service is initialized' : 'FCM service is not initialized'
+      message: fcmService.initialized
+        ? "FCM service is initialized"
+        : "FCM service is not initialized",
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 });
@@ -624,7 +703,8 @@ app.post("/test-message", async (req, res) => {
     if (!conversationId || !senderId || !receiverId || !message) {
       return res.status(400).json({
         success: false,
-        error: "Missing required fields: conversationId, senderId, receiverId, message"
+        error:
+          "Missing required fields: conversationId, senderId, receiverId, message",
       });
     }
 
@@ -632,34 +712,38 @@ app.post("/test-message", async (req, res) => {
     if (!ioInstance) {
       return res.status(500).json({
         success: false,
-        error: "Socket.IO not available"
+        error: "Socket.IO not available",
       });
     }
 
     // Get conversation context
-    const { supabaseAdmin } = require('../supabase/client');
+    const { supabaseAdmin } = require("../supabase/client");
     const { data: conversation, error: convError } = await supabaseAdmin
       .from("conversations")
-      .select("id, chat_status, flow_state, awaiting_role, campaign_id, current_action_data")
+      .select(
+        "id, chat_status, flow_state, awaiting_role, campaign_id, current_action_data"
+      )
       .eq("id", conversationId)
       .single();
 
     if (convError) {
       return res.status(500).json({
         success: false,
-        error: "Failed to fetch conversation context"
+        error: "Failed to fetch conversation context",
       });
     }
 
     // Prepare conversation context
-    const conversationContext = conversation ? {
-      id: conversation.id,
-      chat_status: conversation.chat_status,
-      flow_state: conversation.flow_state,
-      awaiting_role: conversation.awaiting_role,
-      conversation_type: conversation.campaign_id ? 'campaign' : 'direct',
-      current_action_data: conversation.current_action_data
-    } : null;
+    const conversationContext = conversation
+      ? {
+          id: conversation.id,
+          chat_status: conversation.chat_status,
+          flow_state: conversation.flow_state,
+          awaiting_role: conversation.awaiting_role,
+          conversation_type: conversation.campaign_id ? "campaign" : "direct",
+          current_action_data: conversation.current_action_data,
+        }
+      : null;
 
     // Create test message object
     const testMessage = {
@@ -669,7 +753,7 @@ app.post("/test-message", async (req, res) => {
       receiver_id: receiverId,
       message: message,
       created_at: new Date().toISOString(),
-      seen: false
+      seen: false,
     };
 
     // Emit to conversation room
@@ -703,45 +787,52 @@ app.post("/test-message", async (req, res) => {
 
     // Emit conversation list updates
     console.log(`📡 [TEST] Emitting conversation_list_updated to both users`);
-    ioInstance.to(`user_${senderId}`).emit('conversation_list_updated', {
+    ioInstance.to(`user_${senderId}`).emit("conversation_list_updated", {
       conversation_id: conversationId,
       message: testMessage,
       conversation_context: conversationContext,
-      action: 'message_sent'
+      action: "message_sent",
     });
 
-    ioInstance.to(`user_${receiverId}`).emit('conversation_list_updated', {
+    ioInstance.to(`user_${receiverId}`).emit("conversation_list_updated", {
       conversation_id: conversationId,
       message: testMessage,
       conversation_context: conversationContext,
-      action: 'message_received'
+      action: "message_received",
     });
 
     // Emit unread count update
-    console.log(`📡 [TEST] Emitting unread_count_updated to user_${receiverId}`);
-    ioInstance.to(`user_${receiverId}`).emit('unread_count_updated', {
+    console.log(
+      `📡 [TEST] Emitting unread_count_updated to user_${receiverId}`
+    );
+    ioInstance.to(`user_${receiverId}`).emit("unread_count_updated", {
       conversation_id: conversationId,
       unread_count: 1,
-      action: 'increment'
+      action: "increment",
     });
 
     // Send FCM push notification
     console.log(`📱 [TEST] Sending FCM notification to user_${receiverId}`);
-    const fcmService = require('../services/fcmService');
-    fcmService.sendMessageNotification(
-      conversationId,
-      testMessage,
-      senderId,
-      receiverId
-    ).then(result => {
-      if (result.success) {
-        console.log(`✅ [TEST] FCM notification sent: ${result.sent} successful, ${result.failed} failed`);
-      } else {
-        console.error(`❌ [TEST] FCM notification failed:`, result.error);
-      }
-    }).catch(error => {
-      console.error(`❌ [TEST] FCM notification error:`, error);
-    });
+    const fcmService = require("../services/fcmService");
+    fcmService
+      .sendMessageNotification(
+        conversationId,
+        testMessage,
+        senderId,
+        receiverId
+      )
+      .then((result) => {
+        if (result.success) {
+          console.log(
+            `✅ [TEST] FCM notification sent: ${result.sent} successful, ${result.failed} failed`
+          );
+        } else {
+          console.error(`❌ [TEST] FCM notification failed:`, result.error);
+        }
+      })
+      .catch((error) => {
+        console.error(`❌ [TEST] FCM notification error:`, error);
+      });
 
     res.json({
       success: true,
@@ -749,26 +840,27 @@ app.post("/test-message", async (req, res) => {
       testMessage,
       conversationContext,
       events: [
-        'new_message',
-        'notification',
-        'message_sent',
-        'conversation_list_updated',
-        'unread_count_updated',
-        'fcm_notification'
-      ]
+        "new_message",
+        "notification",
+        "message_sent",
+        "conversation_list_updated",
+        "unread_count_updated",
+        "fcm_notification",
+      ],
     });
-
   } catch (error) {
     console.error("❌ [TEST] Error in test-message endpoint:", error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 });
 
 // Webhook routes (no auth required)
-const { SubscriptionController } = require("../controllers/subscriptionController");
+const {
+  SubscriptionController,
+} = require("../controllers/subscriptionController");
 app.post("/webhook/razorpay", SubscriptionController.handleWebhook);
 
 // API routes (legacy)
@@ -796,6 +888,15 @@ app.use("/api/social-platforms", socialPlatformRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/influencers", influencerRoutes);
 
+// v1 API routes (new tables, new flow)
+try {
+  const v1Router = require("../v1");
+  // Mount before the /api/* 404 handler so it is reachable
+  app.use("/api/v1", v1Router);
+  console.log("✅ Mounted v1 API router at /api/v1");
+} catch (err) {
+  console.warn("⚠️ v1 router not available yet:", err.message);
+}
 
 // 404 handler for API routes
 app.use("/api/*", (req, res) => {
@@ -817,7 +918,7 @@ app.use("*", (req, res) => {
 const messageHandler = new MessageHandler(io);
 
 // Connect messageHandler to notificationService for online status checking
-const notificationService = require('../services/notificationService');
+const notificationService = require("../services/notificationService");
 notificationService.setMessageHandler(messageHandler);
 
 io.on("connection", (socket) => {
@@ -898,5 +999,3 @@ server.listen(PORT, "0.0.0.0", () => {
 });
 
 module.exports = { app, server, io };
-
-

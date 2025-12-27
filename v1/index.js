@@ -1,12 +1,11 @@
 const express = require("express");
 
-// Root router for all /v1 APIs
-// Example: app.use("/v1", require("./v1"));
+// Root router for all /api/v1 APIs
 const router = express.Router();
 
-// TODO: add v1 routes here, e.g.
-// const userRoutes = require("./routes/users");
-// router.use("/users", userRoutes);
+// Mount all v1 routes
+const v1Routes = require("./routes");
+router.use("/", v1Routes);
 
 module.exports = router;
 
