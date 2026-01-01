@@ -1,5 +1,5 @@
 const { validationResult } = require("express-validator");
-const CampaignService = require("../services/campaignService");
+const { CampaignService } = require("../services");
 
 class CampaignController {
   /**

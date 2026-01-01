@@ -9,4 +9,9 @@ router.use("/auth", authRoutes); // → /api/v1/auth/*
 const campaignRoutes = require("./campaigns");
 router.use("/campaigns", campaignRoutes); // → /api/v1/campaigns/*
 
+// Mount v1 campaign routes
+const applicationRoutes = require('./applications');
+router.use('/applications', applicationRoutes); // → /api/v1/applications/*
+
+
 module.exports = router;

@@ -5,8 +5,7 @@ const router = express.Router();
 
 // Mount all v1 routes
 const v1Routes = require("./routes");
-router.use("/", v1Routes);
+router.use("/", v1Routes); // → /api/v1/*
 
 module.exports = router;
-
 
