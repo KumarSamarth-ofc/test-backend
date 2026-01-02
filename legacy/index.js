@@ -894,6 +894,15 @@ try {
   // Mount before the /api/* 404 handler so it is reachable
   app.use("/api/v1", v1Router);
   console.log("✅ Mounted v1 API router at /api/v1");
+
+  // Initialize v1 chat socket handlers
+  try {
+    const initV1ChatSocket = require("../v1/socket");
+    initV1ChatSocket(server);
+    console.log("✅ Initialized v1 chat socket handlers");
+  } catch (socketErr) {
+    console.warn("⚠️ v1 chat socket not available:", socketErr.message);
+  }
 } catch (err) {
   console.warn("⚠️ v1 router not available yet:", err.message);
 }

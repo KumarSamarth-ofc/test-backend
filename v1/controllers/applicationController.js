@@ -67,6 +67,4 @@ class ApplicationController {
   }
 }
 
-module.exports = {
-  applicationController: new ApplicationController(),
-};
+module.exports = new ApplicationController();

@@ -1,34 +1,40 @@
 const router = require('express').Router();
 const { applicationController } = require('../controllers');
-const { authenticate, requireRole } = require('../middleware/authMiddleware');
+const authMiddleware = require('../middleware/authMiddleware');
+const {
+  validateApply,
+  validateAccept,
+  validateCancel,
+  validateComplete,
+} = require('../validators/applicationValidators');
 
 router.post(
   '/',
-  authenticate,
-  requireRole('INFLUENCER'),
+  authMiddleware.authenticateToken,
+  authMiddleware.requireRole('INFLUENCER'),
   validateApply,
   applicationController.apply
 );
 
 router.post(
   '/:id/accept',
-  authenticate,
-  requireRole('BRAND_OWNER'),
+  authMiddleware.authenticateToken,
+  authMiddleware.requireRole('BRAND_OWNER'),
   validateAccept,
   applicationController.accept
 );
 
 router.post(
   '/:id/cancel',
-  authenticate,
+  authMiddleware.authenticateToken,
   validateCancel,
   applicationController.cancel
 ); // no cancellation
 
 router.post(
   '/:id/complete',
-  authenticate,
-  requireRole('ADMIN'),
+  authMiddleware.authenticateToken,
+  authMiddleware.requireRole('ADMIN'),
   validateComplete,
   applicationController.complete
 );

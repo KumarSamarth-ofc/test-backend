@@ -3,4 +3,5 @@ module.exports = {
   CampaignService: require("./campaignService"),
   ApplicationService: require("./applicationService"),
   AuthService: require("./authService"),
+  ChatService: require("./chatService"),
 };

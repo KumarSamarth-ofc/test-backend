@@ -1,4 +1,4 @@
-const db = require('../../db');
+const { supabaseAdmin } = require('../../supabase/client');
 const { canTransition } = require('./applicationStateMachine');
 
 class ApplicationService {
@@ -7,23 +7,29 @@ class ApplicationService {
    */
   async checkBrandOwnership(applicationId, brandId) {
     try {
-      const app = await db.oneOrNone(
-        `SELECT a.*, c.brand_id 
-        FROM applications a
-        JOIN campaigns c ON a.campaign_id = c.id
-        WHERE a.id = $1`,
-        [applicationId]
-      );
+      const { data, error } = await supabaseAdmin
+        .from('applications')
+        .select(`
+          *,
+          campaigns!inner(brand_id)
+        `)
+        .eq('id', applicationId)
+        .maybeSingle();
 
-      if (!app) {
+      if (error) {
+        console.error('[ApplicationService/checkBrandOwnership] Error:', error);
+        return { success: false, message: 'Database error' };
+      }
+
+      if (!data || !data.campaigns) {
         return { success: false, message: 'Application not found' };
       }
 
-      if (app.brand_id !== brandId) {
+      if (data.campaigns.brand_id !== brandId) {
         return { success: false, message: 'Unauthorized: Not your campaign' };
       }
 
-      return { success: true, application: app };
+      return { success: true, application: { ...data, brand_id: data.campaigns.brand_id } };
     } catch (err) {
       console.error('[ApplicationService/checkBrandOwnership] Error:', err);
       return { success: false, message: 'Database error' };
@@ -35,26 +41,32 @@ class ApplicationService {
    */
   async checkCancelPermission(applicationId, userId, userRole) {
     try {
-      const app = await db.oneOrNone(
-        `SELECT a.*, c.brand_id 
-        FROM applications a
-        JOIN campaigns c ON a.campaign_id = c.id
-        WHERE a.id = $1`,
-        [applicationId]
-      );
+      const { data, error } = await supabaseAdmin
+        .from('applications')
+        .select(`
+          *,
+          campaigns!inner(brand_id)
+        `)
+        .eq('id', applicationId)
+        .maybeSingle();
 
-      if (!app) {
+      if (error) {
+        console.error('[ApplicationService/checkCancelPermission] Error:', error);
+        return { success: false, message: 'Database error' };
+      }
+
+      if (!data || !data.campaigns) {
         return { success: false, message: 'Application not found' };
       }
 
       // Influencer can cancel their own application
-      if (userRole === 'INFLUENCER' && app.influencer_id === userId) {
-        return { success: true, application: app };
+      if (userRole === 'INFLUENCER' && data.influencer_id === userId) {
+        return { success: true, application: { ...data, brand_id: data.campaigns.brand_id } };
       }
 
       // Brand owner can cancel applications to their campaigns
-      if (userRole === 'BRAND' && app.brand_id === userId) {
-        return { success: true, application: app };
+      if (userRole === 'BRAND' && data.campaigns.brand_id === userId) {
+        return { success: true, application: { ...data, brand_id: data.campaigns.brand_id } };
       }
 
       return { success: false, message: 'Unauthorized: Cannot cancel this application' };
@@ -70,10 +82,16 @@ class ApplicationService {
   async apply({ campaignId, influencerId }) {
     try {
       // Check if campaign exists and is in valid state
-      const campaign = await db.oneOrNone(
-        'SELECT * FROM campaigns WHERE id = $1',
-        [campaignId]
-      );
+      const { data: campaign, error: campaignError } = await supabaseAdmin
+        .from('campaigns')
+        .select('*')
+        .eq('id', campaignId)
+        .maybeSingle();
+
+      if (campaignError) {
+        console.error('[ApplicationService/apply] Campaign check error:', campaignError);
+        return { success: false, message: 'Database error' };
+      }
 
       if (!campaign) {
         return { success: false, message: 'Campaign not found' };
@@ -84,21 +102,37 @@ class ApplicationService {
       }
 
       // Check for duplicate application
-      const existing = await db.oneOrNone(
-        'SELECT * FROM applications WHERE campaign_id = $1 AND influencer_id = $2',
-        [campaignId, influencerId]
-      );
+      const { data: existing, error: existingError } = await supabaseAdmin
+        .from('applications')
+        .select('*')
+        .eq('campaign_id', campaignId)
+        .eq('influencer_id', influencerId)
+        .maybeSingle();
+
+      if (existingError) {
+        console.error('[ApplicationService/apply] Duplicate check error:', existingError);
+        return { success: false, message: 'Database error' };
+      }
 
       if (existing) {
         return { success: false, message: 'You have already applied to this campaign' };
       }
 
-      const app = await db.one(
-        `INSERT INTO applications (campaign_id, influencer_id, status)
-        VALUES ($1, $2, 'PENDING')
-        RETURNING *`,
-        [campaignId, influencerId]
-      );
+      // Insert new application
+      const { data: app, error: insertError } = await supabaseAdmin
+        .from('applications')
+        .insert({
+          campaign_id: campaignId,
+          influencer_id: influencerId,
+          status: 'PENDING'
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('[ApplicationService/apply] Insert error:', insertError);
+        return { success: false, message: insertError.message || 'Failed to apply to campaign' };
+      }
 
       return {
         success: true,
@@ -125,59 +159,56 @@ class ApplicationService {
     requiresScript,
   }) {
     try {
-      return await db.tx(async (t) => {
-        // Check ownership
-        const ownershipCheck = await this.checkBrandOwnership(applicationId, brandId);
-        if (!ownershipCheck.success) {
-          return ownershipCheck;
-        }
+      // Check ownership
+      const ownershipCheck = await this.checkBrandOwnership(applicationId, brandId);
+      if (!ownershipCheck.success) {
+        return ownershipCheck;
+      }
 
-        const app = ownershipCheck.application;
+      const app = ownershipCheck.application;
 
-        // Check state transition
-        if (!canTransition(app.status, 'ACCEPTED')) {
-          return {
-            success: false,
-            message: `Cannot accept application. Current status: ${app.status}`,
-          };
-        }
-
-        const platformFeeAmount = (agreedAmount * platformFeePercent) / 100;
-        const netAmount = agreedAmount - platformFeeAmount;
-        const phase = requiresScript ? 'SCRIPT' : 'WORK';
-
-        const updated = await t.one(
-          `
-          UPDATE applications
-          SET
-            status = 'ACCEPTED',
-            phase = $2,
-            agreed_amount = $3,
-            platform_fee_percent = $4,
-            platform_fee_amount = $5,
-            net_amount = $6,
-            brand_id = $7,
-            updated_at = NOW()
-          WHERE id = $1
-          RETURNING *
-          `,
-          [
-            applicationId,
-            phase,
-            agreedAmount,
-            platformFeePercent,
-            platformFeeAmount,
-            netAmount,
-            brandId,
-          ]
-        );
-
+      // Check state transition
+      if (!canTransition(app.status, 'ACCEPTED')) {
         return {
-          success: true,
-          message: 'Application accepted successfully',
-          application: updated,
+          success: false,
+          message: `Cannot accept application. Current status: ${app.status}`,
         };
-      });
+      }
+
+      const platformFeeAmount = (agreedAmount * platformFeePercent) / 100;
+      const netAmount = agreedAmount - platformFeeAmount;
+      const phase = requiresScript ? 'SCRIPT' : 'WORK';
+
+      // Update application
+      const { data: updated, error: updateError } = await supabaseAdmin
+        .from('applications')
+        .update({
+          status: 'ACCEPTED',
+          phase: phase,
+          agreed_amount: agreedAmount,
+          platform_fee_percent: platformFeePercent,
+          platform_fee_amount: platformFeeAmount,
+          net_amount: netAmount,
+          brand_id: brandId,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', applicationId)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('[ApplicationService/accept] Update error:', updateError);
+        return {
+          success: false,
+          message: updateError.message || 'Failed to accept application',
+        };
+      }
+
+      return {
+        success: true,
+        message: 'Application accepted successfully',
+        application: updated,
+      };
     } catch (err) {
       console.error('[ApplicationService/accept] Error:', err);
       return {
@@ -212,15 +243,24 @@ class ApplicationService {
         };
       }
 
-      const updated = await db.one(
-        `
-        UPDATE applications
-        SET status = 'CANCELLED', updated_at = NOW()
-        WHERE id = $1
-        RETURNING *
-        `,
-        [applicationId]
-      );
+      // Update application
+      const { data: updated, error: updateError } = await supabaseAdmin
+        .from('applications')
+        .update({
+          status: 'CANCELLED',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', applicationId)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('[ApplicationService/cancel] Update error:', updateError);
+        return {
+          success: false,
+          message: updateError.message || 'Failed to cancel application',
+        };
+      }
 
       return {
         success: true,
@@ -241,10 +281,16 @@ class ApplicationService {
    */
   async complete(applicationId) {
     try {
-      const app = await db.oneOrNone(
-        'SELECT * FROM applications WHERE id = $1',
-        [applicationId]
-      );
+      const { data: app, error: fetchError } = await supabaseAdmin
+        .from('applications')
+        .select('*')
+        .eq('id', applicationId)
+        .maybeSingle();
+
+      if (fetchError) {
+        console.error('[ApplicationService/complete] Fetch error:', fetchError);
+        return { success: false, message: 'Database error' };
+      }
 
       if (!app) {
         return { success: false, message: 'Application not found' };
@@ -258,15 +304,24 @@ class ApplicationService {
         };
       }
 
-      const updated = await db.one(
-        `
-        UPDATE applications
-        SET status = 'COMPLETED', updated_at = NOW()
-        WHERE id = $1
-        RETURNING *
-        `,
-        [applicationId]
-      );
+      // Update application
+      const { data: updated, error: updateError } = await supabaseAdmin
+        .from('applications')
+        .update({
+          status: 'COMPLETED',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', applicationId)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('[ApplicationService/complete] Update error:', updateError);
+        return {
+          success: false,
+          message: updateError.message || 'Failed to complete application',
+        };
+      }
 
       return {
         success: true,
