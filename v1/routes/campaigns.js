@@ -7,6 +7,7 @@ const {
   validateUpdateCampaign,
   validateCampaignFilters,
 } = require("../validators/campaignValidators");
+const { upload } = require("../utils/imageUpload");
 
 // ============================================
 // PROTECTED ROUTES - Campaign Management
@@ -51,6 +52,34 @@ router.get(
 );
 
 /**
+ * Upload campaign image (Brand Owner only)
+ * POST /api/v1/campaigns/:id/image
+ * NOTE: This must come before /:id route to avoid route conflicts
+ */
+router.post(
+  "/:id/image",
+  authMiddleware.requireRole(["BRAND"]),
+  (req, res, next) => {
+    upload.single("image")(req, res, (err) => {
+      if (err) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return res.status(400).json({
+            success: false,
+            message: "File too large. Maximum size is 5MB",
+          });
+        }
+        return res.status(400).json({
+          success: false,
+          message: err.message || "File upload error",
+        });
+      }
+      next();
+    });
+  },
+  CampaignController.uploadCampaignImage
+);
+
+/**
  * Get single campaign by ID
  * GET /api/v1/campaigns/:id
  * (Public for authenticated users)
@@ -79,4 +108,3 @@ router.delete(
 );
 
 module.exports = router;
-

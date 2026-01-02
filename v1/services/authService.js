@@ -2,7 +2,7 @@ const { supabaseAdmin } = require("../db/config");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
-const whatsappService = require("../../utils/whatsapp");
+const whatsappService = require("../utils/whatsapp");
 
 class AuthService {
   constructor() {
@@ -34,9 +34,9 @@ class AuthService {
 
       if (error) {
         console.error("[v1/storeOTP] error:", error);
-        throw error;
+        return { success: false, message: "Failed to store OTP" };
       }
-
+      
       return { success: true };
     } catch (err) {
       console.error("[v1/storeOTP] error:", err);
@@ -100,7 +100,6 @@ class AuthService {
     if (role === "influencer") return "INFLUENCER";
     if (role === "brand_owner" || role === "brand") return "BRAND";
     if (role === "admin") return "ADMIN";
-    if (role === "agent") return "AGENT";
     return "INFLUENCER"; // default
   }
 

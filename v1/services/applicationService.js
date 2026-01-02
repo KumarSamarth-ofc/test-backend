@@ -8,7 +8,7 @@ class ApplicationService {
   async checkBrandOwnership(applicationId, brandId) {
     try {
       const { data, error } = await supabaseAdmin
-        .from('applications')
+        .from('v1_applications')
         .select(`
           *,
           campaigns!inner(brand_id)
@@ -42,7 +42,7 @@ class ApplicationService {
   async checkCancelPermission(applicationId, userId, userRole) {
     try {
       const { data, error } = await supabaseAdmin
-        .from('applications')
+        .from('v1_applications')
         .select(`
           *,
           campaigns!inner(brand_id)
@@ -83,7 +83,7 @@ class ApplicationService {
     try {
       // Check if campaign exists and is in valid state
       const { data: campaign, error: campaignError } = await supabaseAdmin
-        .from('campaigns')
+        .from('v1_campaigns')
         .select('*')
         .eq('id', campaignId)
         .maybeSingle();
@@ -103,7 +103,7 @@ class ApplicationService {
 
       // Check for duplicate application
       const { data: existing, error: existingError } = await supabaseAdmin
-        .from('applications')
+        .from('v1_applications')
         .select('*')
         .eq('campaign_id', campaignId)
         .eq('influencer_id', influencerId)
@@ -120,7 +120,7 @@ class ApplicationService {
 
       // Insert new application
       const { data: app, error: insertError } = await supabaseAdmin
-        .from('applications')
+        .from('v1_applications')
         .insert({
           campaign_id: campaignId,
           influencer_id: influencerId,
