@@ -315,6 +315,27 @@ class AuthService {
     return null; // Invalid gender, return null
   }
 
+  normalizeTier(tier) {
+    if (!tier) return null;
+  
+    const normalized = String(tier).toUpperCase().trim();
+    const validTiers = ["NANO", "MICRO", "MID", "MACRO"];
+  
+    if (validTiers.includes(normalized)) {
+      return normalized;
+    }
+  
+    // Handle lowercase variations
+    const lower = normalized.toLowerCase();
+    if (lower === "nano") return "NANO";
+    if (lower === "micro") return "MICRO";
+    if (lower === "mid") return "MID";
+    if (lower === "macro") return "MACRO";
+  
+    return null; // Invalid tier, return null
+  }
+  
+
   async createInfluencerProfile(user, userData) {
     try {
       // Extract primary language from userData
@@ -322,40 +343,55 @@ class AuthService {
         userData?.primary_language ||
         (Array.isArray(userData?.languages) && userData.languages[0]) ||
         null;
-
+  
+      // Extract languages array
+      const languagesArray = Array.isArray(userData?.languages) 
+        ? userData.languages.filter(lang => lang && String(lang).trim().length > 0)
+        : null;
+  
+      // Extract categories array
+      const categoriesArray = Array.isArray(userData?.categories)
+        ? userData.categories.filter(cat => cat && String(cat).trim().length > 0)
+        : null;
+  
       // Use placeholder image URL if no image provided
-      // This will be replaced during image upload
       const placeholderImageUrl =
         "https://via.placeholder.com/400x400?text=Profile+Image";
-
+  
       const profile = {
         user_id: user.id,
-        profile_photo_url: userData?.profile_image_url || placeholderImageUrl, // Required field - use placeholder if not provided
+        profile_photo_url: userData?.profile_image_url || placeholderImageUrl,
         is_profile_verified: false,
-        bio: userData?.bio || "", // Required field - use empty string if not provided
-        city: userData?.address_city || null,
-        country: userData?.address_country || null,
+        bio: userData?.bio || "",
+        city: userData?.address_city || userData?.city || null,
+        country: userData?.address_country || userData?.country || null,
         primary_language: primaryLanguage,
+        languages: languagesArray, // Store as array
         gender: this.normalizeGender(userData?.gender),
-        tier: null, // Will be calculated later
+        tier: this.normalizeTier(userData?.tier),
         pan_number: userData?.pan_number || null,
         pan_verified: false,
         profile_completion_pct: 0,
         is_deleted: false,
+        categories: categoriesArray, // Store as array
+        min_value: userData?.min_value !== undefined ? parseFloat(userData.min_value) : null,
+        max_value: userData?.max_value !== undefined ? parseFloat(userData.max_value) : null,
       };
-
+  
       console.log("[v1/createInfluencerProfile] Inserting profile:", {
         user_id: profile.user_id,
         has_photo: !!profile.profile_photo_url,
         has_bio: !!profile.bio,
         has_gender: !!profile.gender,
+        languages_count: languagesArray?.length || 0,
+        categories_count: categoriesArray?.length || 0,
       });
-
+  
       const { data, error } = await supabaseAdmin
         .from("v1_influencer_profiles")
         .insert(profile)
         .select();
-
+  
       if (error) {
         console.error("[v1/createInfluencerProfile] Database error:", error);
         console.error(
@@ -364,10 +400,10 @@ class AuthService {
         );
         return { success: false, error: error.message, details: error };
       }
-
+  
       console.log(
         "[v1/createInfluencerProfile] Profile created successfully:",
-        data?.[0]?.id
+        data?.[0]?.user_id
       );
       return { success: true, profile: data?.[0] };
     } catch (err) {
@@ -381,11 +417,11 @@ class AuthService {
       // Use placeholder logo URL if no image provided
       const placeholderLogoUrl =
         "https://via.placeholder.com/400x400?text=Brand+Logo";
-
+  
       // Ensure brand_name is always a string (required field)
       // Empty string is allowed - will be updated in complete profile endpoint
       const brandName = userData?.brand_name || userData?.business_name || "";
-
+  
       const profile = {
         user_id: user.id,
         brand_name: brandName, // Required field - empty string allowed initially
@@ -393,14 +429,15 @@ class AuthService {
           userData?.brand_logo_url ||
           userData?.profile_image_url ||
           placeholderLogoUrl, // Required field - use placeholder if not provided
-        bio: userData?.bio || userData?.brand_description || null,
+        bio: userData?.bio || null,
+        brand_description: userData?.brand_description || null, // Add brand_description
         gender: this.normalizeGender(userData?.gender),
         pan_number: userData?.pan_number || null,
         pan_verified: false,
         profile_completion_pct: 0,
         is_deleted: false,
       };
-
+  
       console.log(
         "[v1/createBrandProfile] Inserting profile into v1_brand_profiles:",
         {
@@ -408,16 +445,18 @@ class AuthService {
           brand_name: profile.brand_name,
           brand_logo_url: profile.brand_logo_url,
           bio: profile.bio,
+          brand_description: profile.brand_description,
+          gender: profile.gender,
           pan_number: profile.pan_number,
         }
       );
-
+  
       const { data, error } = await supabaseAdmin
         .from("v1_brand_profiles")
         .insert(profile)
         .select("*")
         .single();
-
+  
       if (error) {
         console.error("[v1/createBrandProfile] Database error:", error);
         console.error(
@@ -430,12 +469,12 @@ class AuthService {
         );
         return { success: false, error: error.message, details: error };
       }
-
+  
       if (!data) {
         console.error("[v1/createBrandProfile] No data returned from insert");
         return { success: false, error: "Profile creation returned no data" };
       }
-
+  
       console.log(
         "[v1/createBrandProfile] Profile created successfully in v1_brand_profiles:",
         {
@@ -1153,33 +1192,36 @@ class AuthService {
         if (user.role === "INFLUENCER") {
           const profileData = {
             user_id: userId,
-            profile_photo_url: url, // Required field - filled with uploaded image
+            profile_photo_url: url,
             is_profile_verified: false,
-            bio: "", // Required field - use empty string instead of null
+            bio: "",
             city: null,
             country: null,
             primary_language: null,
+            languages: null,
             gender: null,
             tier: null,
             pan_number: null,
             pan_verified: false,
             profile_completion_pct: 0,
             is_deleted: false,
+            categories: null,
+            min_value: null,
+            max_value: null,
           };
-
+      
           const { data: createdProfile, error: createError } =
             await supabaseAdmin
               .from("v1_influencer_profiles")
               .insert(profileData)
               .select()
               .single();
-
+      
           if (createError) {
             console.error(
               "[v1/uploadProfileImage] Profile creation error:",
               createError
             );
-            // Try to delete uploaded image if profile creation fails
             await deleteImageFromStorage(url);
             return {
               success: false,
@@ -1187,6 +1229,7 @@ class AuthService {
               error: createError.message,
             };
           }
+      
 
           updatedProfile = createdProfile;
         } else {
@@ -1396,53 +1439,57 @@ class AuthService {
   }
 
   /**
-   * Upsert categories for v1 influencer
+   * NOTE: Categories are now stored as text[] array in v1_influencer_profiles table.
+   * The separate v1_influencer_categories table approach is deprecated.
+   * This method is kept for reference but should not be used.
+   * 
+   * @deprecated Use profile.categories array field instead
    */
-  async upsertCategories(userId, categories) {
-    try {
-      if (!Array.isArray(categories) || categories.length === 0) {
-        return { success: true, count: 0 };
-      }
+  // async upsertCategories(userId, categories) {
+  //   try {
+  //     if (!Array.isArray(categories) || categories.length === 0) {
+  //       return { success: true, count: 0 };
+  //     }
 
-      // Delete existing categories for this user
-      const { error: deleteError } = await supabaseAdmin
-        .from("v1_influencer_categories")
-        .delete()
-        .eq("user_id", userId);
+  //     // Delete existing categories for this user
+  //     const { error: deleteError } = await supabaseAdmin
+  //       .from("v1_influencer_categories")
+  //       .delete()
+  //       .eq("user_id", userId);
 
-      if (deleteError) {
-        console.error("[v1/upsertCategories] Delete error:", deleteError);
-        // Continue anyway - might be first time
-      }
+  //     if (deleteError) {
+  //       console.error("[v1/upsertCategories] Delete error:", deleteError);
+  //       // Continue anyway - might be first time
+  //     }
 
-      // Insert new categories
-      const categoryData = categories
-        .filter((cat) => cat && String(cat).trim().length > 0)
-        .map((cat) => ({
-          user_id: userId,
-          category: String(cat).trim(),
-        }));
+  //     // Insert new categories
+  //     const categoryData = categories
+  //       .filter((cat) => cat && String(cat).trim().length > 0)
+  //       .map((cat) => ({
+  //         user_id: userId,
+  //         category: String(cat).trim(),
+  //       }));
 
-      if (categoryData.length === 0) {
-        return { success: true, count: 0 };
-      }
+  //     if (categoryData.length === 0) {
+  //       return { success: true, count: 0 };
+  //     }
 
-      const { data, error: insertError } = await supabaseAdmin
-        .from("v1_influencer_categories")
-        .insert(categoryData)
-        .select();
+  //     const { data, error: insertError } = await supabaseAdmin
+  //       .from("v1_influencer_categories")
+  //       .insert(categoryData)
+  //       .select();
 
-      if (insertError) {
-        console.error("[v1/upsertCategories] Insert error:", insertError);
-        return { success: false, count: 0, error: insertError.message };
-      }
+  //     if (insertError) {
+  //       console.error("[v1/upsertCategories] Insert error:", insertError);
+  //       return { success: false, count: 0, error: insertError.message };
+  //     }
 
-      return { success: true, count: data?.length || 0, categories: data };
-    } catch (err) {
-      console.error("[v1/upsertCategories] Exception:", err);
-      return { success: false, count: 0, error: err.message };
-    }
-  }
+  //     return { success: true, count: data?.length || 0, categories: data };
+  //   } catch (err) {
+  //     console.error("[v1/upsertCategories] Exception:", err);
+  //     return { success: false, count: 0, error: err.message };
+  //   }
+  // }
 
   /**
    * Complete profile - handles both INFLUENCER and BRAND roles
@@ -1473,15 +1520,106 @@ class AuthService {
    */
   async completeInfluencerProfile(userId, profileData) {
     try {
-      // 1) Update v1_influencer_profiles
+      // 1) Update v1_influencer_profiles with all fields
       const profileUpdate = {};
+      
       if (profileData.pan_number !== undefined) {
         profileUpdate.pan_number = profileData.pan_number || null;
       }
+      
       if (profileData.primary_language !== undefined) {
         profileUpdate.primary_language = profileData.primary_language || null;
       }
+      
+      // Handle languages array
+      if (profileData.languages !== undefined) {
+        if (Array.isArray(profileData.languages)) {
+          const filteredLanguages = profileData.languages
+            .filter(lang => lang && String(lang).trim().length > 0)
+            .map(lang => String(lang).trim());
+          profileUpdate.languages = filteredLanguages.length > 0 ? filteredLanguages : null;
+          // Also update primary_language if not explicitly set
+          if (!profileData.primary_language && filteredLanguages.length > 0) {
+            profileUpdate.primary_language = filteredLanguages[0];
+          }
+        } else {
+          profileUpdate.languages = null;
+        }
+      }
+      
+      // Handle categories array
+      if (profileData.categories !== undefined) {
+        if (Array.isArray(profileData.categories)) {
+          const filteredCategories = profileData.categories
+            .filter(cat => cat && String(cat).trim().length > 0)
+            .map(cat => String(cat).trim());
+          profileUpdate.categories = filteredCategories.length > 0 ? filteredCategories : null;
+        } else {
+          profileUpdate.categories = null;
+        }
+      }
+      
+      // Handle bio
+      if (profileData.bio !== undefined) {
+        profileUpdate.bio = profileData.bio !== null && profileData.bio !== undefined
+          ? String(profileData.bio).trim()
+          : "";
+      }
+      
+      // Handle city
+      if (profileData.city !== undefined) {
+        profileUpdate.city = profileData.city !== null && profileData.city !== undefined
+          ? String(profileData.city).trim() || null
+          : null;
+      }
+      
+      // Handle country
+      if (profileData.country !== undefined) {
+        profileUpdate.country = profileData.country !== null && profileData.country !== undefined
+          ? String(profileData.country).trim() || null
+          : null;
+      }
+      
+      // Handle gender
+      if (profileData.gender !== undefined) {
+        profileUpdate.gender = this.normalizeGender(profileData.gender);
+      }
+      
+      // Handle tier
+      if (profileData.tier !== undefined) {
+        profileUpdate.tier = this.normalizeTier(profileData.tier);
+      }
+      
+      // Handle min_value with proper null/NaN checking
+      if (profileData.min_value !== undefined) {
+        if (profileData.min_value === null || profileData.min_value === undefined || profileData.min_value === "") {
+          profileUpdate.min_value = null;
+        } else {
+          const parsed = parseFloat(profileData.min_value);
+          profileUpdate.min_value = !isNaN(parsed) ? parsed : null;
+        }
+      }
+      
+      // Handle max_value with proper null/NaN checking
+      if (profileData.max_value !== undefined) {
+        if (profileData.max_value === null || profileData.max_value === undefined || profileData.max_value === "") {
+          profileUpdate.max_value = null;
+        } else {
+          const parsed = parseFloat(profileData.max_value);
+          profileUpdate.max_value = !isNaN(parsed) ? parsed : null;
+        }
+      }
 
+      // Validate min_value < max_value if both are provided and non-null
+      if (profileUpdate.min_value !== null && profileUpdate.max_value !== null) {
+        if (profileUpdate.min_value >= profileUpdate.max_value) {
+          return {
+            success: false,
+            message: "min_value must be less than max_value",
+          };
+        }
+      }
+  
       let updatedProfile = null;
       if (Object.keys(profileUpdate).length > 0) {
         const { data, error: updateError } = await supabaseAdmin
@@ -1491,7 +1629,7 @@ class AuthService {
           .eq("is_deleted", false)
           .select()
           .single();
-
+  
         if (updateError) {
           console.error(
             "[v1/completeInfluencerProfile] Profile update error:",
@@ -1499,7 +1637,7 @@ class AuthService {
           );
           return { success: false, message: "Failed to update profile" };
         }
-
+  
         updatedProfile = data;
       } else {
         // Fetch existing profile if no updates
@@ -1509,7 +1647,7 @@ class AuthService {
           .eq("user_id", userId)
           .eq("is_deleted", false)
           .single();
-
+  
         if (fetchError) {
           console.error(
             "[v1/completeInfluencerProfile] Profile fetch error:",
@@ -1517,11 +1655,11 @@ class AuthService {
           );
           return { success: false, message: "Profile not found" };
         }
-
+  
         updatedProfile = data;
       }
-
-      // 2) Upsert social platforms
+  
+      // 2) Upsert social platforms (still in separate table)
       let socialPlatformsResult = { success: true, count: 0 };
       if (
         profileData.social_platforms &&
@@ -1539,32 +1677,13 @@ class AuthService {
           // Continue - don't fail entire request
         }
       }
-
-      // 3) Upsert categories
-      let categoriesResult = { success: true, count: 0 };
-      if (profileData.categories && Array.isArray(profileData.categories)) {
-        categoriesResult = await this.upsertCategories(
-          userId,
-          profileData.categories
-        );
-        if (!categoriesResult.success) {
-          console.error(
-            "[v1/completeInfluencerProfile] Categories update failed:",
-            categoriesResult.error
-          );
-          return {
-            success: false,
-            message: `Failed to update categories: ${categoriesResult.error}`,
-          };
-        }
-      }
-
-      // 4) Calculate profile completion percentage
+  
+      // 3) Calculate profile completion percentage
+      // Now using categories and languages from main table
       const completionPct = this.calculateProfileCompletion(updatedProfile, {
         hasSocialPlatforms: socialPlatformsResult.count > 0,
-        hasCategories: categoriesResult.count > 0,
       });
-
+  
       // Update completion percentage
       if (completionPct !== updatedProfile.profile_completion_pct) {
         await supabaseAdmin
@@ -1573,12 +1692,13 @@ class AuthService {
           .eq("user_id", userId);
         updatedProfile.profile_completion_pct = completionPct;
       }
-
+  
       return {
         success: true,
         profile: updatedProfile,
         social_platforms_count: socialPlatformsResult.count,
-        categories_count: categoriesResult.count,
+        categories_count: updatedProfile.categories?.length || 0,
+        languages_count: updatedProfile.languages?.length || 0,
         profile_completion_pct: completionPct,
         message: "Profile completed successfully",
       };
@@ -1590,6 +1710,7 @@ class AuthService {
       };
     }
   }
+  
 
   /**
    * Complete brand profile with PAN, brand_name, bio, brand_logo
@@ -1601,9 +1722,10 @@ class AuthService {
         deleteImageFromStorage,
       } = require("../../utils/imageUpload");
 
-      // 1) Handle brand logo upload if provided
+      // 1) Handle brand logo - file upload takes priority over direct URL
       let brandLogoUrl = null;
       if (profileData.brand_logo_file) {
+        // File upload - upload to storage
         const { url, error: uploadError } = await uploadImageToStorage(
           profileData.brand_logo_file.buffer,
           profileData.brand_logo_file.originalname,
@@ -1623,7 +1745,7 @@ class AuthService {
 
         brandLogoUrl = url;
 
-        // Delete old logo if exists
+        // Delete old logo if exists (only if it's from our storage)
         const { data: currentProfile } = await supabaseAdmin
           .from("v1_brand_profiles")
           .select("brand_logo_url")
@@ -1632,7 +1754,49 @@ class AuthService {
           .maybeSingle();
 
         if (currentProfile?.brand_logo_url) {
-          await deleteImageFromStorage(currentProfile.brand_logo_url);
+          // Only delete if it's from our storage (contains storage URL pattern)
+          const placeholderUrl = "https://via.placeholder.com/400x400?text=Brand+Logo";
+          if (
+            currentProfile.brand_logo_url !== placeholderUrl &&
+            (currentProfile.brand_logo_url.includes('storage') ||
+             currentProfile.brand_logo_url.includes('supabase') ||
+             currentProfile.brand_logo_url.includes('supabase.co'))
+          ) {
+            await deleteImageFromStorage(currentProfile.brand_logo_url);
+          }
+        }
+      } else if (profileData.brand_logo_url !== undefined) {
+        // Direct URL provided (no file upload)
+        if (profileData.brand_logo_url === null || profileData.brand_logo_url === "") {
+          brandLogoUrl = null;
+        } else {
+          brandLogoUrl = String(profileData.brand_logo_url).trim();
+        }
+
+        // Optionally delete old logo if it was from our storage and URL is changing
+        if (brandLogoUrl) {
+          const { data: currentProfile } = await supabaseAdmin
+            .from("v1_brand_profiles")
+            .select("brand_logo_url")
+            .eq("user_id", userId)
+            .eq("is_deleted", false)
+            .maybeSingle();
+
+          if (
+            currentProfile?.brand_logo_url &&
+            currentProfile.brand_logo_url !== brandLogoUrl
+          ) {
+            // Only delete if it's from our storage
+            const placeholderUrl = "https://via.placeholder.com/400x400?text=Brand+Logo";
+            if (
+              currentProfile.brand_logo_url !== placeholderUrl &&
+              (currentProfile.brand_logo_url.includes('storage') ||
+               currentProfile.brand_logo_url.includes('supabase') ||
+               currentProfile.brand_logo_url.includes('supabase.co'))
+            ) {
+              await deleteImageFromStorage(currentProfile.brand_logo_url);
+            }
+          }
         }
       }
 
@@ -1691,8 +1855,8 @@ class AuthService {
         );
       }
 
-      // Update bio if provided
-      if (profileData.bio !== undefined) {
+       // Update bio if provided
+       if (profileData.bio !== undefined) {
         // Explicitly check for null/undefined, preserve empty strings
         if (profileData.bio === null || profileData.bio === undefined) {
           profileUpdate.bio = null;
@@ -1706,8 +1870,35 @@ class AuthService {
         );
       }
 
-      if (brandLogoUrl) {
+      // Update brand_description if provided
+      if (profileData.brand_description !== undefined) {
+        if (profileData.brand_description === null || profileData.brand_description === undefined) {
+          profileUpdate.brand_description = null;
+        } else {
+          const trimmed = String(profileData.brand_description).trim();
+          profileUpdate.brand_description = trimmed || null;
+        }
+        console.log(
+          "[v1/completeBrandProfile] Setting brand_description:",
+          profileUpdate.brand_description
+        );
+      }
+
+      // Update gender if provided
+      if (profileData.gender !== undefined) {
+        profileUpdate.gender = this.normalizeGender(profileData.gender);
+        console.log(
+          "[v1/completeBrandProfile] Setting gender:",
+          profileUpdate.gender
+        );
+      }
+
+      // Update brand_logo_url if provided (from file upload or direct URL)
+      if (brandLogoUrl !== null) {
         profileUpdate.brand_logo_url = brandLogoUrl;
+      } else if (profileData.brand_logo_url !== undefined && profileData.brand_logo_url === null) {
+        // Explicitly set to null if provided as null
+        profileUpdate.brand_logo_url = null;
       }
 
       console.log(
@@ -1739,7 +1930,8 @@ class AuthService {
           brand_name: profileData.brand_name || "", // Required field
           brand_logo_url: brandLogoUrl || placeholderLogoUrl, // Required field
           bio: profileData.bio || null,
-          gender: null,
+          brand_description: profileData.brand_description || null, // Add brand_description
+          gender: this.normalizeGender(profileData.gender) || null, // Add gender
           pan_number: profileData.pan_number || null,
           pan_verified: false,
           profile_completion_pct: 0,
@@ -1834,52 +2026,58 @@ class AuthService {
   calculateBrandProfileCompletion(profile) {
     let completed = 0;
     let total = 0;
-
+  
     // Required/important fields
     total++;
     if (profile.brand_logo_url) completed++;
-
+  
     total++;
     if (profile.brand_name) completed++;
-
+  
     total++;
     if (profile.bio) completed++;
-
+  
+    total++;
+    if (profile.brand_description) completed++; // Add brand_description
+  
     total++;
     if (profile.pan_number) completed++;
-
+  
     return Math.round((completed / total) * 100);
   }
 
   /**
    * Calculate influencer profile completion percentage
    */
+ 
   calculateProfileCompletion(profile, extras = {}) {
     let completed = 0;
     let total = 0;
-
+  
     // Required fields
     total++;
     if (profile.profile_photo_url) completed++;
-
+  
     total++;
-    if (profile.bio) completed++;
-
+    if (profile.bio && profile.bio.trim().length > 0) completed++;
+  
     // Optional but important
     total++;
     if (profile.pan_number) completed++;
-
+  
     total++;
-    if (profile.primary_language) completed++;
-
+    if (profile.primary_language || (profile.languages && profile.languages.length > 0)) completed++;
+  
     total++;
     if (extras.hasSocialPlatforms) completed++;
-
+  
+    // Check categories from main table array
     total++;
-    if (extras.hasCategories) completed++;
-
+    if (profile.categories && Array.isArray(profile.categories) && profile.categories.length > 0) completed++;
+  
     return Math.round((completed / total) * 100);
   }
+
 }
 
 module.exports = new AuthService();

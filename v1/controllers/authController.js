@@ -255,17 +255,40 @@ class AuthController {
           // Ignore parse errors
         }
       }
+      // Add parsing for brand_description if it comes as string in multipart
+      if (typeof bodyData.brand_description === "string") {
+        try {
+          // Try to parse as JSON first (in case it's a JSON string)
+          const parsed = JSON.parse(bodyData.brand_description);
+          // Only use parsed value if it's a string (not an object)
+          if (typeof parsed === "string") {
+            bodyData.brand_description = parsed;
+          }
+          // If parsed to non-string, keep original (shouldn't happen but safe)
+        } catch (e) {
+          // If not JSON, keep as string (it's already a string)
+        }
+      }
 
       const {
         pan_number,
-        upi_id, // Note: Not in schema yet, but accepting for future use
+        upi_id,
         social_platforms,
         languages,
         categories,
+        // Additional influencer fields
+        bio,
+        city,
+        country,
+        gender,
+        tier,
+        min_value,
+        max_value,
         // Brand-specific fields
         brand_name,
-        bio,
-        brand_logo_file, // File object from multer
+        brand_description,
+        brand_logo_url,
+        brand_logo_file,
       } = bodyData;
 
       // Debug logging
@@ -287,12 +310,40 @@ class AuthController {
         // Influencer-specific fields
         if (languages && Array.isArray(languages) && languages.length > 0) {
           profileData.primary_language = languages[0];
+          profileData.languages = languages; // Pass full array
+        } else if (languages !== undefined) {
+          profileData.languages = languages; // Allow empty array
         }
+        
         if (social_platforms !== undefined) {
           profileData.social_platforms = social_platforms;
         }
+        
         if (categories !== undefined) {
-          profileData.categories = categories;
+          profileData.categories = categories; // Pass array directly
+        }
+        
+        // Additional fields
+        if (bio !== undefined) {
+          profileData.bio = bio;
+        }
+        if (city !== undefined) {
+          profileData.city = city;
+        }
+        if (country !== undefined) {
+          profileData.country = country;
+        }
+        if (gender !== undefined) {
+          profileData.gender = gender;
+        }
+        if (tier !== undefined) {
+          profileData.tier = tier;
+        }
+        if (min_value !== undefined) {
+          profileData.min_value = min_value;
+        }
+        if (max_value !== undefined) {
+          profileData.max_value = max_value;
         }
       } else if (userRole === "BRAND") {
         // Brand-specific fields
@@ -302,8 +353,18 @@ class AuthController {
         if (bio !== undefined) {
           profileData.bio = bio;
         }
+        if (brand_description !== undefined) {
+          profileData.brand_description = brand_description;
+        }
+        if (gender !== undefined) {
+          profileData.gender = gender;
+        }
         if (brand_logo_file) {
           profileData.brand_logo_file = brand_logo_file;
+        }
+        // Add support for direct brand_logo_url (file upload takes priority)
+        if (brand_logo_url !== undefined && !brand_logo_file) {
+          profileData.brand_logo_url = brand_logo_url;
         }
       }
 
