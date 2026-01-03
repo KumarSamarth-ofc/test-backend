@@ -25,4 +25,8 @@ router.use('/users', userRoutes); // → /api/v1/users/*
 const planRoutes = require('./plans');
 router.use('/plans', planRoutes); // → /api/v1/plans/*
 
+// Mount v1 subscription routes
+const subscriptionRoutes = require('./subscriptions');
+router.use('/subscriptions', subscriptionRoutes); // → /api/v1/subscriptions/*
+
 module.exports = router;
