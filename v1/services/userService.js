@@ -69,10 +69,15 @@ class UserService {
         );
       }
 
-      // Get campaigns created by this brand
+      // Get campaigns created by this brand with nested applications
       const { data: campaigns, error: campaignsError } = await supabaseAdmin
         .from("v1_campaigns")
-        .select("*")
+        .select(`
+          *,
+          v1_applications(
+            *
+          )
+        `)
         .eq("brand_id", user.id)
         .eq("is_deleted", false)
         .order("created_at", { ascending: false });
@@ -84,36 +89,20 @@ class UserService {
         );
       }
 
-      // Get applications for this brand's campaigns
-      const { data: applications, error: applicationsError } =
-        await supabaseAdmin
-          .from("v1_applications")
-          .select(`
-            *,
-            v1_campaigns(
-              id,
-              title,
-              brand_id,
-              cover_image_url,
-              status
-            )
-          `)
-          .eq("brand_id", user.id)
-          .order("created_at", { ascending: false });
-
-      if (applicationsError) {
-        console.error(
-          "[v1/UserService/getBrandUserData] Applications error:",
-          applicationsError
-        );
-      }
+      // Rename v1_applications to applications
+      const campaignsWithApplications = (campaigns || []).map(campaign => {
+        const { v1_applications, ...campaignData } = campaign;
+        return {
+          ...campaignData,
+          applications: v1_applications || []
+        };
+      });
 
       return {
         success: true,
         user: user,
         brand_profile: brandProfile || null,
-        campaigns: campaigns || [],
-        applications: applications || [],
+        campaigns: campaignsWithApplications,
       };
     } catch (err) {
       console.error(
@@ -165,18 +154,14 @@ class UserService {
         );
       }
 
-      // Get applications made by this influencer
+      // Get applications made by this influencer with nested campaign data
       const { data: applications, error: applicationsError } =
         await supabaseAdmin
           .from("v1_applications")
           .select(`
             *,
             v1_campaigns(
-              id,
-              title,
-              brand_id,
-              cover_image_url,
-              status
+              *
             )
           `)
           .eq("influencer_id", user.id)
@@ -189,12 +174,21 @@ class UserService {
         );
       }
 
+      // Rename v1_campaigns to campaign (singular, as each application has one campaign)
+      const applicationsWithCampaigns = (applications || []).map(application => {
+        const { v1_campaigns, ...applicationData } = application;
+        return {
+          ...applicationData,
+          campaign: v1_campaigns || null
+        };
+      });
+
       return {
         success: true,
         user: user,
         influencer_profile: influencerProfile || null,
         social_accounts: socialAccounts || [],
-        applications: applications || [],
+        applications: applicationsWithCampaigns,
       };
     } catch (err) {
       console.error(
