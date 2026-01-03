@@ -224,13 +224,21 @@ class AuthController {
       // Handle both JSON and multipart/form-data
       let bodyData = req.body;
 
-      // If multipart, parse JSON fields from req.body (multer adds them as strings)
-      if (req.file) {
-        // Brand logo file uploaded
-        bodyData = {
-          ...bodyData,
-          brand_logo_file: req.file, // Pass file object to service
-        };
+      // If multipart, handle file uploads
+      if (req.files) {
+        // Handle profile image for influencers
+        if (req.files.profileImage && req.files.profileImage[0]) {
+          bodyData.profile_image_file = req.files.profileImage[0];
+        }
+        // Handle brand logo for brands (backward compatible with brand_logo)
+        if (req.files.brandLogo && req.files.brandLogo[0]) {
+          bodyData.brand_logo_file = req.files.brandLogo[0];
+        }
+      }
+      // Backward compatibility: also check req.file (for single file uploads)
+      if (req.file && !bodyData.brand_logo_file && !bodyData.profile_image_file) {
+        // Assume it's brand_logo for backward compatibility
+        bodyData.brand_logo_file = req.file;
       }
 
       // Parse JSON strings if they exist (multer sends JSON as strings)
@@ -307,6 +315,15 @@ class AuthController {
       };
 
       if (userRole === "INFLUENCER") {
+        // Handle profile image file upload
+        if (profile_image_file) {
+          profileData.profile_image_file = profile_image_file;
+        }
+        // Add support for direct profile_image_url (file upload takes priority)
+        if (profile_image_url !== undefined && !profile_image_file) {
+          profileData.profile_image_url = profile_image_url;
+        }
+
         // Influencer-specific fields
         if (languages && Array.isArray(languages) && languages.length > 0) {
           profileData.primary_language = languages[0];
@@ -394,6 +411,9 @@ class AuthController {
         if (userRole === "INFLUENCER") {
           response.social_platforms_count = result.social_platforms_count;
           response.categories_count = result.categories_count;
+          if (result.profile_image_url) {
+            response.profile_image_url = result.profile_image_url;
+          }
         } else if (userRole === "BRAND") {
           if (result.brand_logo_url) {
             response.brand_logo_url = result.brand_logo_url;

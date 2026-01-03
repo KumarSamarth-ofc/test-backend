@@ -15,7 +15,7 @@ const ChatService = {
 
     // Check if chat already exists
     const { data: existingChat } = await supabaseAdmin
-      .from('chats')
+      .from('v1_chats')
       .select('id')
       .eq('application_id', applicationId)
       .single();
@@ -25,7 +25,7 @@ const ChatService = {
     }
 
     const { data, error } = await supabaseAdmin
-      .from('chats')
+      .from('v1_chats')
       .insert({
         application_id: applicationId,
         status: 'ACTIVE' // [cite: 166]
@@ -56,7 +56,7 @@ const ChatService = {
     try {
       // Check if user is either the influencer or brand owner of this application
       const { data: application, error } = await supabaseAdmin
-        .from('applications')
+        .from('v1_applications')
         .select('influencer_id, campaigns(created_by)')
         .eq('id', applicationId)
         .single();
@@ -89,7 +89,7 @@ const ChatService = {
     }
 
     const { data: chat, error } = await supabaseAdmin
-      .from('chats')
+      .from('v1_chats')
       .select('id, status, application_id')
       .eq('application_id', applicationId)
       .single();
@@ -131,7 +131,7 @@ const ChatService = {
 
     // 1. Fetch Chat and Application Status
     const { data: chat, error: chatError } = await supabaseAdmin
-      .from('chats')
+      .from('v1_chats')
       .select('id, status, applications(phase)')
       .eq('application_id', applicationId)
       .single();
@@ -157,7 +157,7 @@ const ChatService = {
 
     // 5. Persist to chat_messages [cite: 168]
     const { data: savedMessage, error: saveError } = await supabaseAdmin
-      .from('chat_messages')
+      .from('v1_chat_messages')
       .insert({
         chat_id: chat.id,
         sender_id: userId,
@@ -193,7 +193,7 @@ const ChatService = {
     }
 
     const { data: chat } = await supabaseAdmin
-      .from('chats')
+      .from('v1_chats')
       .select('id')
       .eq('application_id', applicationId)
       .single();
@@ -203,7 +203,7 @@ const ChatService = {
     }
 
     const { data, error } = await supabaseAdmin
-      .from('chat_messages')
+      .from('v1_chat_messages')
       .select('*')
       .eq('chat_id', chat.id)
       .order('created_at', { ascending: true })
@@ -229,7 +229,7 @@ const ChatService = {
     }
 
     const { error } = await supabaseAdmin
-      .from('chats')
+      .from('v1_chats')
       .update({ status: 'CLOSED' })
       .eq('application_id', applicationId);
     

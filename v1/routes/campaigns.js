@@ -19,10 +19,28 @@ router.use(authMiddleware.authenticateToken);
 /**
  * Create a new campaign (Brand Owner only)
  * POST /api/v1/campaigns
+ * Accepts multipart/form-data with optional 'coverImage' file field
  */
 router.post(
   "/",
   authMiddleware.requireRole(["BRAND"]),
+  (req, res, next) => {
+    upload.single("coverImage")(req, res, (err) => {
+      if (err) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return res.status(400).json({
+            success: false,
+            message: "File too large. Maximum size is 5MB",
+          });
+        }
+        return res.status(400).json({
+          success: false,
+          message: err.message || "File upload error",
+        });
+      }
+      next();
+    });
+  },
   validateCreateCampaign,
   CampaignController.createCampaign
 );
@@ -52,15 +70,22 @@ router.get(
 );
 
 /**
- * Upload campaign image (Brand Owner only)
- * POST /api/v1/campaigns/:id/image
- * NOTE: This must come before /:id route to avoid route conflicts
+ * Get single campaign by ID
+ * GET /api/v1/campaigns/:id
+ * (Public for authenticated users)
  */
-router.post(
-  "/:id/image",
+router.get("/:id", CampaignController.getCampaign);
+
+/**
+ * Update campaign (Brand Owner only)
+ * PUT /api/v1/campaigns/:id
+ * Accepts multipart/form-data with optional 'coverImage' file field
+ */
+router.put(
+  "/:id",
   authMiddleware.requireRole(["BRAND"]),
   (req, res, next) => {
-    upload.single("image")(req, res, (err) => {
+    upload.single("coverImage")(req, res, (err) => {
       if (err) {
         if (err.code === "LIMIT_FILE_SIZE") {
           return res.status(400).json({
@@ -76,23 +101,6 @@ router.post(
       next();
     });
   },
-  CampaignController.uploadCampaignImage
-);
-
-/**
- * Get single campaign by ID
- * GET /api/v1/campaigns/:id
- * (Public for authenticated users)
- */
-router.get("/:id", CampaignController.getCampaign);
-
-/**
- * Update campaign (Brand Owner only)
- * PUT /api/v1/campaigns/:id
- */
-router.put(
-  "/:id",
-  authMiddleware.requireRole(["BRAND"]),
   validateUpdateCampaign,
   CampaignController.updateCampaign
 );

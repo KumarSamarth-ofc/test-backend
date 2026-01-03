@@ -1,7 +1,39 @@
 const { validationResult } = require('express-validator');
 const { ApplicationService } = require('../services');
+const { supabaseAdmin } = require('../db/config');
 
 class ApplicationController {
+
+  /**
+   * Helper method to get brand profile ID from user ID
+   * Since v1_brand_profiles uses user_id as primary key, we just verify the profile exists
+   */
+  async getBrandProfileId(userId) {
+    try {
+      const { data: brandProfile, error } = await supabaseAdmin
+        .from("v1_brand_profiles")
+        .select("user_id")
+        .eq("user_id", userId)
+        .eq("is_deleted", false)
+        .maybeSingle();
+
+      if (error) {
+        console.error("[v1/getBrandProfileId] Error:", error);
+        return { success: false, error: error.message };
+      }
+
+      if (!brandProfile) {
+        return { success: false, error: "Brand profile not found" };
+      }
+
+      // v1_brand_profiles uses user_id as primary key, so brand_id = user_id
+      return { success: true, brandId: userId };
+    } catch (err) {
+      console.error("[v1/getBrandProfileId] Exception:", err);
+      return { success: false, error: err.message };
+    }
+  }
+
   async apply(req, res) {
     try {
       const errors = validationResult(req);
@@ -9,17 +41,20 @@ class ApplicationController {
         return res.status(400).json({ errors: errors.array() });
       }
 
-      // Format campaignId to UUID format (trim and lowercase)
-      const campaignId = req.body.campaignId?.trim().toLowerCase();
+      const campaignId = req.body.campaignId;
 
-      const app = await ApplicationService.apply({
+      const result = await ApplicationService.apply({
         campaignId: campaignId,
         influencerId: req.user.id,
       });
 
-      res.status(201).json(app);
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      res.status(201).json(result);
     } catch (err) {
-      res.status(400).json({
+      res.status(500).json({
         message: err.message || 'Failed to apply to campaign',
       });
     }
@@ -27,17 +62,43 @@ class ApplicationController {
 
   async accept(req, res) {
     try {
-      const app = await ApplicationService.accept({
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const userId = req.user.id;
+      
+      // Get brand_id from brand profile (not user_id)
+      const brandProfileResult = await this.getBrandProfileId(userId);
+      if (!brandProfileResult || !brandProfileResult.success) {
+        const errorMsg = brandProfileResult?.error || "Unknown error";
+        const isNotFound = errorMsg.includes("not found");
+        const status = isNotFound ? 404 : 500;
+        return res.status(status).json({
+          success: false,
+          message: isNotFound
+            ? "Brand profile not found. Please complete your profile first."
+            : "Failed to fetch brand profile",
+          error: errorMsg,
+        });
+      }
+
+      const result = await ApplicationService.accept({
         applicationId: req.params.id,
-        brandId: req.user.id,
+        brandId: brandProfileResult.brandId,
         agreedAmount: req.body.agreedAmount,
         platformFeePercent: req.body.platformFeePercent,
-        // requiresScript: req.body.requiresScript,
+        requiresScript: req.body.requiresScript,
       });
 
-      res.json(app);
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      res.json(result);
     } catch (err) {
-      res.status(400).json({
+      res.status(500).json({
         message: err.message || 'Failed to accept application',
       });
     }
@@ -45,14 +106,45 @@ class ApplicationController {
 
   async cancel(req, res) {
     try {
-      const app = await ApplicationService.cancel({
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const user = req.user;
+      
+      // If user is a brand owner, get their brand profile ID
+      let brandId = null;
+      if (user.role === 'BRAND') {
+        const brandProfileResult = await this.getBrandProfileId(user.id);
+        if (!brandProfileResult || !brandProfileResult.success) {
+          const errorMsg = brandProfileResult?.error || "Unknown error";
+          const isNotFound = errorMsg.includes("not found");
+          const status = isNotFound ? 404 : 500;
+          return res.status(status).json({
+            success: false,
+            message: isNotFound
+              ? "Brand profile not found. Please complete your profile first."
+              : "Failed to fetch brand profile",
+            error: errorMsg,
+          });
+        }
+        brandId = brandProfileResult.brandId;
+      }
+
+      const result = await ApplicationService.cancel({
         applicationId: req.params.id,
-        user: req.user,
+        user: user,
+        brandId: brandId,
       });
 
-      res.json(app);
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      res.json(result);
     } catch (err) {
-      res.status(400).json({
+      res.status(500).json({
         message: err.message || 'Failed to cancel application',
       });
     }
@@ -60,87 +152,31 @@ class ApplicationController {
 
   async complete(req, res) {
     try {
-      const app = await ApplicationService.complete(req.params.id);
-      res.json(app);
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const result = await ApplicationService.complete(req.params.id);
+
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      res.json(result);
     } catch (err) {
-      res.status(400).json({
+      res.status(500).json({
         message: err.message || 'Failed to complete application',
       });
     }
   }
-
-    async uploadCampaignImage(req, res) {
-      try {
-        // Handle multer errors
-        if (req.file === undefined && req.body) {
-          if (req.body.error) {
-            return res.status(400).json({
-              success: false,
-              message: req.body.error,
-            });
-          }
-        }
-  
-        // Check for multer file size error
-        if (req.file === undefined) {
-          return res.status(400).json({
-            success: false,
-            message: "No image file provided or file too large (max 5MB)",
-          });
-        }
-  
-        const userId = req.user.id;
-        const userRole = req.user.role;
-        const campaignId = req.params.id;
-  
-        // Only brand owners can upload campaign images
-        if (userRole !== "BRAND") {
-          return res.status(403).json({
-            success: false,
-            message: "Only brand owners can upload campaign images",
-          });
-        }
-  
-        const brandId = userId;
-  
-        const result = await CampaignService.uploadCampaignImage(
-          campaignId,
-          brandId,
-          req.file.buffer,
-          req.file.originalname
-        );
-  
-        if (result.success) {
-          return res.json({
-            success: true,
-            campaign: { id: campaignId },
-            campaign_image_url: result.campaign_image_url,
-            message: result.message,
-          });
-        }
-  
-        const status = result.message?.includes("Unauthorized") ? 403 : 400;
-        return res.status(status).json({
-          success: false,
-          message: result.message,
-          error: result.error,
-        });
-      } catch (err) {
-        console.error("[v1/uploadCampaignImage] error:", err);
-  
-        if (err.code === "LIMIT_FILE_SIZE") {
-          return res.status(400).json({
-            success: false,
-            message: "File too large. Maximum size is 5MB",
-          });
-        }
-  
-        return res.status(500).json({
-          success: false,
-          message: "Internal server error",
-        });
-      }
-    }
 }
 
-module.exports = new ApplicationController();
+// Create instance and bind methods to preserve 'this' context
+const applicationController = new ApplicationController();
+applicationController.apply = applicationController.apply.bind(applicationController);
+applicationController.accept = applicationController.accept.bind(applicationController);
+applicationController.cancel = applicationController.cancel.bind(applicationController);
+applicationController.complete = applicationController.complete.bind(applicationController);
+
+module.exports = applicationController;

@@ -116,12 +116,7 @@ const validateCompleteProfile = [
     .isString()
     .isLength({ min: 0, max: 5000 })
     .withMessage("Brand description must be up to 5000 characters"),
-  body("brand_logo_url")
-    .optional()
-    .isString()
-    .isURL()
-    .withMessage("Brand logo URL must be a valid URL"),
-  // brand_logo is handled as file upload, no validation needed here
+  // brand_logo and profile_image are handled as file uploads, no URL validation needed
 ];
 
 module.exports = {

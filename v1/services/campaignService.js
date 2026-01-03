@@ -46,6 +46,16 @@ class CampaignService {
   }
 
   /**
+   * Normalize influencer tier
+   */
+  normalizeTier(tier) {
+    if (!tier) return null;
+    const normalized = String(tier).toUpperCase().trim();
+    const validTiers = ["NANO", "MICRO", "MID", "MACRO"];
+    return validTiers.includes(normalized) ? normalized : null;
+  }
+
+  /**
    * Check if brand owns the campaign
    */
   async checkBrandOwnership(campaignId, brandId) {
@@ -133,7 +143,7 @@ class CampaignService {
           content_type: Array.isArray(campaignData.content_type) 
             ? campaignData.content_type 
             : [],
-          influencer_tier: campaignData.influencer_tier ?? null,
+          influencer_tier: this.normalizeTier(campaignData.influencer_tier),
           categories: campaignData.categories ?? null,
           language: campaignData.language ?? null,
           brand_guideline: campaignData.brand_guideline ?? null,
@@ -410,7 +420,7 @@ class CampaignService {
         }
   
         if (updateData.influencer_tier !== undefined) {
-          update.influencer_tier = updateData.influencer_tier ?? null;
+          update.influencer_tier = this.normalizeTier(updateData.influencer_tier);
         }
   
         if (updateData.categories !== undefined) {
@@ -508,97 +518,6 @@ class CampaignService {
     }
   }
 
-    // Upload campaign image
-    async uploadCampaignImage(campaignId, brandId, fileBuffer, fileName) {
-      try {
-        const {
-          uploadImageToStorage,
-          deleteImageFromStorage,
-        } = require("../utils/imageUpload");
-    
-        // 1) Verify brand owns the campaign
-        const ownershipCheck = await this.checkBrandOwnership(campaignId, brandId);
-        if (!ownershipCheck.success) {
-          return {
-            success: false,
-            message: ownershipCheck.message,
-          };
-        }
-    
-        // 2) Get current campaign to check for existing image
-        const { data: currentCampaign, error: fetchError } = await supabaseAdmin
-          .from("v1_campaigns")
-          .select("cover_image_url")
-          .eq("id", campaignId)
-          .single();
-    
-        if (fetchError) {
-          console.error("[v1/uploadCampaignImage] Error fetching campaign:", fetchError);
-          return {
-            success: false,
-            message: "Failed to fetch campaign",
-            error: fetchError.message,
-          };
-        }
-    
-        // 3) Upload new campaign image first
-        const { url, error: uploadError } = await uploadImageToStorage(
-          fileBuffer,
-          fileName,
-          "campaigns" // Folder name in storage bucket
-        );
-    
-        if (uploadError || !url) {
-          console.error("[v1/uploadCampaignImage] Upload error:", uploadError);
-          return {
-            success: false,
-            message: uploadError || "Failed to upload image",
-          };
-        }
-    
-        // 4) Delete old campaign image if it exists (and not placeholder)
-        const placeholderUrl =
-          "https://via.placeholder.com/800x400?text=Campaign+Image";
-        if (
-          currentCampaign?.cover_image_url &&
-          currentCampaign.cover_image_url !== placeholderUrl
-        ) {
-          await deleteImageFromStorage(currentCampaign.cover_image_url);
-        }
-    
-        // 5) Update campaign with new image URL
-        const { data: updated, error: updateError } = await supabaseAdmin
-          .from("v1_campaigns")
-          .update({ cover_image_url: url })
-          .eq("id", campaignId)
-          .select()
-          .single();
-    
-        if (updateError) {
-          console.error("[v1/uploadCampaignImage] Update error:", updateError);
-          // Try to delete uploaded image if update fails
-          await deleteImageFromStorage(url);
-          return {
-            success: false,
-            message: "Failed to update campaign image",
-            error: updateError.message,
-          };
-        }
-    
-        return {
-          success: true,
-          campaign: updated,
-          campaign_image_url: url,
-          message: "Campaign image uploaded successfully",
-        };
-      } catch (err) {
-        console.error("[v1/uploadCampaignImage] Exception:", err);
-        return {
-          success: false,
-          message: err.message || "Internal server error",
-        };
-      }
-    }
 }
 
 module.exports = new CampaignService();

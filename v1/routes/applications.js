@@ -19,7 +19,7 @@ router.post(
 router.post(
   '/:id/accept',
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole('BRAND_OWNER'),
+  authMiddleware.requireRole('BRAND'),
   validateAccept,
   applicationController.accept
 );
@@ -29,7 +29,7 @@ router.post(
   authMiddleware.authenticateToken,
   validateCancel,
   applicationController.cancel
-); // no cancellation
+);
 
 router.post(
   '/:id/complete',

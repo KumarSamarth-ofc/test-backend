@@ -1,5 +1,6 @@
 const transitions = {
     PENDING: ['ACCEPTED', 'CANCELLED'],
+    APPLIED: ['ACCEPTED', 'CANCELLED'],
     ACCEPTED: ['COMPLETED', 'CANCELLED'],
     COMPLETED: [],
     CANCELLED: []

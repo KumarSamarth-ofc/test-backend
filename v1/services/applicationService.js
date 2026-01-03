@@ -11,7 +11,7 @@ class ApplicationService {
         .from('v1_applications')
         .select(`
           *,
-          campaigns!inner(brand_id)
+          v1_campaigns!inner(brand_id)
         `)
         .eq('id', applicationId)
         .maybeSingle();
@@ -21,15 +21,15 @@ class ApplicationService {
         return { success: false, message: 'Database error' };
       }
 
-      if (!data || !data.campaigns) {
+      if (!data || !data.v1_campaigns) {
         return { success: false, message: 'Application not found' };
       }
 
-      if (data.campaigns.brand_id !== brandId) {
+      if (data.v1_campaigns.brand_id !== brandId) {
         return { success: false, message: 'Unauthorized: Not your campaign' };
       }
 
-      return { success: true, application: { ...data, brand_id: data.campaigns.brand_id } };
+      return { success: true, application: { ...data, brand_id: data.v1_campaigns.brand_id } };
     } catch (err) {
       console.error('[ApplicationService/checkBrandOwnership] Error:', err);
       return { success: false, message: 'Database error' };
@@ -39,13 +39,13 @@ class ApplicationService {
   /**
    * Check if user can cancel application (influencer or brand owner)
    */
-  async checkCancelPermission(applicationId, userId, userRole) {
+  async checkCancelPermission(applicationId, userId, userRole, brandId = null) {
     try {
       const { data, error } = await supabaseAdmin
         .from('v1_applications')
         .select(`
           *,
-          campaigns!inner(brand_id)
+          v1_campaigns!inner(brand_id)
         `)
         .eq('id', applicationId)
         .maybeSingle();
@@ -55,18 +55,18 @@ class ApplicationService {
         return { success: false, message: 'Database error' };
       }
 
-      if (!data || !data.campaigns) {
+      if (!data || !data.v1_campaigns) {
         return { success: false, message: 'Application not found' };
       }
 
       // Influencer can cancel their own application
       if (userRole === 'INFLUENCER' && data.influencer_id === userId) {
-        return { success: true, application: { ...data, brand_id: data.campaigns.brand_id } };
+        return { success: true, application: { ...data, brand_id: data.v1_campaigns.brand_id } };
       }
 
       // Brand owner can cancel applications to their campaigns
-      if (userRole === 'BRAND' && data.campaigns.brand_id === userId) {
-        return { success: true, application: { ...data, brand_id: data.campaigns.brand_id } };
+      if (userRole === 'BRAND' && brandId && data.v1_campaigns.brand_id === brandId) {
+        return { success: true, application: { ...data, brand_id: data.v1_campaigns.brand_id } };
       }
 
       return { success: false, message: 'Unauthorized: Cannot cancel this application' };
@@ -76,77 +76,84 @@ class ApplicationService {
     }
   }
 
-  /**
+ /**
    * Apply to a campaign
    */
-  async apply({ campaignId, influencerId }) {
-    try {
-      // Check if campaign exists and is in valid state
-      const { data: campaign, error: campaignError } = await supabaseAdmin
-        .from('v1_campaigns')
-        .select('*')
-        .eq('id', campaignId)
-        .maybeSingle();
+ async apply({ campaignId, influencerId }) {
+  try {
+    // Check if campaign exists and is in valid state
+    const { data: campaign, error: campaignError } = await supabaseAdmin
+      .from('v1_campaigns')
+      .select('*')
+      .eq('id', campaignId)
+      .maybeSingle();
 
-      if (campaignError) {
-        console.error('[ApplicationService/apply] Campaign check error:', campaignError);
-        return { success: false, message: 'Database error' };
-      }
+    if (campaignError) {
+      console.error('[ApplicationService/apply] Campaign check error:', campaignError);
+      return { success: false, message: 'Database error' };
+    }
 
-      if (!campaign) {
-        return { success: false, message: 'Campaign not found' };
-      }
+    if (!campaign) {
+      return { success: false, message: 'Campaign not found' };
+    }
 
-      if (!['LIVE', 'ACTIVE'].includes(campaign.status)) {
-        return { success: false, message: 'Campaign is not accepting applications' };
-      }
-
-      // Check for duplicate application
-      const { data: existing, error: existingError } = await supabaseAdmin
-        .from('v1_applications')
-        .select('*')
-        .eq('campaign_id', campaignId)
-        .eq('influencer_id', influencerId)
-        .maybeSingle();
-
-      if (existingError) {
-        console.error('[ApplicationService/apply] Duplicate check error:', existingError);
-        return { success: false, message: 'Database error' };
-      }
-
-      if (existing) {
-        return { success: false, message: 'You have already applied to this campaign' };
-      }
-
-      // Insert new application
-      const { data: app, error: insertError } = await supabaseAdmin
-        .from('v1_applications')
-        .insert({
-          campaign_id: campaignId,
-          influencer_id: influencerId,
-          status: 'PENDING'
-        })
-        .select()
-        .single();
-
-      if (insertError) {
-        console.error('[ApplicationService/apply] Insert error:', insertError);
-        return { success: false, message: insertError.message || 'Failed to apply to campaign' };
-      }
-
-      return {
-        success: true,
-        message: 'Application submitted successfully',
-        application: app,
-      };
-    } catch (err) {
-      console.error('[ApplicationService/apply] Error:', err);
-      return {
-        success: false,
-        message: err.message || 'Failed to apply to campaign',
+    // Allow various active statuses
+    const allowedStatuses = ['LIVE', 'ACTIVE', 'OPEN', 'PUBLISHED'];
+    if (!allowedStatuses.includes(campaign.status)) {
+      return { 
+         success: false, 
+         message: `Campaign is not accepting applications (Status: ${campaign.status})` 
       };
     }
+
+    // Check for duplicate application
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from('v1_applications')
+      .select('*')
+      .eq('campaign_id', campaignId)
+      .eq('influencer_id', influencerId)
+      .maybeSingle();
+
+    if (existingError) {
+      console.error('[ApplicationService/apply] Duplicate check error:', existingError);
+      return { success: false, message: 'Database error' };
+    }
+
+    if (existing) {
+      return { success: false, message: 'You have already applied to this campaign' };
+    }
+
+    // --- FIX: Added brand_id to the insert payload ---
+    const { data: app, error: insertError } = await supabaseAdmin
+      .from('v1_applications')
+      .insert({
+        campaign_id: campaignId,
+        influencer_id: influencerId,
+        brand_id: campaign.brand_id,
+        status: 'APPLIED',
+        phase: 'WORK' // Default phase, will be updated to 'SCRIPT' or 'WORK' when accepted
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error('[ApplicationService/apply] Insert error:', insertError);
+      return { success: false, message: insertError.message || 'Failed to apply to campaign' };
+    }
+
+    return {
+      success: true,
+      message: 'Application submitted successfully',
+      application: app,
+    };
+  } catch (err) {
+    console.error('[ApplicationService/apply] Error:', err);
+    return {
+      success: false,
+      message: err.message || 'Failed to apply to campaign',
+    };
   }
+}
 
   /**
    * Accept an application
@@ -181,7 +188,7 @@ class ApplicationService {
 
       // Update application
       const { data: updated, error: updateError } = await supabaseAdmin
-        .from('applications')
+        .from('v1_applications')
         .update({
           status: 'ACCEPTED',
           phase: phase,
@@ -189,8 +196,7 @@ class ApplicationService {
           platform_fee_percent: platformFeePercent,
           platform_fee_amount: platformFeeAmount,
           net_amount: netAmount,
-          brand_id: brandId,
-          updated_at: new Date().toISOString()
+          brand_id: brandId
         })
         .eq('id', applicationId)
         .select()
@@ -221,13 +227,14 @@ class ApplicationService {
   /**
    * Cancel an application
    */
-  async cancel({ applicationId, user }) {
+  async cancel({ applicationId, user, brandId = null }) {
     try {
       // Check permission
       const permissionCheck = await this.checkCancelPermission(
         applicationId,
         user.id,
-        user.role
+        user.role,
+        brandId
       );
       if (!permissionCheck.success) {
         return permissionCheck;
@@ -245,10 +252,9 @@ class ApplicationService {
 
       // Update application
       const { data: updated, error: updateError } = await supabaseAdmin
-        .from('applications')
+        .from('v1_applications')
         .update({
-          status: 'CANCELLED',
-          updated_at: new Date().toISOString()
+          status: 'CANCELLED'
         })
         .eq('id', applicationId)
         .select()
@@ -282,7 +288,7 @@ class ApplicationService {
   async complete(applicationId) {
     try {
       const { data: app, error: fetchError } = await supabaseAdmin
-        .from('applications')
+        .from('v1_applications')
         .select('*')
         .eq('id', applicationId)
         .maybeSingle();
@@ -306,10 +312,9 @@ class ApplicationService {
 
       // Update application
       const { data: updated, error: updateError } = await supabaseAdmin
-        .from('applications')
+        .from('v1_applications')
         .update({
-          status: 'COMPLETED',
-          updated_at: new Date().toISOString()
+          status: 'COMPLETED'
         })
         .eq('id', applicationId)
         .select()

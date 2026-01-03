@@ -1520,8 +1520,99 @@ class AuthService {
    */
   async completeInfluencerProfile(userId, profileData) {
     try {
-      // 1) Update v1_influencer_profiles with all fields
+      const {
+        uploadImageToStorage,
+        deleteImageFromStorage,
+      } = require("../../utils/imageUpload");
+
+      // 1) Handle profile image - file upload takes priority over direct URL
+      let profileImageUrl = null;
+      if (profileData.profile_image_file) {
+        // File upload - upload to storage
+        const { url, error: uploadError } = await uploadImageToStorage(
+          profileData.profile_image_file.buffer,
+          profileData.profile_image_file.originalname,
+          "profiles" // Upload to profiles folder
+        );
+
+        if (uploadError || !url) {
+          console.error(
+            "[v1/completeInfluencerProfile] Profile image upload error:",
+            uploadError
+          );
+          return {
+            success: false,
+            message: uploadError || "Failed to upload profile image",
+          };
+        }
+
+        profileImageUrl = url;
+
+        // Delete old image if exists (only if it's from our storage)
+        const { data: currentProfile } = await supabaseAdmin
+          .from("v1_influencer_profiles")
+          .select("profile_photo_url")
+          .eq("user_id", userId)
+          .eq("is_deleted", false)
+          .maybeSingle();
+
+        if (currentProfile?.profile_photo_url) {
+          // Only delete if it's from our storage (contains storage URL pattern)
+          const placeholderUrl = "https://via.placeholder.com/400x400?text=Profile+Image";
+          if (
+            currentProfile.profile_photo_url !== placeholderUrl &&
+            (currentProfile.profile_photo_url.includes('storage') ||
+             currentProfile.profile_photo_url.includes('supabase') ||
+             currentProfile.profile_photo_url.includes('supabase.co'))
+          ) {
+            await deleteImageFromStorage(currentProfile.profile_photo_url);
+          }
+        }
+      } else if (profileData.profile_image_url !== undefined) {
+        // Direct URL provided (no file upload)
+        if (profileData.profile_image_url === null || profileData.profile_image_url === "") {
+          profileImageUrl = null;
+        } else {
+          profileImageUrl = String(profileData.profile_image_url).trim();
+        }
+
+        // Optionally delete old image if it was from our storage and URL is changing
+        if (profileImageUrl) {
+          const { data: currentProfile } = await supabaseAdmin
+            .from("v1_influencer_profiles")
+            .select("profile_photo_url")
+            .eq("user_id", userId)
+            .eq("is_deleted", false)
+            .maybeSingle();
+
+          if (
+            currentProfile?.profile_photo_url &&
+            currentProfile.profile_photo_url !== profileImageUrl
+          ) {
+            // Only delete if it's from our storage
+            const placeholderUrl = "https://via.placeholder.com/400x400?text=Profile+Image";
+            if (
+              currentProfile.profile_photo_url !== placeholderUrl &&
+              (currentProfile.profile_photo_url.includes('storage') ||
+               currentProfile.profile_photo_url.includes('supabase') ||
+               currentProfile.profile_photo_url.includes('supabase.co'))
+            ) {
+              await deleteImageFromStorage(currentProfile.profile_photo_url);
+            }
+          }
+        }
+      }
+
+      // 2) Update v1_influencer_profiles with all fields
       const profileUpdate = {};
+
+      // Update profile_photo_url if provided (from file upload or direct URL)
+      if (profileImageUrl !== null && profileImageUrl !== undefined) {
+        profileUpdate.profile_photo_url = profileImageUrl;
+      } else if (profileData.profile_image_url !== undefined && profileData.profile_image_url === null) {
+        // Explicitly set to null if provided as null
+        profileUpdate.profile_photo_url = null;
+      }
       
       if (profileData.pan_number !== undefined) {
         profileUpdate.pan_number = profileData.pan_number || null;
@@ -1700,6 +1791,7 @@ class AuthService {
         categories_count: updatedProfile.categories?.length || 0,
         languages_count: updatedProfile.languages?.length || 0,
         profile_completion_pct: completionPct,
+        profile_image_url: profileImageUrl || updatedProfile?.profile_photo_url,
         message: "Profile completed successfully",
       };
     } catch (err) {

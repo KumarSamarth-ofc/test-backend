@@ -64,10 +64,6 @@ const validateCreateCampaign = [
     .isLength({ max: 5000 })
     .withMessage("Description must be up to 5000 characters")
     .trim(),
-  body("cover_image_url")
-    .optional()
-    .isURL()
-    .withMessage("cover_image_url must be a valid URL"),
   body("platform")
     .optional()
     .isArray()
@@ -87,7 +83,8 @@ const validateCreateCampaign = [
   body("influencer_tier")
     .optional()
     .isString()
-    .withMessage("influencer_tier must be a string"),
+    .isIn(["NANO", "MICRO", "MID", "MACRO", "nano", "micro", "mid", "macro"])
+    .withMessage("influencer_tier must be NANO, MICRO, MID, or MACRO"),
   body("categories")
     .optional()
     .isString()
@@ -179,10 +176,6 @@ const validateUpdateCampaign = [
     .isLength({ max: 5000 })
     .withMessage("Description must be up to 5000 characters")
     .trim(),
-  body("cover_image_url")
-    .optional()
-    .isURL()
-    .withMessage("cover_image_url must be a valid URL"),
   body("platform")
     .optional()
     .isArray()
@@ -202,7 +195,8 @@ const validateUpdateCampaign = [
   body("influencer_tier")
     .optional()
     .isString()
-    .withMessage("influencer_tier must be a string"),
+    .isIn(["NANO", "MICRO", "MID", "MACRO", "nano", "micro", "mid", "macro"])
+    .withMessage("influencer_tier must be NANO, MICRO, MID, or MACRO"),
   body("categories")
     .optional()
     .isString()
