@@ -7,6 +7,7 @@ const {
   validateUpdateCampaign,
   validateCampaignFilters,
 } = require("../validators/campaignValidators");
+const { upload } = require("../utils/imageUpload");
 
 // ============================================
 // PROTECTED ROUTES - Campaign Management
@@ -18,10 +19,28 @@ router.use(authMiddleware.authenticateToken);
 /**
  * Create a new campaign (Brand Owner only)
  * POST /api/v1/campaigns
+ * Accepts multipart/form-data with optional 'coverImage' file field
  */
 router.post(
   "/",
   authMiddleware.requireRole(["BRAND"]),
+  (req, res, next) => {
+    upload.single("coverImage")(req, res, (err) => {
+      if (err) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return res.status(400).json({
+            success: false,
+            message: "File too large. Maximum size is 5MB",
+          });
+        }
+        return res.status(400).json({
+          success: false,
+          message: err.message || "File upload error",
+        });
+      }
+      next();
+    });
+  },
   validateCreateCampaign,
   CampaignController.createCampaign
 );
@@ -60,10 +79,28 @@ router.get("/:id", CampaignController.getCampaign);
 /**
  * Update campaign (Brand Owner only)
  * PUT /api/v1/campaigns/:id
+ * Accepts multipart/form-data with optional 'coverImage' file field
  */
 router.put(
   "/:id",
   authMiddleware.requireRole(["BRAND"]),
+  (req, res, next) => {
+    upload.single("coverImage")(req, res, (err) => {
+      if (err) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return res.status(400).json({
+            success: false,
+            message: "File too large. Maximum size is 5MB",
+          });
+        }
+        return res.status(400).json({
+          success: false,
+          message: err.message || "File upload error",
+        });
+      }
+      next();
+    });
+  },
   validateUpdateCampaign,
   CampaignController.updateCampaign
 );
@@ -79,4 +116,3 @@ router.delete(
 );
 
 module.exports = router;
-

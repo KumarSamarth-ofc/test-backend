@@ -72,38 +72,18 @@ router.post(
 // ============================================
 // PROTECTED ROUTES - Profile Management
 // ============================================
-router.post(
-  "/profile/image",
-  authMiddleware.authenticateToken,
-  (req, res, next) => {
-    upload.single("image")(req, res, (err) => {
-      if (err) {
-        // Handle multer errors
-        if (err.code === "LIMIT_FILE_SIZE") {
-          return res.status(400).json({
-            success: false,
-            message: "File too large. Maximum size is 5MB",
-          });
-        }
-        return res.status(400).json({
-          success: false,
-          message: err.message || "File upload error",
-        });
-      }
-      next();
-    });
-  },
-  AuthController.uploadProfileImage
-);
-
 router.put(
   "/profile/complete",
   authMiddleware.authenticateToken,
-  // Handle multipart/form-data for brand logo upload (before validation)
+  // Handle multipart/form-data for profile image (influencers) or brand logo (brands)
   (req, res, next) => {
     const contentType = req.headers["content-type"] || "";
     if (contentType.includes("multipart/form-data")) {
-      upload.single("brand_logo")(req, res, (err) => {
+      // Use fields to accept both profileImage and brandLogo
+      upload.fields([
+        { name: "profileImage", maxCount: 1 },
+        { name: "brandLogo", maxCount: 1 }
+      ])(req, res, (err) => {
         if (err) {
           if (err.code === "LIMIT_FILE_SIZE") {
             return res.status(400).json({

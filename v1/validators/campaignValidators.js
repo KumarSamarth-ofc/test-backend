@@ -37,8 +37,8 @@ const validateCreateCampaign = [
     .withMessage("Invalid status"),
   body("min_influencers")
     .optional()
-    .isInt({ min: 1 })
-    .withMessage("min_influencers must be a positive integer"),
+    .isInt({ min: 0 })
+    .withMessage("min_influencers must be a non-negative integer"),
   body("max_influencers")
     .optional()
     .isInt({ min: 1 })
@@ -48,7 +48,8 @@ const validateCreateCampaign = [
     .isBoolean()
     .withMessage("requires_script must be a boolean"),
   body("start_deadline")
-    .optional()
+    .notEmpty()
+    .withMessage("start_deadline is required")
     .isISO8601()
     .withMessage("start_deadline must be a valid ISO 8601 date")
     .toDate(),
@@ -56,6 +57,52 @@ const validateCreateCampaign = [
     .optional()
     .isFloat({ min: 0 })
     .withMessage("budget must be a non-negative number"),
+  // New fields
+  body("description")
+    .optional()
+    .isString()
+    .isLength({ max: 5000 })
+    .withMessage("Description must be up to 5000 characters")
+    .trim(),
+  body("platform")
+    .optional()
+    .isArray()
+    .withMessage("platform must be an array"),
+  body("platform.*")
+    .optional()
+    .isString()
+    .withMessage("Each platform must be a string"),
+  body("content_type")
+    .optional()
+    .isArray()
+    .withMessage("content_type must be an array"),
+  body("content_type.*")
+    .optional()
+    .isString()
+    .withMessage("Each content_type must be a string"),
+  body("influencer_tier")
+    .optional()
+    .isString()
+    .isIn(["NANO", "MICRO", "MID", "MACRO", "nano", "micro", "mid", "macro"])
+    .withMessage("influencer_tier must be NANO, MICRO, MID, or MACRO"),
+  body("categories")
+    .optional()
+    .isString()
+    .isLength({ max: 500 })
+    .withMessage("categories must be up to 500 characters")
+    .trim(),
+  body("language")
+    .optional()
+    .isString()
+    .isLength({ max: 50 })
+    .withMessage("language must be up to 50 characters")
+    .trim(),
+  body("brand_guideline")
+    .optional()
+    .isString()
+    .isLength({ max: 10000 })
+    .withMessage("brand_guideline must be up to 10000 characters")
+    .trim(),
   // Custom validation: min_influencers <= max_influencers
   body().custom((value) => {
     if (
@@ -103,8 +150,8 @@ const validateUpdateCampaign = [
     .withMessage("Invalid status"),
   body("min_influencers")
     .optional()
-    .isInt({ min: 1 })
-    .withMessage("min_influencers must be a positive integer"),
+    .isInt({ min: 0 })
+    .withMessage("min_influencers must be a non-negative integer"),
   body("max_influencers")
     .optional()
     .isInt({ min: 1 })
@@ -122,6 +169,52 @@ const validateUpdateCampaign = [
     .optional()
     .isFloat({ min: 0 })
     .withMessage("budget must be a non-negative number"),
+  // New fields
+  body("description")
+    .optional()
+    .isString()
+    .isLength({ max: 5000 })
+    .withMessage("Description must be up to 5000 characters")
+    .trim(),
+  body("platform")
+    .optional()
+    .isArray()
+    .withMessage("platform must be an array"),
+  body("platform.*")
+    .optional()
+    .isString()
+    .withMessage("Each platform must be a string"),
+  body("content_type")
+    .optional()
+    .isArray()
+    .withMessage("content_type must be an array"),
+  body("content_type.*")
+    .optional()
+    .isString()
+    .withMessage("Each content_type must be a string"),
+  body("influencer_tier")
+    .optional()
+    .isString()
+    .isIn(["NANO", "MICRO", "MID", "MACRO", "nano", "micro", "mid", "macro"])
+    .withMessage("influencer_tier must be NANO, MICRO, MID, or MACRO"),
+  body("categories")
+    .optional()
+    .isString()
+    .isLength({ max: 500 })
+    .withMessage("categories must be up to 500 characters")
+    .trim(),
+  body("language")
+    .optional()
+    .isString()
+    .isLength({ max: 50 })
+    .withMessage("language must be up to 50 characters")
+    .trim(),
+  body("brand_guideline")
+    .optional()
+    .isString()
+    .isLength({ max: 10000 })
+    .withMessage("brand_guideline must be up to 10000 characters")
+    .trim(),
   // Custom validation: min_influencers <= max_influencers
   body().custom((value) => {
     if (
@@ -195,4 +288,3 @@ module.exports = {
   validateUpdateCampaign,
   validateCampaignFilters,
 };
-
