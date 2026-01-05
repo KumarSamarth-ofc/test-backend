@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require("../db/config");
+const { uploadImageToStorage, deleteImageFromStorage } = require("../utils/imageUpload");
 
 class ProfileService {
   /**
@@ -44,7 +45,7 @@ class ProfileService {
   }
 
   /**
-   * Normalize platform name to match database enum (INSTAGRAM | FACEBOOK | YOUTUBE)
+   * Normalize platform name to match database constraint (INSTAGRAM | FACEBOOK | YOUTUBE)
    */
   normalizePlatform(platformName) {
     if (!platformName) return null;
@@ -66,7 +67,7 @@ class ProfileService {
   }
 
   /**
-   * Upsert social platforms for v1 influencer
+   * Upsert social platforms for influencer
    */
   async upsertSocialPlatforms(userId, platforms) {
     try {
@@ -80,11 +81,11 @@ class ProfileService {
       for (const platform of platforms) {
         try {
           const platformName = this.normalizePlatform(
-            platform.platform_name || platform.platform
+            platform.platform_name || platform.platform || platform.platformName
           );
           const username = platform.username || null;
           const profileUrl =
-            platform.profile_url || platform.profile_link || null;
+            platform.profile_url || platform.profile_link || platform.profileUrl || null;
           const followerCount =
             platform.follower_count !== undefined
               ? parseInt(platform.follower_count)
@@ -93,12 +94,19 @@ class ProfileService {
             platform.engagement_rate !== undefined
               ? parseFloat(platform.engagement_rate)
               : null;
+          const dataSource = platform.data_source || "MANUAL";
+          const normalizedDataSource =
+            dataSource.toUpperCase() === "GRAPH_API" ? "GRAPH_API" : "MANUAL";
 
-          if (!platformName || !username) {
+          if (!platformName || !username || !profileUrl) {
             console.warn(
               "[v1/upsertSocialPlatforms] Skipping invalid platform:",
               platform
             );
+            errors.push({
+              platform: platformName || "unknown",
+              error: "Platform name, username, and profile_url are required",
+            });
             continue;
           }
 
@@ -110,12 +118,6 @@ class ProfileService {
             .eq("platform", platformName)
             .eq("is_deleted", false)
             .maybeSingle();
-
-          // Determine data_source: use from payload if provided, otherwise default to MANUAL
-          // GRAPH_API should be used when connected via Facebook/Instagram Graph API
-          const dataSource = platform.data_source || "MANUAL";
-          const normalizedDataSource =
-            dataSource.toUpperCase() === "GRAPH_API" ? "GRAPH_API" : "MANUAL";
 
           const platformData = {
             user_id: userId,
@@ -174,7 +176,7 @@ class ProfileService {
             err
           );
           errors.push({
-            platform: platform?.platform_name || "unknown",
+            platform: platform?.platform_name || platform?.platform || "unknown",
             error: err.message,
           });
         }
@@ -192,39 +194,12 @@ class ProfileService {
   }
 
   /**
-   * Complete profile - handles both INFLUENCER and BRAND_OWNER roles
+   * Update influencer profile
+   * Accepts all user-editable fields from v1_users and v1_influencer_profiles
+   * Handles image uploads for profile_photo_url
    */
-  async completeProfile(userId, userRole, profileData) {
+  async updateInfluencerProfile(userId, profileData) {
     try {
-      if (userRole === "INFLUENCER") {
-        return await this.completeInfluencerProfile(userId, profileData);
-      } else if (userRole === "BRAND_OWNER") {
-        return await this.completeBrandProfile(userId, profileData);
-      } else {
-        return {
-          success: false,
-          message: "Profile completion not supported for this role",
-        };
-      }
-    } catch (err) {
-      console.error("[v1/completeProfile] Exception:", err);
-      return {
-        success: false,
-        message: err.message || "Internal server error",
-      };
-    }
-  }
-
-  /**
-   * Complete influencer profile with PAN, social platforms, languages, categories
-   */
-  async completeInfluencerProfile(userId, profileData) {
-    try {
-      const {
-        uploadImageToStorage,
-        deleteImageFromStorage,
-      } = require("../../utils/imageUpload");
-
       // 1) Handle profile image - file upload takes priority over direct URL
       let profileImageUrl = null;
       if (profileData.profile_image_file) {
@@ -232,12 +207,12 @@ class ProfileService {
         const { url, error: uploadError } = await uploadImageToStorage(
           profileData.profile_image_file.buffer,
           profileData.profile_image_file.originalname,
-          "profiles" // Upload to profiles folder
+          "profiles"
         );
 
         if (uploadError || !url) {
           console.error(
-            "[v1/completeInfluencerProfile] Profile image upload error:",
+            "[v1/updateInfluencerProfile] Profile image upload error:",
             uploadError
           );
           return {
@@ -257,7 +232,6 @@ class ProfileService {
           .maybeSingle();
 
         if (currentProfile?.profile_photo_url) {
-          // Only delete if it's from our storage (contains storage URL pattern)
           const placeholderUrl = "https://via.placeholder.com/400x400?text=Profile+Image";
           if (
             currentProfile.profile_photo_url !== placeholderUrl &&
@@ -275,53 +249,107 @@ class ProfileService {
         } else {
           profileImageUrl = String(profileData.profile_image_url).trim();
         }
+      }
 
-        // Optionally delete old image if it was from our storage and URL is changing
-        if (profileImageUrl) {
-          const { data: currentProfile } = await supabaseAdmin
-            .from("v1_influencer_profiles")
-            .select("profile_photo_url")
-            .eq("user_id", userId)
-            .eq("is_deleted", false)
-            .maybeSingle();
+      // 2) Update v1_users table (editable fields: name, email, phone_number)
+      const userUpdate = {};
+      if (profileData.name !== undefined) {
+        const nameValue = profileData.name !== null && profileData.name !== undefined
+          ? String(profileData.name).trim()
+          : null;
+        // Name is required (NOT NULL) in schema, so validate it's not empty
+        if (!nameValue || nameValue.length === 0) {
+          return { success: false, message: "Name is required and cannot be empty" };
+        }
+        userUpdate.name = nameValue;
+      }
+      if (profileData.email !== undefined) {
+        const emailValue = profileData.email !== null && profileData.email !== undefined
+          ? String(profileData.email).trim() || null
+          : null;
+        // Email is required (NOT NULL) in schema, so validate it's not empty
+        if (!emailValue || emailValue.length === 0) {
+          return { success: false, message: "Email is required and cannot be empty" };
+        }
+        // Validate email format if provided
+        if (emailValue && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailValue)) {
+          return { success: false, message: "Invalid email format" };
+        }
+        userUpdate.email = emailValue;
+      }
+      if (profileData.phone_number !== undefined) {
+        userUpdate.phone_number = profileData.phone_number !== null && profileData.phone_number !== undefined
+          ? String(profileData.phone_number).trim() || null
+          : null;
+      }
 
-          if (
-            currentProfile?.profile_photo_url &&
-            currentProfile.profile_photo_url !== profileImageUrl
-          ) {
-            // Only delete if it's from our storage
-            const placeholderUrl = "https://via.placeholder.com/400x400?text=Profile+Image";
-            if (
-              currentProfile.profile_photo_url !== placeholderUrl &&
-              (currentProfile.profile_photo_url.includes('storage') ||
-               currentProfile.profile_photo_url.includes('supabase') ||
-               currentProfile.profile_photo_url.includes('supabase.co'))
-            ) {
-              await deleteImageFromStorage(currentProfile.profile_photo_url);
-            }
+      if (Object.keys(userUpdate).length > 0) {
+        // First check if user exists
+        const { data: existingUser, error: checkError } = await supabaseAdmin
+          .from("v1_users")
+          .select("id")
+          .eq("id", userId)
+          .eq("is_deleted", false)
+          .maybeSingle();
+
+        if (checkError) {
+          console.error(
+            "[v1/updateInfluencerProfile] User check error:",
+            checkError
+          );
+          return { success: false, message: "Failed to verify user" };
+        }
+
+        if (!existingUser) {
+          return { success: false, message: "User not found or deleted" };
+        }
+
+        const { error: userUpdateError } = await supabaseAdmin
+          .from("v1_users")
+          .update(userUpdate)
+          .eq("id", userId)
+          .eq("is_deleted", false);
+
+        if (userUpdateError) {
+          console.error(
+            "[v1/updateInfluencerProfile] User update error:",
+            userUpdateError
+          );
+          // If image was uploaded but user update failed, delete the uploaded image
+          if (profileImageUrl) {
+            await deleteImageFromStorage(profileImageUrl);
           }
+          
+          // Return more specific error message
+          let errorMessage = "Failed to update user data";
+          if (userUpdateError.code === "23505") {
+            errorMessage = "Email already exists";
+          } else if (userUpdateError.message) {
+            errorMessage = userUpdateError.message;
+          }
+          
+          return { success: false, message: errorMessage };
         }
       }
 
-      // 2) Update v1_influencer_profiles with all fields
+      // 3) Update v1_influencer_profiles table
       const profileUpdate = {};
 
-      // Update profile_photo_url if provided (from file upload or direct URL)
+      // Update profile_photo_url if provided
       if (profileImageUrl !== null && profileImageUrl !== undefined) {
         profileUpdate.profile_photo_url = profileImageUrl;
       } else if (profileData.profile_image_url !== undefined && profileData.profile_image_url === null) {
-        // Explicitly set to null if provided as null
         profileUpdate.profile_photo_url = null;
       }
-      
+
       if (profileData.pan_number !== undefined) {
         profileUpdate.pan_number = profileData.pan_number || null;
       }
-      
+
       if (profileData.primary_language !== undefined) {
         profileUpdate.primary_language = profileData.primary_language || null;
       }
-      
+
       // Handle languages array
       if (profileData.languages !== undefined) {
         if (Array.isArray(profileData.languages)) {
@@ -337,7 +365,7 @@ class ProfileService {
           profileUpdate.languages = null;
         }
       }
-      
+
       // Handle categories array
       if (profileData.categories !== undefined) {
         if (Array.isArray(profileData.categories)) {
@@ -349,39 +377,39 @@ class ProfileService {
           profileUpdate.categories = null;
         }
       }
-      
+
       // Handle bio
       if (profileData.bio !== undefined) {
         profileUpdate.bio = profileData.bio !== null && profileData.bio !== undefined
           ? String(profileData.bio).trim()
           : "";
       }
-      
+
       // Handle city
       if (profileData.city !== undefined) {
         profileUpdate.city = profileData.city !== null && profileData.city !== undefined
           ? String(profileData.city).trim() || null
           : null;
       }
-      
+
       // Handle country
       if (profileData.country !== undefined) {
         profileUpdate.country = profileData.country !== null && profileData.country !== undefined
           ? String(profileData.country).trim() || null
           : null;
       }
-      
+
       // Handle gender
       if (profileData.gender !== undefined) {
         profileUpdate.gender = this.normalizeGender(profileData.gender);
       }
-      
+
       // Handle tier
       if (profileData.tier !== undefined) {
         profileUpdate.tier = this.normalizeTier(profileData.tier);
       }
-      
-      // Handle min_value with proper null/NaN checking
+
+      // Handle min_value
       if (profileData.min_value !== undefined) {
         if (profileData.min_value === null || profileData.min_value === undefined || profileData.min_value === "") {
           profileUpdate.min_value = null;
@@ -390,8 +418,8 @@ class ProfileService {
           profileUpdate.min_value = !isNaN(parsed) ? parsed : null;
         }
       }
-      
-      // Handle max_value with proper null/NaN checking
+
+      // Handle max_value
       if (profileData.max_value !== undefined) {
         if (profileData.max_value === null || profileData.max_value === undefined || profileData.max_value === "") {
           profileUpdate.max_value = null;
@@ -410,7 +438,7 @@ class ProfileService {
           };
         }
       }
-  
+
       let updatedProfile = null;
       if (Object.keys(profileUpdate).length > 0) {
         const { data, error: updateError } = await supabaseAdmin
@@ -420,15 +448,19 @@ class ProfileService {
           .eq("is_deleted", false)
           .select()
           .single();
-  
+
         if (updateError) {
           console.error(
-            "[v1/completeInfluencerProfile] Profile update error:",
+            "[v1/updateInfluencerProfile] Profile update error:",
             updateError
           );
+          // If image was uploaded but profile update failed, delete the uploaded image
+          if (profileImageUrl) {
+            await deleteImageFromStorage(profileImageUrl);
+          }
           return { success: false, message: "Failed to update profile" };
         }
-  
+
         updatedProfile = data;
       } else {
         // Fetch existing profile if no updates
@@ -438,82 +470,102 @@ class ProfileService {
           .eq("user_id", userId)
           .eq("is_deleted", false)
           .single();
-  
+
         if (fetchError) {
           console.error(
-            "[v1/completeInfluencerProfile] Profile fetch error:",
+            "[v1/updateInfluencerProfile] Profile fetch error:",
             fetchError
           );
           return { success: false, message: "Profile not found" };
         }
-  
+
         updatedProfile = data;
       }
-  
-      // 2) Upsert social platforms (still in separate table)
+
+      // 4) Upsert social platforms if provided
       let socialPlatformsResult = { success: true, count: 0 };
-      if (
-        profileData.social_platforms &&
-        Array.isArray(profileData.social_platforms)
-      ) {
-        socialPlatformsResult = await this.upsertSocialPlatforms(
-          userId,
-          profileData.social_platforms
-        );
-        if (!socialPlatformsResult.success) {
-          console.warn(
-            "[v1/completeInfluencerProfile] Some social platforms failed:",
-            socialPlatformsResult.errors
+      if (profileData.social_platforms !== undefined) {
+        if (Array.isArray(profileData.social_platforms) && profileData.social_platforms.length > 0) {
+          socialPlatformsResult = await this.upsertSocialPlatforms(
+            userId,
+            profileData.social_platforms
           );
-          // Continue - don't fail entire request
+          if (!socialPlatformsResult.success) {
+            console.warn(
+              "[v1/updateInfluencerProfile] Some social platforms failed:",
+              socialPlatformsResult.errors
+            );
+            // Continue - don't fail entire request, but log warning
+          }
+        } else if (profileData.social_platforms === null || 
+                   (Array.isArray(profileData.social_platforms) && profileData.social_platforms.length === 0)) {
+          // If empty array or null, we could optionally delete all platforms
+          // For now, we'll just skip updating them
+          socialPlatformsResult = { success: true, count: 0 };
         }
       }
-  
-      // 3) Calculate profile completion percentage
-      // Now using categories and languages from main table
-      const completionPct = this.calculateProfileCompletion(updatedProfile, {
-        hasSocialPlatforms: socialPlatformsResult.count > 0,
-      });
-  
-      // Update completion percentage
-      if (completionPct !== updatedProfile.profile_completion_pct) {
-        await supabaseAdmin
-          .from("v1_influencer_profiles")
-          .update({ profile_completion_pct: completionPct })
-          .eq("user_id", userId);
-        updatedProfile.profile_completion_pct = completionPct;
+
+      // 5) Fetch all user data
+      const { data: userData, error: userError } = await supabaseAdmin
+        .from("v1_users")
+        .select("*")
+        .eq("id", userId)
+        .eq("is_deleted", false)
+        .single();
+
+      if (userError) {
+        console.error(
+          "[v1/updateInfluencerProfile] Error fetching user data:",
+          userError
+        );
       }
-  
+
+      // Filter out sensitive/unnecessary fields from user data
+      let filteredUserData = null;
+      if (userData) {
+        const { is_deleted, password_hash, password_reset_token, password_reset_token_expires_at, ...rest } = userData;
+        filteredUserData = rest;
+      }
+
+      // 6) Fetch all social accounts
+      const { data: socialAccounts, error: socialAccountsError } = await supabaseAdmin
+        .from("v1_influencer_social_accounts")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("is_deleted", false)
+        .order("created_at", { ascending: false });
+
+      if (socialAccountsError) {
+        console.error(
+          "[v1/updateInfluencerProfile] Error fetching social accounts:",
+          socialAccountsError
+        );
+      }
+
       return {
         success: true,
+        user: filteredUserData,
         profile: updatedProfile,
-        social_platforms_count: socialPlatformsResult.count,
-        categories_count: updatedProfile.categories?.length || 0,
-        languages_count: updatedProfile.languages?.length || 0,
-        profile_completion_pct: completionPct,
-        profile_image_url: profileImageUrl || updatedProfile?.profile_photo_url,
-        message: "Profile completed successfully",
+        social_accounts: socialAccounts || [],
+        social_platforms_errors: socialPlatformsResult.errors,
+        message: "Profile updated successfully",
       };
     } catch (err) {
-      console.error("[v1/completeInfluencerProfile] Exception:", err);
+      console.error("[v1/updateInfluencerProfile] Exception:", err);
       return {
         success: false,
         message: err.message || "Internal server error",
       };
     }
   }
-  
 
   /**
-   * Complete brand profile with PAN, brand_name, bio, brand_logo
+   * Update brand profile
+   * Accepts all user-editable fields from v1_users and v1_brand_profiles
+   * Handles image uploads for brand_logo_url
    */
-  async completeBrandProfile(userId, profileData) {
+  async updateBrandProfile(userId, profileData) {
     try {
-      const {
-        uploadImageToStorage,
-        deleteImageFromStorage,
-      } = require("../../utils/imageUpload");
-
       // 1) Handle brand logo - file upload takes priority over direct URL
       let brandLogoUrl = null;
       if (profileData.brand_logo_file) {
@@ -521,12 +573,12 @@ class ProfileService {
         const { url, error: uploadError } = await uploadImageToStorage(
           profileData.brand_logo_file.buffer,
           profileData.brand_logo_file.originalname,
-          "brands" // Upload to brands folder
+          "brands"
         );
 
         if (uploadError || !url) {
           console.error(
-            "[v1/completeBrandProfile] Logo upload error:",
+            "[v1/updateBrandProfile] Logo upload error:",
             uploadError
           );
           return {
@@ -546,7 +598,6 @@ class ProfileService {
           .maybeSingle();
 
         if (currentProfile?.brand_logo_url) {
-          // Only delete if it's from our storage (contains storage URL pattern)
           const placeholderUrl = "https://via.placeholder.com/400x400?text=Brand+Logo";
           if (
             currentProfile.brand_logo_url !== placeholderUrl &&
@@ -564,56 +615,94 @@ class ProfileService {
         } else {
           brandLogoUrl = String(profileData.brand_logo_url).trim();
         }
+      }
 
-        // Optionally delete old logo if it was from our storage and URL is changing
-        if (brandLogoUrl) {
-          const { data: currentProfile } = await supabaseAdmin
-            .from("v1_brand_profiles")
-            .select("brand_logo_url")
-            .eq("user_id", userId)
-            .eq("is_deleted", false)
-            .maybeSingle();
+      // 2) Update v1_users table (editable fields: name, email, phone_number)
+      const userUpdate = {};
+      if (profileData.name !== undefined) {
+        const nameValue = profileData.name !== null && profileData.name !== undefined
+          ? String(profileData.name).trim()
+          : null;
+        // Name is required (NOT NULL) in schema, so validate it's not empty
+        if (!nameValue || nameValue.length === 0) {
+          return { success: false, message: "Name is required and cannot be empty" };
+        }
+        userUpdate.name = nameValue;
+      }
+      if (profileData.email !== undefined) {
+        const emailValue = profileData.email !== null && profileData.email !== undefined
+          ? String(profileData.email).trim() || null
+          : null;
+        // Email is required (NOT NULL) in schema, so validate it's not empty
+        if (!emailValue || emailValue.length === 0) {
+          return { success: false, message: "Email is required and cannot be empty" };
+        }
+        // Validate email format if provided
+        if (emailValue && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailValue)) {
+          return { success: false, message: "Invalid email format" };
+        }
+        userUpdate.email = emailValue;
+      }
+      if (profileData.phone_number !== undefined) {
+        userUpdate.phone_number = profileData.phone_number !== null && profileData.phone_number !== undefined
+          ? String(profileData.phone_number).trim() || null
+          : null;
+      }
 
-          if (
-            currentProfile?.brand_logo_url &&
-            currentProfile.brand_logo_url !== brandLogoUrl
-          ) {
-            // Only delete if it's from our storage
-            const placeholderUrl = "https://via.placeholder.com/400x400?text=Brand+Logo";
-            if (
-              currentProfile.brand_logo_url !== placeholderUrl &&
-              (currentProfile.brand_logo_url.includes('storage') ||
-               currentProfile.brand_logo_url.includes('supabase') ||
-               currentProfile.brand_logo_url.includes('supabase.co'))
-            ) {
-              await deleteImageFromStorage(currentProfile.brand_logo_url);
-            }
+      if (Object.keys(userUpdate).length > 0) {
+        // First check if user exists
+        const { data: existingUser, error: checkError } = await supabaseAdmin
+          .from("v1_users")
+          .select("id")
+          .eq("id", userId)
+          .eq("is_deleted", false)
+          .maybeSingle();
+
+        if (checkError) {
+          console.error(
+            "[v1/updateBrandProfile] User check error:",
+            checkError
+          );
+          return { success: false, message: "Failed to verify user" };
+        }
+
+        if (!existingUser) {
+          return { success: false, message: "User not found or deleted" };
+        }
+
+        const { error: userUpdateError } = await supabaseAdmin
+          .from("v1_users")
+          .update(userUpdate)
+          .eq("id", userId)
+          .eq("is_deleted", false);
+
+        if (userUpdateError) {
+          console.error(
+            "[v1/updateBrandProfile] User update error:",
+            userUpdateError
+          );
+          // If image was uploaded but user update failed, delete the uploaded image
+          if (brandLogoUrl) {
+            await deleteImageFromStorage(brandLogoUrl);
           }
+          
+          // Return more specific error message
+          let errorMessage = "Failed to update user data";
+          if (userUpdateError.code === "23505") {
+            errorMessage = "Email already exists";
+          } else if (userUpdateError.message) {
+            errorMessage = userUpdateError.message;
+          }
+          
+          return { success: false, message: errorMessage };
         }
       }
 
-      // 2) Update v1_brand_profiles
+      // 3) Update v1_brand_profiles table
       const profileUpdate = {};
-
-      // Debug logging (exclude file buffer to avoid terminal spam)
-      const loggableProfileData = { ...profileData };
-      if (loggableProfileData.brand_logo_file) {
-        loggableProfileData.brand_logo_file = {
-          originalname: profileData.brand_logo_file.originalname,
-          size: profileData.brand_logo_file.size,
-          mimetype: profileData.brand_logo_file.mimetype,
-          // Don't log buffer data
-        };
-      }
-
-      console.log(
-        "[v1/completeBrandProfile] Received profileData:",
-        JSON.stringify(loggableProfileData, null, 2)
-      );
 
       // Update pan_number if provided
       if (profileData.pan_number !== undefined) {
-        // Explicitly check for null/undefined, preserve empty strings
         if (
           profileData.pan_number === null ||
           profileData.pan_number === undefined
@@ -623,43 +712,32 @@ class ProfileService {
           const trimmed = String(profileData.pan_number).trim();
           profileUpdate.pan_number = trimmed || null;
         }
-        console.log(
-          "[v1/completeBrandProfile] Setting pan_number:",
-          profileUpdate.pan_number
-        );
       }
 
-      // Update brand_name if provided
+      // Update brand_name if provided (required field - NOT NULL in schema)
       if (profileData.brand_name !== undefined) {
-        // Explicitly check for null/undefined, preserve empty strings
         if (
           profileData.brand_name === null ||
           profileData.brand_name === undefined
         ) {
-          profileUpdate.brand_name = null;
+          return { success: false, message: "Brand name is required and cannot be null" };
         } else {
           const trimmed = String(profileData.brand_name).trim();
-          profileUpdate.brand_name = trimmed || null;
+          if (!trimmed || trimmed.length === 0) {
+            return { success: false, message: "Brand name is required and cannot be empty" };
+          }
+          profileUpdate.brand_name = trimmed;
         }
-        console.log(
-          "[v1/completeBrandProfile] Setting brand_name:",
-          profileUpdate.brand_name
-        );
       }
 
-       // Update bio if provided
-       if (profileData.bio !== undefined) {
-        // Explicitly check for null/undefined, preserve empty strings
+      // Update bio if provided
+      if (profileData.bio !== undefined) {
         if (profileData.bio === null || profileData.bio === undefined) {
           profileUpdate.bio = null;
         } else {
           const trimmed = String(profileData.bio).trim();
           profileUpdate.bio = trimmed || null;
         }
-        console.log(
-          "[v1/completeBrandProfile] Setting bio:",
-          profileUpdate.bio
-        );
       }
 
       // Update brand_description if provided
@@ -670,371 +748,218 @@ class ProfileService {
           const trimmed = String(profileData.brand_description).trim();
           profileUpdate.brand_description = trimmed || null;
         }
-        console.log(
-          "[v1/completeBrandProfile] Setting brand_description:",
-          profileUpdate.brand_description
-        );
       }
 
       // Update gender if provided
       if (profileData.gender !== undefined) {
         profileUpdate.gender = this.normalizeGender(profileData.gender);
-        console.log(
-          "[v1/completeBrandProfile] Setting gender:",
-          profileUpdate.gender
-        );
       }
 
-      // Update brand_logo_url if provided (from file upload or direct URL)
+      // Update brand_logo_url if provided (required field - NOT NULL in schema)
       if (brandLogoUrl !== null) {
         profileUpdate.brand_logo_url = brandLogoUrl;
-      } else if (profileData.brand_logo_url !== undefined && profileData.brand_logo_url === null) {
-        // Explicitly set to null if provided as null
-        profileUpdate.brand_logo_url = null;
+      } else if (profileData.brand_logo_url !== undefined) {
+        if (profileData.brand_logo_url === null || profileData.brand_logo_url === "") {
+          return { success: false, message: "Brand logo URL is required and cannot be null" };
+        } else {
+          const trimmed = String(profileData.brand_logo_url).trim();
+          if (!trimmed || trimmed.length === 0) {
+            return { success: false, message: "Brand logo URL is required and cannot be empty" };
+          }
+          profileUpdate.brand_logo_url = trimmed;
+        }
       }
-
-      console.log(
-        "[v1/completeBrandProfile] Final profileUpdate:",
-        JSON.stringify(profileUpdate, null, 2)
-      );
-
-      // Check if profile exists
-      const { data: existingProfile, error: fetchError } = await supabaseAdmin
-        .from("v1_brand_profiles")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("is_deleted", false)
-        .maybeSingle();
 
       let updatedProfile = null;
 
-      if (!existingProfile) {
-        // Profile doesn't exist - create it
-        console.log(
-          "[v1/completeBrandProfile] Profile not found, creating new profile"
-        );
-
-        const placeholderLogoUrl =
-          "https://via.placeholder.com/400x400?text=Brand+Logo";
-
-        const newProfile = {
-          user_id: userId,
-          brand_name: profileData.brand_name || "", // Required field
-          brand_logo_url: brandLogoUrl || placeholderLogoUrl, // Required field
-          bio: profileData.bio || null,
-          brand_description: profileData.brand_description || null, // Add brand_description
-          gender: this.normalizeGender(profileData.gender) || null, // Add gender
-          pan_number: profileData.pan_number || null,
-          pan_verified: false,
-          profile_completion_pct: 0,
-          is_deleted: false,
-        };
-
-        const { data: createdProfile, error: createError } = await supabaseAdmin
+      if (Object.keys(profileUpdate).length > 0) {
+        const { data, error: updateError } = await supabaseAdmin
           .from("v1_brand_profiles")
-          .insert(newProfile)
-          .select()
-          .single();
-
-        if (createError) {
-          console.error(
-            "[v1/completeBrandProfile] Profile creation error:",
-            createError
-          );
-          // If logo was uploaded but profile creation failed, try to delete uploaded logo
-          if (brandLogoUrl) {
-            await deleteImageFromStorage(brandLogoUrl);
-          }
-          return {
-            success: false,
-            message: "Failed to create profile",
-            error: createError.message,
-          };
-        }
-
-        updatedProfile = createdProfile;
-      } else {
-        // Profile exists - update it
-        if (Object.keys(profileUpdate).length > 0) {
-          const { data, error: updateError } = await supabaseAdmin
-            .from("v1_brand_profiles")
-            .update(profileUpdate)
-            .eq("user_id", userId)
-            .eq("is_deleted", false)
-            .select()
-            .single();
-
-          if (updateError) {
-            console.error(
-              "[v1/completeBrandProfile] Profile update error:",
-              updateError
-            );
-            // If logo was uploaded but update failed, try to delete uploaded logo
-            if (brandLogoUrl) {
-              await deleteImageFromStorage(brandLogoUrl);
-            }
-            return { success: false, message: "Failed to update profile" };
-          }
-
-          updatedProfile = data;
-        } else {
-          // No updates to make, use existing profile
-          updatedProfile = existingProfile;
-        }
-      }
-
-      // 3) Calculate profile completion percentage for brand
-      const completionPct =
-        this.calculateBrandProfileCompletion(updatedProfile);
-
-      // Update completion percentage
-      if (completionPct !== updatedProfile.profile_completion_pct) {
-        await supabaseAdmin
-          .from("v1_brand_profiles")
-          .update({ profile_completion_pct: completionPct })
-          .eq("user_id", userId);
-        updatedProfile.profile_completion_pct = completionPct;
-      }
-
-      return {
-        success: true,
-        profile: updatedProfile,
-        profile_completion_pct: completionPct,
-        brand_logo_url: brandLogoUrl || updatedProfile.brand_logo_url,
-        message: "Profile completed successfully",
-      };
-    } catch (err) {
-      console.error("[v1/completeBrandProfile] Exception:", err);
-      return {
-        success: false,
-        message: err.message || "Internal server error",
-      };
-    }
-  }
-
-  /**
-   * Calculate brand profile completion percentage
-   */
-  calculateBrandProfileCompletion(profile) {
-    let completed = 0;
-    let total = 0;
-  
-    // Required/important fields
-    total++;
-    if (profile.brand_logo_url) completed++;
-  
-    total++;
-    if (profile.brand_name) completed++;
-  
-    total++;
-    if (profile.bio) completed++;
-  
-    total++;
-    if (profile.brand_description) completed++; // Add brand_description
-  
-    total++;
-    if (profile.pan_number) completed++;
-  
-    return Math.round((completed / total) * 100);
-  }
-
-  /**
-   * Calculate influencer profile completion percentage
-   */
-  calculateProfileCompletion(profile, extras = {}) {
-    let completed = 0;
-    let total = 0;
-  
-    // Required fields
-    total++;
-    if (profile.profile_photo_url) completed++;
-  
-    total++;
-    if (profile.bio && profile.bio.trim().length > 0) completed++;
-  
-    // Optional but important
-    total++;
-    if (profile.pan_number) completed++;
-  
-    total++;
-    if (profile.primary_language || (profile.languages && profile.languages.length > 0)) completed++;
-  
-    total++;
-    if (extras.hasSocialPlatforms) completed++;
-  
-    // Check categories from main table array
-    total++;
-    if (profile.categories && Array.isArray(profile.categories) && profile.categories.length > 0) completed++;
-  
-    return Math.round((completed / total) * 100);
-  }
-
-  // ---------- Profile Image Upload ----------
-
-  async uploadProfileImage(userId, fileBuffer, fileName) {
-    try {
-      const {
-        uploadImageToStorage,
-        deleteImageFromStorage,
-      } = require("../../utils/imageUpload");
-
-      // 1) Get user to check role
-      const { data: user, error: userError } = await supabaseAdmin
-        .from("v1_users")
-        .select("id, role")
-        .eq("id", userId)
-        .eq("is_deleted", false)
-        .single();
-
-      if (userError || !user) {
-        console.error("[v1/uploadProfileImage] User not found:", userError);
-        return { success: false, message: "User not found" };
-      }
-
-      // 2) Upload new profile image first
-      const { url, error: uploadError } = await uploadImageToStorage(
-        fileBuffer,
-        fileName,
-        "profiles"
-      );
-
-      if (uploadError || !url) {
-        console.error("[v1/uploadProfileImage] Upload error:", uploadError);
-        return {
-          success: false,
-          message: uploadError || "Failed to upload image",
-        };
-      }
-
-      // 3) Check if profile exists
-      const { data: currentProfile, error: fetchError } = await supabaseAdmin
-        .from("v1_influencer_profiles")
-        .select("profile_photo_url")
-        .eq("user_id", userId)
-        .eq("is_deleted", false)
-        .maybeSingle();
-
-      if (fetchError && fetchError.code !== "PGRST116") {
-        console.error(
-          "[v1/uploadProfileImage] Error fetching profile:",
-          fetchError
-        );
-        return { success: false, message: "Failed to fetch profile" };
-      }
-
-      // 4) Delete old profile image if it exists
-      if (currentProfile?.profile_photo_url) {
-        await deleteImageFromStorage(currentProfile.profile_photo_url);
-      }
-
-      // 5) Create or update profile
-      let updatedProfile;
-
-      if (!currentProfile) {
-        // Profile doesn't exist - create it with the image URL
-        // This should rarely happen now since profile is created during verify-otp
-        console.log(
-          "[v1/uploadProfileImage] Profile not found, creating new profile"
-        );
-
-        if (user.role === "INFLUENCER") {
-          const profileData = {
-            user_id: userId,
-            profile_photo_url: url,
-            is_profile_verified: false,
-            bio: "",
-            city: null,
-            country: null,
-            primary_language: null,
-            languages: null,
-            gender: null,
-            tier: null,
-            pan_number: null,
-            pan_verified: false,
-            profile_completion_pct: 0,
-            is_deleted: false,
-            categories: null,
-            min_value: null,
-            max_value: null,
-          };
-      
-          const { data: createdProfile, error: createError } =
-            await supabaseAdmin
-              .from("v1_influencer_profiles")
-              .insert(profileData)
-              .select()
-              .single();
-      
-          if (createError) {
-            console.error(
-              "[v1/uploadProfileImage] Profile creation error:",
-              createError
-            );
-            await deleteImageFromStorage(url);
-            return {
-              success: false,
-              message: "Failed to create profile",
-              error: createError.message,
-            };
-          }
-      
-          updatedProfile = createdProfile;
-        } else {
-          // For BRAND_OWNER or other roles, handle differently if needed
-          return {
-            success: false,
-            message: "Profile image upload only supported for influencers",
-          };
-        }
-      } else {
-        // Profile exists - update it with new image URL
-        // Delete old image if it's not the placeholder
-        const placeholderUrl =
-          "https://via.placeholder.com/400x400?text=Profile+Image";
-        if (
-          currentProfile.profile_photo_url &&
-          currentProfile.profile_photo_url !== placeholderUrl
-        ) {
-          await deleteImageFromStorage(currentProfile.profile_photo_url);
-        }
-
-        const { data: updated, error: updateError } = await supabaseAdmin
-          .from("v1_influencer_profiles")
-          .update({ profile_photo_url: url })
+          .update(profileUpdate)
           .eq("user_id", userId)
           .eq("is_deleted", false)
           .select()
           .single();
 
         if (updateError) {
-          console.error("[v1/uploadProfileImage] Update error:", updateError);
-          // Try to delete uploaded image if update fails
-          await deleteImageFromStorage(url);
-          return {
-            success: false,
-            message: "Failed to update profile image",
-            error: updateError.message,
-          };
+          console.error(
+            "[v1/updateBrandProfile] Profile update error:",
+            updateError
+          );
+          // If logo was uploaded but update failed, try to delete uploaded logo
+          if (brandLogoUrl) {
+            await deleteImageFromStorage(brandLogoUrl);
+          }
+          return { success: false, message: "Failed to update profile" };
         }
 
-        updatedProfile = updated;
+        updatedProfile = data;
+      } else {
+        // Fetch existing profile if no updates
+        const { data, error: fetchError } = await supabaseAdmin
+          .from("v1_brand_profiles")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("is_deleted", false)
+          .single();
+
+        if (fetchError) {
+          console.error(
+            "[v1/updateBrandProfile] Profile fetch error:",
+            fetchError
+          );
+          return { success: false, message: "Profile not found" };
+        }
+
+        updatedProfile = data;
+      }
+
+      // 4) Fetch all user data
+      const { data: userData, error: userError } = await supabaseAdmin
+        .from("v1_users")
+        .select("*")
+        .eq("id", userId)
+        .eq("is_deleted", false)
+        .single();
+
+      if (userError) {
+        console.error(
+          "[v1/updateBrandProfile] Error fetching user data:",
+          userError
+        );
+      }
+
+      // Filter out sensitive/unnecessary fields from user data
+      let filteredUserData = null;
+      if (userData) {
+        const { is_deleted, password_hash, password_reset_token, password_reset_token_expires_at, ...rest } = userData;
+        filteredUserData = rest;
       }
 
       return {
         success: true,
+        user: filteredUserData,
         profile: updatedProfile,
-        profile_image_url: url,
-        message: "Profile image uploaded successfully",
+        brand_logo_url: brandLogoUrl || updatedProfile.brand_logo_url,
+        message: "Profile updated successfully",
       };
     } catch (err) {
-      console.error("[v1/uploadProfileImage] Exception:", err);
+      console.error("[v1/updateBrandProfile] Exception:", err);
       return {
         success: false,
         message: err.message || "Internal server error",
       };
     }
   }
+
+  /**
+   * Create initial influencer profile during user registration
+   * (Used internally by authService during registration)
+   */
+  async createInfluencerProfile(user, userData) {
+    try {
+      const primaryLanguage =
+        userData?.primary_language ||
+        (Array.isArray(userData?.languages) && userData.languages[0]) ||
+        null;
+  
+      const languagesArray = Array.isArray(userData?.languages) 
+        ? userData.languages.filter(lang => lang && String(lang).trim().length > 0)
+        : null;
+  
+      const categoriesArray = Array.isArray(userData?.categories)
+        ? userData.categories.filter(cat => cat && String(cat).trim().length > 0)
+        : null;
+  
+      const placeholderImageUrl =
+        "https://via.placeholder.com/400x400?text=Profile+Image";
+  
+      const profile = {
+        user_id: user.id,
+        profile_photo_url: userData?.profile_image_url || placeholderImageUrl,
+        is_profile_verified: false,
+        bio: userData?.bio || "",
+        city: userData?.address_city || userData?.city || null,
+        country: userData?.address_country || userData?.country || null,
+        primary_language: primaryLanguage,
+        languages: languagesArray,
+        gender: this.normalizeGender(userData?.gender),
+        tier: this.normalizeTier(userData?.tier),
+        pan_number: userData?.pan_number || null,
+        pan_verified: false,
+        profile_completion_pct: 0,
+        is_deleted: false,
+        categories: categoriesArray,
+        min_value: userData?.min_value !== undefined ? parseFloat(userData.min_value) : null,
+        max_value: userData?.max_value !== undefined ? parseFloat(userData.max_value) : null,
+      };
+  
+      const { data, error } = await supabaseAdmin
+        .from("v1_influencer_profiles")
+        .insert(profile)
+        .select();
+  
+      if (error) {
+        console.error("[v1/createInfluencerProfile] Database error:", error);
+        return { success: false, error: error.message, details: error };
+      }
+  
+      return { success: true, profile: data?.[0] };
+    } catch (err) {
+      console.error("[v1/createInfluencerProfile] Exception:", err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Create initial brand profile during user registration
+   * (Used internally by authService during registration)
+   */
+  async createBrandProfile(user, userData) {
+    try {
+      const placeholderLogoUrl =
+        "https://via.placeholder.com/400x400?text=Brand+Logo";
+  
+      const brandName = userData?.brand_name || userData?.business_name || "";
+  
+      const profile = {
+        user_id: user.id,
+        brand_name: brandName,
+        brand_logo_url:
+          userData?.brand_logo_url ||
+          userData?.profile_image_url ||
+          placeholderLogoUrl,
+        bio: userData?.bio || null,
+        brand_description: userData?.brand_description || null,
+        gender: this.normalizeGender(userData?.gender),
+        pan_number: userData?.pan_number || null,
+        pan_verified: false,
+        profile_completion_pct: 0,
+        is_deleted: false,
+      };
+  
+      const { data, error } = await supabaseAdmin
+        .from("v1_brand_profiles")
+        .insert(profile)
+        .select("*")
+        .single();
+  
+      if (error) {
+        console.error("[v1/createBrandProfile] Database error:", error);
+        return { success: false, error: error.message, details: error };
+      }
+  
+      if (!data) {
+        console.error("[v1/createBrandProfile] No data returned from insert");
+        return { success: false, error: "Profile creation returned no data" };
+      }
+  
+      return { success: true, profile: data };
+    } catch (err) {
+      console.error("[v1/createBrandProfile] Exception:", err);
+      return { success: false, error: err.message };
+    }
+  }
 }
 
 module.exports = new ProfileService();
-

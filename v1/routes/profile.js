@@ -5,11 +5,9 @@ const { validateCompleteProfile } = require("../validators");
 const authMiddleware = require("../middleware/authMiddleware");
 const { upload } = require("../../utils/imageUpload");
 
-// ============================================
-// PROTECTED ROUTES - Profile Management
-// ============================================
+// Single endpoint for updating profile based on user role
 router.put(
-  "/complete",
+  "/update",
   authMiddleware.authenticateToken,
   // Handle multipart/form-data for profile image (influencers) or brand logo (brands)
   (req, res, next) => {
@@ -41,8 +39,7 @@ router.put(
   },
   // Validation runs after multer (for JSON fields in multipart)
   validateCompleteProfile,
-  ProfileController.completeProfile
+  ProfileController.updateProfile
 );
 
 module.exports = router;
-

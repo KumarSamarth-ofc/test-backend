@@ -14,6 +14,11 @@ const {
 const AuthService = require("../services/authService");
 const authMiddleware = require("../middleware/authMiddleware");
 
+// Backward compatibility: redirect old profile route to new profile controller
+const { ProfileController } = require("../controllers/profileController");
+const { validateCompleteProfile } = require("../validators");
+const { upload } = require("../../utils/imageUpload");
+
 // ============================================
 // PUBLIC ROUTES - OTP Authentication (Influencers)
 // ============================================
