@@ -33,6 +33,7 @@ const adminSettingsRoutes = require("../routes/adminSettings");
 const enhancedWalletRoutes = require("../routes/enhancedWallet");
 const socialPlatformRoutes = require("../routes/socialPlatforms");
 const influencerRoutes = require("../routes/influencers");
+const oauthRoutes = require("../routes/oauth");
 
 const app = express();
 const server = http.createServer(app);
@@ -121,6 +122,20 @@ app.get("/test-socket", (req, res) => {
 
 // Setup security middleware
 setupSecurityMiddleware(app);
+
+// Serve static files for App Links (must be before other routes)
+const path = require('path');
+app.use(express.static(path.join(__dirname, '../public')));
+
+// Serve .well-known and apple-app-site-association at root paths
+app.get('/.well-known/assetlinks.json', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/.well-known/assetlinks.json'));
+});
+
+app.get('/apple-app-site-association', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.sendFile(path.join(__dirname, '../public/apple-app-site-association'));
+});
 
 // CORS test endpoint (after security middleware)
 app.get("/api/cors-test", (req, res) => {
@@ -887,6 +902,7 @@ app.use("/api/coupons", couponRoutes);
 app.use("/api/social-platforms", socialPlatformRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/influencers", influencerRoutes);
+app.use("/api/oauth", oauthRoutes);
 
 // v1 API routes (new tables, new flow)
 try {
