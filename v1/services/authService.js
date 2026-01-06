@@ -248,7 +248,7 @@ class AuthService {
         user = created;
 
         // 4) Create role-specific profile with bio and placeholder image
-        const { ProfileService } = require("./profileService");
+        const ProfileService = require("./profileService");
         if (role === "INFLUENCER") {
           const profileResult = await ProfileService.createInfluencerProfile(
             user,
@@ -486,6 +486,8 @@ class AuthService {
    * Register brand owner with email and password
    */
   async registerBrandOwner(email, password, name) {
+    let createdUserId = null; // Track created user ID for cleanup
+    
     try {
       // 1) Validate email format
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -552,9 +554,12 @@ class AuthService {
         };
       }
 
+      // Track the created user ID for potential cleanup
+      createdUserId = created.id;
+
       // 7) Create brand profile in v1_brand_profiles table
       // brand_name will be empty string (required field) - will be updated in complete profile
-      const { ProfileService } = require("./profileService");
+      const ProfileService = require("./profileService");
       const profileResult = await ProfileService.createBrandProfile(created, {
         brand_name: "", // Empty string - required field, will be set in complete profile
       });
@@ -566,7 +571,35 @@ class AuthService {
           profileResult.details
         );
         // If profile creation fails, rollback user creation for data consistency
-        await supabaseAdmin.from("v1_users").delete().eq("id", created.id);
+        if (createdUserId) {
+          const { error: deleteError, count } = await supabaseAdmin
+            .from("v1_users")
+            .delete()
+            .eq("id", createdUserId);
+          
+          if (deleteError) {
+            console.error(
+              "[v1/registerBrandOwner] Failed to rollback user creation:",
+              deleteError
+            );
+            // Log critical error - user exists without profile
+            console.error(
+              "[v1/registerBrandOwner] CRITICAL: User created but profile creation failed and rollback failed. User ID:",
+              createdUserId
+            );
+          } else if (count === 0) {
+            console.warn(
+              "[v1/registerBrandOwner] User rollback attempted but no rows deleted. User ID:",
+              createdUserId
+            );
+          } else {
+            console.log(
+              "[v1/registerBrandOwner] Successfully rolled back user creation. User ID:",
+              createdUserId
+            );
+          }
+        }
+        
         return {
           success: false,
           message: `Failed to create brand profile: ${
@@ -576,9 +609,40 @@ class AuthService {
       }
 
       console.log(
-        "[v1/registerBrandOwner] Brand profile created successfully:",
-        profileResult.profile?.id
+        "[v1/registerBrandOwner] Brand profile created successfully. User ID:",
+        created.id,
+        "Profile user_id:",
+        profileResult.profile?.user_id
       );
+
+      // Verify the profile was actually created and is queryable
+      const { data: verifyProfile, error: verifyError } = await supabaseAdmin
+        .from("v1_brand_profiles")
+        .select("user_id, is_deleted")
+        .eq("user_id", created.id)
+        .eq("is_deleted", false)
+        .maybeSingle();
+
+      if (verifyError) {
+        console.error(
+          "[v1/registerBrandOwner] Error verifying profile creation:",
+          verifyError
+        );
+      } else if (!verifyProfile) {
+        console.error(
+          "[v1/registerBrandOwner] CRITICAL: Profile was created but cannot be found! User ID:",
+          created.id,
+          "Profile data:",
+          profileResult.profile
+        );
+      } else {
+        console.log(
+          "[v1/registerBrandOwner] Profile verification successful. User ID:",
+          verifyProfile.user_id,
+          "is_deleted:",
+          verifyProfile.is_deleted
+        );
+      }
 
       // TODO: Send email verification email with token
       // For now, return token (in production, send via email)
@@ -605,7 +669,55 @@ class AuthService {
       };
     } catch (err) {
       console.error("[v1/registerBrandOwner] Exception:", err);
-      return { success: false, message: "Registration failed" };
+      
+      // If user was created but exception occurred, try to clean up
+      if (createdUserId) {
+        try {
+          console.log(
+            "[v1/registerBrandOwner] Attempting to cleanup user after exception. User ID:",
+            createdUserId
+          );
+          const { error: deleteError, count } = await supabaseAdmin
+            .from("v1_users")
+            .delete()
+            .eq("id", createdUserId);
+          
+          if (deleteError) {
+            console.error(
+              "[v1/registerBrandOwner] Failed to cleanup user after exception:",
+              deleteError
+            );
+            console.error(
+              "[v1/registerBrandOwner] CRITICAL: User exists but registration failed. User ID:",
+              createdUserId
+            );
+          } else if (count === 0) {
+            console.warn(
+              "[v1/registerBrandOwner] Cleanup attempted but no rows deleted. User ID:",
+              createdUserId
+            );
+          } else {
+            console.log(
+              "[v1/registerBrandOwner] Successfully cleaned up user after exception. User ID:",
+              createdUserId
+            );
+          }
+        } catch (cleanupErr) {
+          console.error(
+            "[v1/registerBrandOwner] Exception during cleanup:",
+            cleanupErr
+          );
+          console.error(
+            "[v1/registerBrandOwner] CRITICAL: User exists but cleanup failed. User ID:",
+            createdUserId
+          );
+        }
+      }
+      
+      return { 
+        success: false, 
+        message: `Registration failed: ${err.message || "Unknown error"}` 
+      };
     }
   }
 
