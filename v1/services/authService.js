@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const whatsappService = require("../utils/whatsapp");
+const emailService = require("../utils/emailService");
 
 class AuthService {
   constructor() {
@@ -644,11 +645,42 @@ class AuthService {
         );
       }
 
-      // TODO: Send email verification email with token
-      // For now, return token (in production, send via email)
+      // Send email verification email with token
+      const emailResult = await emailService.sendVerificationEmail(
+        created.email,
+        emailVerificationToken,
+        created.name
+      );
+
+      if (!emailResult.success) {
+        console.warn(
+          "[v1/registerBrandOwner] Failed to send verification email:",
+          emailResult.message
+        );
+        // Still return success - user is created, they can request resend
+        // In development, also return token for testing
+        return {
+          success: true,
+          user: {
+            id: created.id,
+            email: created.email,
+            role: created.role,
+            email_verified: created.email_verified,
+          },
+          verification_token:
+            process.env.NODE_ENV === "development"
+              ? emailVerificationToken
+              : undefined,
+          message:
+            "Brand owner registered successfully. Please verify your email.",
+          email_sent: false,
+          email_error: emailResult.message,
+        };
+      }
+
       console.log(
-        "[v1/registerBrandOwner] Email verification token:",
-        emailVerificationToken
+        "[v1/registerBrandOwner] Verification email sent successfully. Message ID:",
+        emailResult.messageId
       );
 
       return {
@@ -659,13 +691,14 @@ class AuthService {
           role: created.role,
           email_verified: created.email_verified,
         },
-        // Remove this in production - token should be sent via email only
+        // Only return token in development for testing
         verification_token:
           process.env.NODE_ENV === "development"
             ? emailVerificationToken
             : undefined,
         message:
-          "Brand owner registered successfully. Please verify your email.",
+          "Brand owner registered successfully. Please check your email to verify your account.",
+        email_sent: true,
       };
     } catch (err) {
       console.error("[v1/registerBrandOwner] Exception:", err);
@@ -899,21 +932,45 @@ class AuthService {
         };
       }
 
-      // TODO: Send email with verification link
-      // For now, return token (in production, send via email)
+      // Send email with verification link
+      const emailResult = await emailService.sendVerificationEmail(
+        user.email,
+        verificationToken,
+        user.name
+      );
+
+      if (!emailResult.success) {
+        console.error(
+          "[v1/resendEmailVerification] Failed to send verification email:",
+          emailResult.message
+        );
+        // In development, still return token for testing
+        return {
+          success: true,
+          message: "Verification link sent to email",
+          verification_token:
+            process.env.NODE_ENV === "development"
+              ? verificationToken
+              : undefined,
+          email_sent: false,
+          email_error: emailResult.message,
+        };
+      }
+
       console.log(
-        "[v1/resendEmailVerification] Verification token:",
-        verificationToken
+        "[v1/resendEmailVerification] Verification email sent successfully. Message ID:",
+        emailResult.messageId
       );
 
       return {
         success: true,
         message: "Verification link sent to email",
-        // Remove this in production - token should be sent via email only
+        // Only return token in development for testing
         verification_token:
           process.env.NODE_ENV === "development"
             ? verificationToken
             : undefined,
+        email_sent: true,
       };
     } catch (err) {
       console.error("[v1/resendEmailVerification] Exception:", err);
@@ -960,16 +1017,41 @@ class AuthService {
         return { success: false, message: "Failed to generate reset token" };
       }
 
-      // TODO: Send email with reset link
-      // For now, return token (in production, send via email)
-      console.log("[v1/forgotPassword] Reset token:", resetToken);
+      // Send email with reset link
+      const emailResult = await emailService.sendPasswordResetEmail(
+        user.email,
+        resetToken,
+        user.name
+      );
+
+      if (!emailResult.success) {
+        console.error(
+          "[v1/forgotPassword] Failed to send password reset email:",
+          emailResult.message
+        );
+        // In development, still return token for testing
+        return {
+          success: true,
+          message: "Password reset link sent to email",
+          reset_token:
+            process.env.NODE_ENV === "development" ? resetToken : undefined,
+          email_sent: false,
+          email_error: emailResult.message,
+        };
+      }
+
+      console.log(
+        "[v1/forgotPassword] Password reset email sent successfully. Message ID:",
+        emailResult.messageId
+      );
 
       return {
         success: true,
         message: "Password reset link sent to email",
-        // Remove this in production - token should be sent via email only
+        // Only return token in development for testing
         reset_token:
           process.env.NODE_ENV === "development" ? resetToken : undefined,
+        email_sent: true,
       };
     } catch (err) {
       console.error("[v1/forgotPassword] Exception:", err);
