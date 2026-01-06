@@ -212,10 +212,10 @@ class ApplicationService {
         };
       }
 
-      // Verify brand owns the campaign
+      // Verify brand owns the campaign and fetch requires_script
       const { data: campaign, error: campaignError } = await supabaseAdmin
         .from('v1_campaigns')
-        .select('id, brand_id')
+        .select('id, brand_id, requires_script')
         .eq('id', campaignId)
         .maybeSingle();
 
@@ -231,6 +231,9 @@ class ApplicationService {
       if (campaign.brand_id !== brandId) {
         return { success: false, message: 'Unauthorized: You do not own this campaign' };
       }
+
+      // Get script_needed from campaign
+      const scriptNeeded = campaign.requires_script === true;
 
       // Verify all application IDs belong to this campaign and fetch their current status
       const applicationIds = applications.map(app => app.applicationId);
@@ -263,7 +266,7 @@ class ApplicationService {
 
       // Process each application
       for (const appData of applications) {
-        const { applicationId, agreedAmount, platformFeePercent, requiresScript } = appData;
+        const { applicationId, agreedAmount, platformFeePercent } = appData;
         let individualResult = { applicationId, success: false, message: 'Unknown error' };
 
         try {
@@ -299,9 +302,10 @@ class ApplicationService {
             continue;
           }
 
+          // Determine phase based on campaign's requires_script field
           const platformFeeAmount = (agreedAmount * platformFeePercent) / 100;
           const netAmount = agreedAmount - platformFeeAmount;
-          const phase = requiresScript ? 'SCRIPT' : 'WORK';
+          const phase = scriptNeeded ? 'SCRIPT' : 'WORK';
 
           // Update application
           const { data: updated, error: updateError } = await supabaseAdmin
@@ -407,9 +411,34 @@ class ApplicationService {
         };
       }
 
+      // Fetch campaign to get requires_script field
+      const campaignId = app.campaign_id;
+      const { data: campaign, error: campaignError } = await supabaseAdmin
+        .from('v1_campaigns')
+        .select('requires_script')
+        .eq('id', campaignId)
+        .maybeSingle();
+
+      if (campaignError) {
+        console.error('[ApplicationService/accept] Campaign fetch error:', campaignError);
+        return {
+          success: false,
+          message: 'Failed to fetch campaign details',
+        };
+      }
+
+      if (!campaign) {
+        return {
+          success: false,
+          message: 'Campaign not found',
+        };
+      }
+
+      // Determine phase based on campaign's requires_script field
+      const scriptNeeded = campaign.requires_script === true;
       const platformFeeAmount = (agreedAmount * platformFeePercent) / 100;
       const netAmount = agreedAmount - platformFeeAmount;
-      const phase = requiresScript ? 'SCRIPT' : 'WORK';
+      const phase = scriptNeeded ? 'SCRIPT' : 'WORK';
 
       // Update application
       const { data: updated, error: updateError } = await supabaseAdmin
@@ -437,7 +466,6 @@ class ApplicationService {
 
       // Update accepted_count in v1_campaigns table
       // Count all applications with status ACCEPTED or COMPLETED for this campaign
-      const campaignId = app.campaign_id;
       if (campaignId) {
         const countUpdateResult = await this.updateCampaignAcceptedCount(campaignId);
         if (!countUpdateResult.success) {

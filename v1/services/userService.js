@@ -202,6 +202,85 @@ class UserService {
       };
     }
   }
+
+  /**
+   * Get all influencers from v1_users table
+   * Returns all users with role INFLUENCER and their profiles
+   */
+  async getAllInfluencers() {
+    try {
+      // Get all influencer users
+      const { data: influencers, error: influencersError } = await supabaseAdmin
+        .from("v1_users")
+        .select("*")
+        .eq("role", "INFLUENCER")
+        .eq("is_deleted", false)
+        .order("created_at", { ascending: false });
+
+      if (influencersError) {
+        console.error(
+          "[v1/UserService/getAllInfluencers] Database error:",
+          influencersError
+        );
+        return {
+          success: false,
+          message: "Failed to fetch influencers",
+          error: influencersError.message,
+        };
+      }
+
+      // Get influencer profiles for all influencers
+      const userIds = (influencers || []).map((inf) => inf.id);
+      let influencerProfiles = [];
+      let profilesError = null;
+
+      if (userIds.length > 0) {
+        const profilesResult = await supabaseAdmin
+          .from("v1_influencer_profiles")
+          .select("*")
+          .in("user_id", userIds)
+          .eq("is_deleted", false);
+        
+        influencerProfiles = profilesResult.data || [];
+        profilesError = profilesResult.error;
+      }
+
+      if (profilesError) {
+        console.error(
+          "[v1/UserService/getAllInfluencers] Profiles error:",
+          profilesError
+        );
+      }
+
+      // Map profiles to users
+      const profileMap = {};
+      (influencerProfiles || []).forEach((profile) => {
+        profileMap[profile.user_id] = profile;
+      });
+
+      // Combine user data with profiles
+      const influencersWithProfiles = (influencers || []).map((influencer) => ({
+        ...influencer,
+        influencer_profile: profileMap[influencer.id] || null,
+      }));
+
+      return {
+        success: true,
+        influencers: influencersWithProfiles,
+        total: influencersWithProfiles.length,
+      };
+    } catch (err) {
+      console.error(
+        "[v1/UserService/getAllInfluencers] Exception:",
+        err
+      );
+      return {
+        success: false,
+        message: "Failed to fetch influencers",
+        error: err.message,
+      };
+    }
+  }
 }
 
 module.exports = new UserService();

@@ -265,34 +265,82 @@ class CampaignService {
 
   /**
    * Get single campaign by ID
+   * Includes applications with user data for each application
    */
   async getCampaignById(campaignId, userId = null) {
     try {
-      const { data, error } = await supabaseAdmin
+      // Fetch the campaign
+      const { data: campaign, error: campaignError } = await supabaseAdmin
         .from("v1_campaigns")
         .select("*")
         .eq("id", campaignId)
         .maybeSingle();
 
-      if (error) {
-        console.error("[v1/getCampaignById] Database error:", error);
+      if (campaignError) {
+        console.error("[v1/getCampaignById] Database error:", campaignError);
         return {
           success: false,
           message: "Failed to fetch campaign",
-          error: error.message,
+          error: campaignError.message,
         };
       }
 
-      if (!data) {
+      if (!campaign) {
         return {
           success: false,
           message: "Campaign not found",
         };
       }
 
+      // Fetch all applications for this campaign
+      const { data: applications, error: applicationsError } = await supabaseAdmin
+        .from("v1_applications")
+        .select("*")
+        .eq("campaign_id", campaignId)
+        .order("created_at", { ascending: false });
+
+      if (applicationsError) {
+        console.error("[v1/getCampaignById] Applications fetch error:", applicationsError);
+        // Continue without applications if there's an error
+      }
+
+      // Fetch user data for each influencer who applied
+      let applicationsWithUsers = [];
+      if (applications && applications.length > 0) {
+        const influencerIds = [...new Set(applications.map(app => app.influencer_id).filter(Boolean))];
+        
+        let userMap = {};
+        if (influencerIds.length > 0) {
+          const { data: users, error: usersError } = await supabaseAdmin
+            .from("v1_users")
+            .select("*")
+            .in("id", influencerIds)
+            .eq("is_deleted", false);
+
+          if (usersError) {
+            console.error("[v1/getCampaignById] Users fetch error:", usersError);
+          } else if (users) {
+            // Create a map for quick lookup
+            users.forEach(user => {
+              userMap[user.id] = user;
+            });
+          }
+        }
+
+        // Attach user data to each application
+        applicationsWithUsers = applications.map(application => ({
+          ...application,
+          user: userMap[application.influencer_id] || null
+        }));
+      }
+
+      // Return campaign with applications array
       return {
         success: true,
-        campaign: data,
+        campaign: {
+          ...campaign,
+          applications: applicationsWithUsers
+        },
       };
     } catch (err) {
       console.error("[v1/getCampaignById] Exception:", err);
