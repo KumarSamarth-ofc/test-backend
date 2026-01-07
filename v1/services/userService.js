@@ -206,7 +206,7 @@ class UserService {
 
   /**
    * Get all influencers from v1_users table
-   * Returns all users with role INFLUENCER and their profiles
+   * Returns all users with role INFLUENCER with their profiles, social accounts, and categories
    */
   async getAllInfluencers() {
     try {
@@ -285,12 +285,27 @@ class UserService {
         profileMap[profile.user_id] = profile;
       });
 
-      // Combine user data with profiles and social accounts
-      const influencersWithProfiles = (influencers || []).map((influencer) => ({
-        ...influencer,
-        influencer_profile: profileMap[influencer.id] || null,
-        social_accounts: socialAccountsMap[influencer.id] || [],
-      }));
+      // Combine user data with profiles, social accounts, and categories
+      // Structure the response to include all requested data
+      const influencersWithProfiles = (influencers || []).map((influencer) => {
+        const profile = profileMap[influencer.id] || null;
+        
+        // Filter out sensitive fields from user data
+        const { password_hash, password_reset_token, password_reset_token_expires_at, is_deleted, ...userDetails } = influencer;
+        
+        return {
+          // User details
+          ...userDetails,
+          // Profile details (includes all profile fields including portfolio if it exists)
+          profile: profile || null,
+          // Portfolio (if it exists as a field in profile, otherwise null)
+          portfolio: profile?.portfolio || profile?.portfolio_links || null,
+          // Social accounts
+          social_accounts: socialAccountsMap[influencer.id] || [],
+          // Categories (from profile, fallback to empty array for easy access)
+          categories: profile?.categories || [],
+        };
+      });
 
       return {
         success: true,

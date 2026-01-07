@@ -14,15 +14,9 @@ class SubmissionService {
       const randomString = Math.random().toString(36).substring(2, 15);
       const uniqueFileName = `${folder}/${timestamp}_${randomString}${fileExtension}`;
 
-      // Determine storage bucket based on file type
-      let bucket = 'images'; // Default
-      if (mimeType.includes('pdf') || mimeType.includes('document') || 
-          mimeType.includes('word') || mimeType.includes('text') ||
-          mimeType.includes('msword') || mimeType.includes('officedocument')) {
-        bucket = 'documents';
-      } else if (mimeType.includes('video')) {
-        bucket = 'videos';
-      }
+      // Use 'attachments' bucket for all file types (it's already set up for general uploads)
+      // Files are organized by the folder parameter ('scripts' or 'work')
+      const bucket = 'scripts';
 
       // Upload to Supabase Storage
       const { data, error } = await supabaseAdmin.storage
