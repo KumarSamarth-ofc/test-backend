@@ -101,6 +101,7 @@ class UserService {
       return {
         success: true,
         user: user,
+        brand_id: user.id, // Add brand_id explicitly
         brand_profile: brandProfile || null,
         campaigns: campaignsWithApplications,
       };
@@ -233,6 +234,8 @@ class UserService {
       const userIds = (influencers || []).map((inf) => inf.id);
       let influencerProfiles = [];
       let profilesError = null;
+      let socialAccountsMap = {};
+      let socialAccountsError = null;
 
       if (userIds.length > 0) {
         const profilesResult = await supabaseAdmin
@@ -243,6 +246,30 @@ class UserService {
         
         influencerProfiles = profilesResult.data || [];
         profilesError = profilesResult.error;
+
+        // Fetch social accounts for all influencers
+        const socialAccountsResult = await supabaseAdmin
+          .from("v1_influencer_social_accounts")
+          .select("*")
+          .in("user_id", userIds)
+          .eq("is_deleted", false)
+          .order("created_at", { ascending: false });
+
+        if (socialAccountsResult.error) {
+          socialAccountsError = socialAccountsResult.error;
+          console.error(
+            "[v1/UserService/getAllInfluencers] Social accounts error:",
+            socialAccountsError
+          );
+        } else if (socialAccountsResult.data) {
+          // Group social accounts by user_id
+          socialAccountsResult.data.forEach((account) => {
+            if (!socialAccountsMap[account.user_id]) {
+              socialAccountsMap[account.user_id] = [];
+            }
+            socialAccountsMap[account.user_id].push(account);
+          });
+        }
       }
 
       if (profilesError) {
@@ -258,10 +285,11 @@ class UserService {
         profileMap[profile.user_id] = profile;
       });
 
-      // Combine user data with profiles
+      // Combine user data with profiles and social accounts
       const influencersWithProfiles = (influencers || []).map((influencer) => ({
         ...influencer,
         influencer_profile: profileMap[influencer.id] || null,
+        social_accounts: socialAccountsMap[influencer.id] || [],
       }));
 
       return {
