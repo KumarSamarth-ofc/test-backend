@@ -209,10 +209,9 @@ class PaymentController {
       return res.status(200).json({
         success: true,
         message: result.message || "Payout released successfully",
-        payout_amount_paise: result.payout_amount_paise,
-        payout_amount_rupees: result.payout_amount_rupees,
-        commission_amount_paise: result.commission_amount_paise,
-        new_wallet_balance_paise: result.new_wallet_balance_paise,
+        payout_amount: result.payout_amount,
+        commission_amount: result.commission_amount,
+        new_wallet_balance: result.new_wallet_balance,
         payout: result.payout,
       });
     } catch (err) {

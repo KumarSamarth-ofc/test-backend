@@ -35,7 +35,21 @@ class PaymentService {
   }
 
   /**
-   * Calculate commission and breakdown
+   * Convert Razorpay order object amounts from paise to rupees
+   */
+  convertRazorpayOrderToRupees(razorpayOrder) {
+    if (!razorpayOrder) return null;
+    
+    return {
+      ...razorpayOrder,
+      amount: razorpayOrder.amount ? razorpayOrder.amount / 100 : 0,
+      amount_paid: razorpayOrder.amount_paid ? razorpayOrder.amount_paid / 100 : 0,
+      amount_due: razorpayOrder.amount_due ? razorpayOrder.amount_due / 100 : 0,
+    };
+  }
+
+  /**
+   * Calculate commission and breakdown (all amounts in rupees)
    */
   async calculateCommissionBreakdown(amount) {
     try {
@@ -55,16 +69,15 @@ class PaymentService {
         var commissionPercentage = commissionSettings.commission_percentage;
       }
 
-      const totalAmountPaise = Math.round(amount * 100);
-      const commissionAmountPaise = Math.round(
-        (totalAmountPaise * commissionPercentage) / 100
-      );
-      const netAmountPaise = totalAmountPaise - commissionAmountPaise;
+      // All calculations in rupees
+      const totalAmount = parseFloat(amount);
+      const commissionAmount = (totalAmount * commissionPercentage) / 100;
+      const netAmount = totalAmount - commissionAmount;
 
       return {
-        total_amount_paise: totalAmountPaise,
-        commission_amount_paise: commissionAmountPaise,
-        net_amount_paise: netAmountPaise,
+        total_amount: totalAmount,
+        commission_amount: commissionAmount,
+        net_amount: netAmount,
         commission_percentage: commissionPercentage,
       };
     } catch (err) {
@@ -168,16 +181,19 @@ class PaymentService {
         };
       }
 
-      // Calculate commission breakdown using agreed_amount
+      // Calculate commission breakdown using agreed_amount (in rupees)
       const breakdown = await this.calculateCommissionBreakdown(application.agreed_amount);
 
       // Razorpay receipt must be <= 40 chars
       const rawReceipt = `app_${applicationId.substring(0, 20)}_${Date.now()}`;
       const safeReceipt = rawReceipt.substring(0, 40);
 
+      // Convert to paise for Razorpay API (Razorpay requires amounts in paise)
+      const amountInPaise = Math.round(breakdown.total_amount * 100);
+
       // Create Razorpay order
       const orderOptions = {
-        amount: breakdown.total_amount_paise,
+        amount: amountInPaise,
         currency: "INR",
         receipt: safeReceipt,
         notes: {
@@ -193,12 +209,12 @@ class PaymentService {
 
       const razorpayOrder = await razorpay.orders.create(orderOptions);
 
-      // Store payment order in database
+      // Store payment order in database (amount in rupees)
       const { data: paymentOrder, error: orderError } = await supabaseAdmin
         .from("v1_payment_orders")
         .insert({
           application_id: applicationId,
-          amount_paise: breakdown.total_amount_paise,
+          amount: breakdown.total_amount,
           currency: "INR",
           status: "CREATED",
           razorpay_order_id: razorpayOrder.id,
@@ -211,8 +227,8 @@ class PaymentService {
             payment_type: "application_payment",
             agreed_amount: application.agreed_amount,
             commission_percentage: breakdown.commission_percentage,
-            commission_amount_paise: breakdown.commission_amount_paise,
-            net_amount_paise: breakdown.net_amount_paise,
+            commission_amount: breakdown.commission_amount,
+            net_amount: breakdown.net_amount,
             campaign_title: application.v1_campaigns.title,
           },
         })
@@ -231,9 +247,12 @@ class PaymentService {
         };
       }
 
+      // Convert Razorpay order amounts from paise to rupees for response
+      const orderInRupees = this.convertRazorpayOrderToRupees(razorpayOrder);
+
       return {
         success: true,
-        order: razorpayOrder,
+        order: orderInRupees,
         payment_order: paymentOrder,
         breakdown: breakdown,
         message: "Payment order created successfully",
@@ -540,10 +559,6 @@ class PaymentService {
           .insert({
             user_id: application.influencer_id,
             balance: 0.0,
-            balance_paise: 0,
-            frozen_balance_paise: 0,
-            withdrawn_balance_paise: 0,
-            total_balance_paise: 0,
           })
           .select()
           .single();
@@ -558,10 +573,10 @@ class PaymentService {
         influencerWallet = newWallet;
       }
 
-      // Calculate amount to release (net amount after commission)
-      const netAmountPaise = paymentOrder.metadata?.net_amount_paise || 0;
-      const netAmountRupees = netAmountPaise / 100;
-      const newBalancePaise = (influencerWallet.balance_paise || 0) + netAmountPaise;
+      // Calculate amount to release (net amount after commission, in rupees)
+      const netAmount = paymentOrder.metadata?.net_amount || paymentOrder.amount - (paymentOrder.metadata?.commission_amount || 0);
+      const currentBalance = influencerWallet.balance || 0;
+      const newBalance = currentBalance + netAmount;
 
       // Create payout record first (status: PENDING)
       const { data: payout, error: payoutError } = await supabaseAdmin
@@ -569,7 +584,7 @@ class PaymentService {
         .insert({
           application_id: applicationId,
           influencer_id: application.influencer_id,
-          amount: netAmountRupees, // Store in rupees (numeric(10,2))
+          amount: netAmount, // Store in rupees
           status: "PENDING",
           released_by_admin_id: adminUserId,
         })
@@ -588,12 +603,11 @@ class PaymentService {
         };
       }
 
-      // Update wallet
+      // Update wallet (balance is in rupees)
       const { error: updateWalletError } = await supabaseAdmin
         .from("v1_wallets")
         .update({
-          balance_paise: newBalancePaise,
-          balance: newBalancePaise / 100,
+          balance: newBalance,
         })
         .eq("id", influencerWallet.id);
 
@@ -614,21 +628,20 @@ class PaymentService {
         };
       }
 
-      // Create transaction record
+      // Create transaction record (amount in rupees)
       const { error: transactionError } = await supabaseAdmin
         .from("v1_transactions")
         .insert({
           wallet_id: influencerWallet.id,
           user_id: application.influencer_id,
-          amount: netAmountRupees,
-          amount_paise: netAmountPaise,
+          amount: netAmount,
           type: "credit",
           status: "completed",
           razorpay_payment_id: paymentOrder.razorpay_payment_id,
           razorpay_order_id: paymentOrder.razorpay_order_id,
           campaign_id: paymentOrder.metadata?.campaign_id,
           notes: `Payout released for application ${applicationId}`,
-          balance_after_paise: newBalancePaise,
+          balance_after: newBalance,
         });
 
       if (transactionError) {
@@ -661,10 +674,9 @@ class PaymentService {
       return {
         success: true,
         message: "Payout released to influencer successfully",
-        payout_amount_paise: netAmountPaise,
-        payout_amount_rupees: netAmountRupees,
-        commission_amount_paise: paymentOrder.metadata?.commission_amount_paise || 0,
-        new_wallet_balance_paise: newBalancePaise,
+        payout_amount: netAmount,
+        commission_amount: paymentOrder.metadata?.commission_amount || 0,
+        new_wallet_balance: newBalance,
         payout: updatedPayout || payout,
       };
     } catch (err) {
