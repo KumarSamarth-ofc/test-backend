@@ -41,4 +41,8 @@ router.use('/subscriptions', subscriptionRoutes); // → /api/v1/subscriptions/*
 const submissionRoutes = require('./submissions');
 router.use('/submissions', submissionRoutes); // → /api/v1/submissions/*
 
+// Mount v1 admin settings routes
+const adminSettingsRoutes = require('./adminSettings');
+router.use('/admin/settings', adminSettingsRoutes); // → /api/v1/admin/settings/*
+
 module.exports = router;

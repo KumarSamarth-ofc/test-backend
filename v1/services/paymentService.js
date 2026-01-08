@@ -53,20 +53,18 @@ class PaymentService {
    */
   async calculateCommissionBreakdown(amount) {
     try {
-      // Get current commission settings
-      const { data: commissionSettings, error: commError } = await supabaseAdmin
-        .from("v1_commission_settings")
+      // Get current admin settings (non-expired)
+      const { data: adminSettings, error: commError } = await supabaseAdmin
+        .from("v1_admin_settings")
         .select("*")
-        .eq("is_active", true)
-        .order("effective_from", { ascending: false })
-        .limit(1)
-        .single();
+        .eq("is_expired", false)
+        .maybeSingle();
 
-      if (commError || !commissionSettings) {
-        console.warn("⚠️ No commission settings found, using default 10%");
+      if (commError || !adminSettings) {
+        console.warn("⚠️ No admin settings found, using default 10%");
         var commissionPercentage = 10.0;
       } else {
-        var commissionPercentage = commissionSettings.commission_percentage;
+        var commissionPercentage = adminSettings.commission_percentage;
       }
 
       // All calculations in rupees
