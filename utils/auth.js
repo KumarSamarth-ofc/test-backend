@@ -1290,7 +1290,7 @@ class AuthService {
       return {
         success: true,
         token: newToken,
-        refreshToken: newRefreshToken
+        refreshToken: newRefreshToken,
       };
     } catch (error) {
       return {

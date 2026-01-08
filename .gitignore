@@ -122,4 +122,4 @@ draft_*.md
 .local/ 
 
 # Docs
-v1/v1_API_DOCUMENTATION.md
+v1/docs

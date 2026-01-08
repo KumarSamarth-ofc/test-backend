@@ -7,4 +7,6 @@ module.exports = {
   UserService: require("./userService"),
   ProfileService: require("./profileService"),
   SubmissionService: require("./submissionService"),
+  PaymentService: require("./paymentService"),
+  MOUService: require("./mouService"),
 };

@@ -1195,6 +1195,7 @@ class AuthController {
         res.json({
           success: true,
           data: {
+            role: result.role,
             token: result.token,
             refreshToken: result.refreshToken,
           },

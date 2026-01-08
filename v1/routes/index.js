@@ -41,6 +41,10 @@ router.use('/subscriptions', subscriptionRoutes); // → /api/v1/subscriptions/*
 const submissionRoutes = require('./submissions');
 router.use('/submissions', submissionRoutes); // → /api/v1/submissions/*
 
+// Mount v1 MOU routes
+const mouRoutes = require('./mous');
+router.use('/mous', mouRoutes); // → /api/v1/mous/*
+
 // Mount v1 admin settings routes
 const adminSettingsRoutes = require('./adminSettings');
 router.use('/admin/settings', adminSettingsRoutes); // → /api/v1/admin/settings/*
