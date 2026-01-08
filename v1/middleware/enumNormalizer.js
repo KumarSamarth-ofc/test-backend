@@ -177,6 +177,33 @@ function normalizeEnums(req, res, next) {
           req.query.status = normalized;
         }
       }
+
+      // Payout status filter
+      if (req.query.payout_status !== undefined && req.query.payout_status !== null) {
+        const normalized = String(req.query.payout_status).toUpperCase().trim();
+        const validPayoutStatuses = ["PENDING", "RELEASED", "FAILED"];
+        if (validPayoutStatuses.includes(normalized)) {
+          req.query.payout_status = normalized;
+        }
+      }
+
+      // Payment order status filter
+      if (req.query.payment_status !== undefined && req.query.payment_status !== null) {
+        const normalized = String(req.query.payment_status).toUpperCase().trim();
+        const validPaymentStatuses = ["CREATED", "PROCESSING", "VERIFIED", "FAILED", "REFUNDED"];
+        if (validPaymentStatuses.includes(normalized)) {
+          req.query.payment_status = normalized;
+        }
+      }
+    }
+
+    // Payment order status in body
+    if (req.body.payment_status !== undefined && req.body.payment_status !== null) {
+      const normalized = String(req.body.payment_status).toUpperCase().trim();
+      const validPaymentStatuses = ["CREATED", "PROCESSING", "VERIFIED", "FAILED", "REFUNDED"];
+      if (validPaymentStatuses.includes(normalized)) {
+        req.body.payment_status = normalized;
+      }
     }
   }
 

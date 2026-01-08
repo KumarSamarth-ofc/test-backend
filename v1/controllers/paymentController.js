@@ -187,7 +187,7 @@ class PaymentController {
         });
       }
 
-      const result = await PaymentService.releasePayoutToInfluencer(applicationId);
+      const result = await PaymentService.releasePayoutToInfluencer(applicationId, userId);
 
       if (!result.success) {
         const statusCode =
@@ -195,6 +195,7 @@ class PaymentController {
           result.message === "No verified payment found for this application"
             ? 404
             : result.message === "Payout already released for this application" ||
+              result.message === "Payout already exists in PENDING status" ||
               result.message === "Application must be completed before releasing payout"
             ? 400
             : 500;
@@ -208,9 +209,10 @@ class PaymentController {
       return res.status(200).json({
         success: true,
         message: result.message || "Payout released successfully",
-        payout_amount_paise: result.payout_amount_paise,
-        commission_amount_paise: result.commission_amount_paise,
-        new_wallet_balance_paise: result.new_wallet_balance_paise,
+        payout_amount: result.payout_amount,
+        commission_amount: result.commission_amount,
+        new_wallet_balance: result.new_wallet_balance,
+        payout: result.payout,
       });
     } catch (err) {
       console.error("[v1/PaymentController/releasePayout] Exception:", err);

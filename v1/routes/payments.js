@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const PaymentController = require("../controllers/paymentController");
 const authMiddleware = require("../middleware/authMiddleware");
+const { normalizeEnums } = require("../middleware/enumNormalizer");
 const {
   validateApplicationIdParam,
   validateVerifyPayment,
@@ -33,6 +34,7 @@ router.post(
   "/verify",
   authMiddleware.authenticateToken,
   authMiddleware.requireRole(["BRAND_OWNER", "ADMIN"]),
+  normalizeEnums,
   validateVerifyPayment,
   PaymentController.verifyPayment
 );

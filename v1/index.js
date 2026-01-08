@@ -29,7 +29,7 @@ const corsOptions = {
                 'http://localhost:3001',
                 'http://localhost:5173',
                 'http://localhost:8080',
-                'http://localhost:8081'
+                'http://localhost:8081',
             ];
         
         // Check if origin is in allowed list

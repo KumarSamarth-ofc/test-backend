@@ -413,6 +413,7 @@ class AuthService {
 
       return {
         success: true,
+        role: user.role,
         token: newToken,
         refreshToken: newRefreshToken,
       };

@@ -21,36 +21,61 @@ if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
  */
 class PaymentService {
   /**
-   * Calculate commission and breakdown
+   * Normalize payment status to UPPERCASE
+   * Valid statuses: CREATED, PROCESSING, VERIFIED, FAILED, REFUNDED
+   */
+  normalizeStatus(status) {
+    if (!status) return null;
+    const normalized = String(status).toUpperCase().trim();
+    const validStatuses = ["CREATED", "PROCESSING", "VERIFIED", "FAILED", "REFUNDED"];
+    if (validStatuses.includes(normalized)) {
+      return normalized;
+    }
+    return status; // Return original if not valid (for error handling)
+  }
+
+  /**
+   * Convert Razorpay order object amounts from paise to rupees
+   */
+  convertRazorpayOrderToRupees(razorpayOrder) {
+    if (!razorpayOrder) return null;
+    
+    return {
+      ...razorpayOrder,
+      amount: razorpayOrder.amount ? razorpayOrder.amount / 100 : 0,
+      amount_paid: razorpayOrder.amount_paid ? razorpayOrder.amount_paid / 100 : 0,
+      amount_due: razorpayOrder.amount_due ? razorpayOrder.amount_due / 100 : 0,
+    };
+  }
+
+  /**
+   * Calculate commission and breakdown (all amounts in rupees)
    */
   async calculateCommissionBreakdown(amount) {
     try {
-      // Get current commission settings
-      const { data: commissionSettings, error: commError } = await supabaseAdmin
-        .from("v1_commission_settings")
+      // Get current admin settings (non-expired)
+      const { data: adminSettings, error: commError } = await supabaseAdmin
+        .from("v1_admin_settings")
         .select("*")
-        .eq("is_active", true)
-        .order("effective_from", { ascending: false })
-        .limit(1)
-        .single();
+        .eq("is_expired", false)
+        .maybeSingle();
 
-      if (commError || !commissionSettings) {
-        console.warn("⚠️ No commission settings found, using default 10%");
+      if (commError || !adminSettings) {
+        console.warn("⚠️ No admin settings found, using default 10%");
         var commissionPercentage = 10.0;
       } else {
-        var commissionPercentage = commissionSettings.commission_percentage;
+        var commissionPercentage = adminSettings.commission_percentage;
       }
 
-      const totalAmountPaise = Math.round(amount * 100);
-      const commissionAmountPaise = Math.round(
-        (totalAmountPaise * commissionPercentage) / 100
-      );
-      const netAmountPaise = totalAmountPaise - commissionAmountPaise;
+      // All calculations in rupees
+      const totalAmount = parseFloat(amount);
+      const commissionAmount = (totalAmount * commissionPercentage) / 100;
+      const netAmount = totalAmount - commissionAmount;
 
       return {
-        total_amount_paise: totalAmountPaise,
-        commission_amount_paise: commissionAmountPaise,
-        net_amount_paise: netAmountPaise,
+        total_amount: totalAmount,
+        commission_amount: commissionAmount,
+        net_amount: netAmount,
         commission_percentage: commissionPercentage,
       };
     } catch (err) {
@@ -133,13 +158,15 @@ class PaymentService {
 
       // Check if payment already exists for this application
       const { data: existingPayment } = await supabaseAdmin
-        .from("payment_orders")
+        .from("v1_payment_orders")
         .select("id, status")
-        .contains("metadata", { application_id: applicationId, payment_type: "application_payment" })
+        .eq("application_id", applicationId)
         .maybeSingle();
 
       if (existingPayment) {
-        if (existingPayment.status === "verified") {
+        // Normalize status to UPPERCASE
+        const normalizedStatus = this.normalizeStatus(existingPayment.status) || existingPayment.status;
+        if (normalizedStatus === "VERIFIED") {
           return {
             success: false,
             message: "Payment already completed for this application",
@@ -152,16 +179,19 @@ class PaymentService {
         };
       }
 
-      // Calculate commission breakdown using agreed_amount
+      // Calculate commission breakdown using agreed_amount (in rupees)
       const breakdown = await this.calculateCommissionBreakdown(application.agreed_amount);
 
       // Razorpay receipt must be <= 40 chars
       const rawReceipt = `app_${applicationId.substring(0, 20)}_${Date.now()}`;
       const safeReceipt = rawReceipt.substring(0, 40);
 
+      // Convert to paise for Razorpay API (Razorpay requires amounts in paise)
+      const amountInPaise = Math.round(breakdown.total_amount * 100);
+
       // Create Razorpay order
       const orderOptions = {
-        amount: breakdown.total_amount_paise,
+        amount: amountInPaise,
         currency: "INR",
         receipt: safeReceipt,
         notes: {
@@ -177,16 +207,16 @@ class PaymentService {
 
       const razorpayOrder = await razorpay.orders.create(orderOptions);
 
-      // Store payment order in database
+      // Store payment order in database (amount in rupees)
       const { data: paymentOrder, error: orderError } = await supabaseAdmin
-        .from("payment_orders")
+        .from("v1_payment_orders")
         .insert({
-          amount_paise: breakdown.total_amount_paise,
+          application_id: applicationId,
+          amount: breakdown.total_amount,
           currency: "INR",
-          status: "created",
+          status: "CREATED",
           razorpay_order_id: razorpayOrder.id,
           metadata: {
-            application_id: applicationId,
             campaign_id: application.campaign_id,
             brand_id: application.v1_campaigns.brand_id,
             influencer_id: application.influencer_id,
@@ -195,8 +225,8 @@ class PaymentService {
             payment_type: "application_payment",
             agreed_amount: application.agreed_amount,
             commission_percentage: breakdown.commission_percentage,
-            commission_amount_paise: breakdown.commission_amount_paise,
-            net_amount_paise: breakdown.net_amount_paise,
+            commission_amount: breakdown.commission_amount,
+            net_amount: breakdown.net_amount,
             campaign_title: application.v1_campaigns.title,
           },
         })
@@ -215,9 +245,12 @@ class PaymentService {
         };
       }
 
+      // Convert Razorpay order amounts from paise to rupees for response
+      const orderInRupees = this.convertRazorpayOrderToRupees(razorpayOrder);
+
       return {
         success: true,
-        order: razorpayOrder,
+        order: orderInRupees,
         payment_order: paymentOrder,
         breakdown: breakdown,
         message: "Payment order created successfully",
@@ -267,7 +300,7 @@ class PaymentService {
 
       // Get payment order
       const { data: paymentOrder, error: orderError } = await supabaseAdmin
-        .from("payment_orders")
+        .from("v1_payment_orders")
         .select("*")
         .eq("razorpay_order_id", razorpay_order_id)
         .single();
@@ -279,8 +312,11 @@ class PaymentService {
         };
       }
 
+      // Normalize status to UPPERCASE (in case of legacy lowercase values)
+      paymentOrder.status = this.normalizeStatus(paymentOrder.status) || paymentOrder.status;
+
       // Check if payment already verified
-      if (paymentOrder.status === "verified") {
+      if (paymentOrder.status === "VERIFIED") {
         return {
           success: false,
           message: "Payment already verified",
@@ -289,7 +325,7 @@ class PaymentService {
 
       // Check for duplicate payment
       const { data: existingPayment } = await supabaseAdmin
-        .from("payment_orders")
+        .from("v1_payment_orders")
         .select("id")
         .eq("razorpay_payment_id", razorpay_payment_id)
         .single();
@@ -301,12 +337,23 @@ class PaymentService {
         };
       }
 
+      // Get application_id from payment order (it's a required field)
+      const orderApplicationId = paymentOrder.application_id;
+
+      // If application_id is provided in request, validate it matches the payment order
+      if (application_id && application_id !== orderApplicationId) {
+        return {
+          success: false,
+          message: "Application ID mismatch with payment order",
+        };
+      }
+
       // Verify application exists and is ACCEPTED, then transition phase after payment
-      if (application_id) {
+      if (orderApplicationId) {
         const { data: application, error: applicationError } = await supabaseAdmin
           .from("v1_applications")
           .select("id, phase, campaign_id")
-          .eq("id", application_id)
+          .eq("id", orderApplicationId)
           .single();
 
         if (applicationError || !application) {
@@ -343,7 +390,7 @@ class PaymentService {
           .update({
             phase: nextPhase
           })
-          .eq("id", application_id);
+          .eq("id", orderApplicationId);
 
         if (phaseUpdateError) {
           console.error("[v1/PaymentService/verifyPayment] Phase update error:", phaseUpdateError);
@@ -353,12 +400,11 @@ class PaymentService {
 
       // Update payment order
       const { data: updatedOrder, error: updateError } = await supabaseAdmin
-        .from("payment_orders")
+        .from("v1_payment_orders")
         .update({
-          status: "verified",
+          status: "VERIFIED",
           razorpay_payment_id: razorpay_payment_id,
           razorpay_signature: razorpay_signature,
-          verified_at: new Date().toISOString(),
         })
         .eq("id", paymentOrder.id)
         .select()
@@ -395,14 +441,17 @@ class PaymentService {
    * Release payout to influencer (Admin only)
    * Admin releases payment to influencer after keeping commission
    */
-  async releasePayoutToInfluencer(applicationId) {
+  async releasePayoutToInfluencer(applicationId, adminUserId) {
     try {
       // Get verified payment order for this application
-      const { data: allPayments, error: paymentsError } = await supabaseAdmin
-        .from("payment_orders")
+      const { data: paymentOrder, error: paymentsError } = await supabaseAdmin
+        .from("v1_payment_orders")
         .select("*")
-        .eq("status", "verified")
-        .order("created_at", { ascending: false });
+        .eq("application_id", applicationId)
+        .eq("status", "VERIFIED")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
       if (paymentsError) {
         console.error(
@@ -416,13 +465,6 @@ class PaymentService {
         };
       }
 
-      // Find payment for this application
-      const paymentOrder = (allPayments || []).find(
-        (p) =>
-          p.metadata?.application_id === applicationId &&
-          p.metadata?.payment_type === "application_payment"
-      );
-
       if (!paymentOrder) {
         return {
           success: false,
@@ -430,12 +472,41 @@ class PaymentService {
         };
       }
 
-      // Check if payout already released
-      if (paymentOrder.metadata?.payout_released === true) {
+      // Normalize status to UPPERCASE (in case of legacy lowercase values)
+      paymentOrder.status = this.normalizeStatus(paymentOrder.status) || paymentOrder.status;
+
+      // Check if payout already exists
+      const { data: existingPayout, error: payoutCheckError } = await supabaseAdmin
+        .from("v1_payouts")
+        .select("id, status")
+        .eq("application_id", applicationId)
+        .maybeSingle();
+
+      if (payoutCheckError && payoutCheckError.code !== "PGRST116") {
+        console.error(
+          "[v1/PaymentService/releasePayoutToInfluencer] Payout check error:",
+          payoutCheckError
+        );
         return {
           success: false,
-          message: "Payout already released for this application",
+          message: "Failed to check existing payouts",
+          error: payoutCheckError.message,
         };
+      }
+
+      if (existingPayout) {
+        if (existingPayout.status === "RELEASED") {
+          return {
+            success: false,
+            message: "Payout already released for this application",
+          };
+        }
+        if (existingPayout.status === "PENDING") {
+          return {
+            success: false,
+            message: "Payout already exists in PENDING status",
+          };
+        }
       }
 
       // Get application details
@@ -461,7 +532,7 @@ class PaymentService {
 
       // Get influencer wallet
       const { data: wallet, error: walletError } = await supabaseAdmin
-        .from("wallets")
+        .from("v1_wallets")
         .select("*")
         .eq("user_id", application.influencer_id)
         .maybeSingle();
@@ -482,14 +553,10 @@ class PaymentService {
       let influencerWallet = wallet;
       if (!wallet) {
         const { data: newWallet, error: createWalletError } = await supabaseAdmin
-          .from("wallets")
+          .from("v1_wallets")
           .insert({
             user_id: application.influencer_id,
             balance: 0.0,
-            balance_paise: 0,
-            frozen_balance_paise: 0,
-            withdrawn_balance_paise: 0,
-            total_balance_paise: 0,
           })
           .select()
           .single();
@@ -504,16 +571,41 @@ class PaymentService {
         influencerWallet = newWallet;
       }
 
-      // Calculate amount to release (net amount after commission)
-      const netAmountPaise = paymentOrder.metadata?.net_amount_paise || 0;
-      const newBalancePaise = (influencerWallet.balance_paise || 0) + netAmountPaise;
+      // Calculate amount to release (net amount after commission, in rupees)
+      const netAmount = paymentOrder.metadata?.net_amount || paymentOrder.amount - (paymentOrder.metadata?.commission_amount || 0);
+      const currentBalance = influencerWallet.balance || 0;
+      const newBalance = currentBalance + netAmount;
 
-      // Update wallet
+      // Create payout record first (status: PENDING)
+      const { data: payout, error: payoutError } = await supabaseAdmin
+        .from("v1_payouts")
+        .insert({
+          application_id: applicationId,
+          influencer_id: application.influencer_id,
+          amount: netAmount, // Store in rupees
+          status: "PENDING",
+          released_by_admin_id: adminUserId,
+        })
+        .select()
+        .single();
+
+      if (payoutError) {
+        console.error(
+          "[v1/PaymentService/releasePayoutToInfluencer] Payout creation error:",
+          payoutError
+        );
+        return {
+          success: false,
+          message: "Failed to create payout record",
+          error: payoutError.message,
+        };
+      }
+
+      // Update wallet (balance is in rupees)
       const { error: updateWalletError } = await supabaseAdmin
-        .from("wallets")
+        .from("v1_wallets")
         .update({
-          balance_paise: newBalancePaise,
-          balance: newBalancePaise / 100,
+          balance: newBalance,
         })
         .eq("id", influencerWallet.id);
 
@@ -522,6 +614,11 @@ class PaymentService {
           "[v1/PaymentService/releasePayoutToInfluencer] Wallet update error:",
           updateWalletError
         );
+        // Update payout status to FAILED if wallet update fails
+        await supabaseAdmin
+          .from("v1_payouts")
+          .update({ status: "FAILED" })
+          .eq("id", payout.id);
         return {
           success: false,
           message: "Failed to update wallet",
@@ -529,21 +626,20 @@ class PaymentService {
         };
       }
 
-      // Create transaction record
+      // Create transaction record (amount in rupees)
       const { error: transactionError } = await supabaseAdmin
-        .from("transactions")
+        .from("v1_transactions")
         .insert({
           wallet_id: influencerWallet.id,
           user_id: application.influencer_id,
-          amount: netAmountPaise / 100,
-          amount_paise: netAmountPaise,
+          amount: netAmount,
           type: "credit",
           status: "completed",
           razorpay_payment_id: paymentOrder.razorpay_payment_id,
           razorpay_order_id: paymentOrder.razorpay_order_id,
           campaign_id: paymentOrder.metadata?.campaign_id,
           notes: `Payout released for application ${applicationId}`,
-          balance_after_paise: newBalancePaise,
+          balance_after: newBalance,
         });
 
       if (transactionError) {
@@ -554,34 +650,32 @@ class PaymentService {
         // Don't fail if transaction record fails, payment is already processed
       }
 
-      // Update payment order metadata to mark payout as released
-      const updatedMetadata = {
-        ...paymentOrder.metadata,
-        payout_released: true,
-        payout_released_at: new Date().toISOString(),
-      };
-
-      const { error: updatePaymentError } = await supabaseAdmin
-        .from("payment_orders")
+      // Update payout status to RELEASED
+      const { data: updatedPayout, error: updatePayoutError } = await supabaseAdmin
+        .from("v1_payouts")
         .update({
-          metadata: updatedMetadata,
+          status: "RELEASED",
+          released_at: new Date().toISOString(),
         })
-        .eq("id", paymentOrder.id);
+        .eq("id", payout.id)
+        .select()
+        .single();
 
-      if (updatePaymentError) {
+      if (updatePayoutError) {
         console.error(
-          "[v1/PaymentService/releasePayoutToInfluencer] Payment update error:",
-          updatePaymentError
+          "[v1/PaymentService/releasePayoutToInfluencer] Payout update error:",
+          updatePayoutError
         );
-        // Don't fail if metadata update fails
+        // Don't fail if payout status update fails, wallet is already updated
       }
 
       return {
         success: true,
         message: "Payout released to influencer successfully",
-        payout_amount_paise: netAmountPaise,
-        commission_amount_paise: paymentOrder.metadata?.commission_amount_paise || 0,
-        new_wallet_balance_paise: newBalancePaise,
+        payout_amount: netAmount,
+        commission_amount: paymentOrder.metadata?.commission_amount || 0,
+        new_wallet_balance: newBalance,
+        payout: updatedPayout || payout,
       };
     } catch (err) {
       console.error("[v1/PaymentService/releasePayoutToInfluencer] Exception:", err);
@@ -618,10 +712,11 @@ class PaymentService {
    */
   async getApplicationPayments(applicationId) {
     try {
-      // Get all payment orders and filter by application_id in metadata
-      const { data: allPayments, error } = await supabaseAdmin
-        .from("payment_orders")
+      // Get payment orders for this application
+      const { data: payments, error } = await supabaseAdmin
+        .from("v1_payment_orders")
         .select("*")
+        .eq("application_id", applicationId)
         .order("created_at", { ascending: false });
 
       if (error) {
@@ -636,16 +731,15 @@ class PaymentService {
         };
       }
 
-      // Filter payments where metadata contains application_id and payment_type is application_payment
-      const payments = (allPayments || []).filter(
-        (payment) =>
-          payment.metadata?.application_id === applicationId &&
-          payment.metadata?.payment_type === "application_payment"
-      );
+      // Normalize all status values to UPPERCASE
+      const normalizedPayments = (payments || []).map((payment) => ({
+        ...payment,
+        status: this.normalizeStatus(payment.status) || payment.status,
+      }));
 
       return {
         success: true,
-        payments: payments,
+        payments: normalizedPayments,
         message: "Payments fetched successfully",
       };
     } catch (err) {

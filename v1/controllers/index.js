@@ -5,6 +5,8 @@ module.exports = {
     applicationController: require('./applicationController'),
     userController: require('./userController'),
     profileController: require('./profileController'),
-    submissionController: require('./submissionController')
+    submissionController: require('./submissionController'),
+    paymentController: require('./paymentController'),
+    mouController: require('./mouController')
   };  
 
