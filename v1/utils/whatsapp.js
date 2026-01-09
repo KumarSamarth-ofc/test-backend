@@ -8,10 +8,9 @@ class WhatsAppService {
     this.templateName =
       process.env.WHATSAPP_TEMPLATE_NAME || "otp_verification";
 
-    // Railway-specific configurations
-    this.timeout = parseInt(process.env.WHATSAPP_TIMEOUT) || 30000; // 30 seconds
+    this.timeout = parseInt(process.env.WHATSAPP_TIMEOUT) || 30000;
     this.retryAttempts = parseInt(process.env.WHATSAPP_RETRY_ATTEMPTS) || 3;
-    this.retryDelay = parseInt(process.env.WHATSAPP_RETRY_DELAY) || 1000; // 1 second
+    this.retryDelay = parseInt(process.env.WHATSAPP_RETRY_DELAY) || 1000;
     this.setupService();
   }
 
@@ -40,7 +39,6 @@ class WhatsAppService {
       return;
     }
 
-    // Validate endpoint format for Railway compatibility
     if (this.customEndpoint.includes("graph.facebook.com")) {
       console.log("✅ Facebook Graph API configured");
       console.log(
@@ -55,9 +53,6 @@ class WhatsAppService {
     console.log("📱 Console WhatsApp service configured (for development)");
   }
 
-  /**
-   * Create axios instance with Railway-optimized settings
-   */
   createAxiosInstance() {
     return axios.create({
       timeout: this.timeout,
@@ -65,17 +60,13 @@ class WhatsAppService {
         "Content-Type": "application/json",
         "User-Agent": "Stoory-Backend/1.0",
       },
-      // Railway-specific optimizations
       maxRedirects: 5,
       validateStatus: function (status) {
-        return status >= 200 && status < 600; // Accept all status codes to handle them manually
+        return status >= 200 && status < 600;
       },
     });
   }
 
-  /**
-   * Retry mechanism for failed requests
-   */
   async retryRequest(requestFn, maxAttempts = this.retryAttempts) {
     let lastError;
 
@@ -87,7 +78,6 @@ class WhatsAppService {
         console.log(`Attempt ${attempt}/${maxAttempts} failed:`, error.message);
 
         if (attempt < maxAttempts) {
-          // Wait before retrying
           await new Promise((resolve) =>
             setTimeout(resolve, this.retryDelay * attempt)
           );
@@ -98,9 +88,6 @@ class WhatsAppService {
     throw lastError;
   }
 
-  /**
-   * Send OTP via WhatsApp
-   */
   async sendOTP(phone, otp) {
     try {
       const message = this.formatOTPMessage(otp);
@@ -123,9 +110,6 @@ class WhatsAppService {
     }
   }
 
-  /**
-   * Send welcome message
-   */
   async sendWelcome(phone, userName) {
     try {
       const message = this.formatWelcomeMessage(userName);
@@ -148,15 +132,10 @@ class WhatsAppService {
     }
   }
 
-  /**
-   * Send OTP via Custom WhatsApp API (Facebook Graph API) with Railway optimizations
-   */
   async sendOTPViaCustomAPI(phone, otp) {
     try {
-      // Format phone number for WhatsApp (remove + and add country code if needed)
       const formattedPhone = this.formatPhoneForWhatsApp(phone);
 
-      // Facebook Graph API template message payload for OTP
       const payload = {
         messaging_product: "whatsapp",
         to: formattedPhone,
@@ -172,18 +151,18 @@ class WhatsAppService {
               parameters: [
                 {
                   type: "text",
-                  text: otp, // OTP parameter
+                  text: otp,
                 },
               ],
             },
             {
               type: "button",
               sub_type: "url",
-              index: 0, // button index starts from 0
+              index: 0,
               parameters: [
                 {
                   type: "text",
-                  text: otp, // Use actual OTP for copy code
+                  text: otp,
                 },
               ],
             },
@@ -191,7 +170,6 @@ class WhatsAppService {
         },
       };
 
-      // Headers for Facebook Graph API
       const headers = {
         "Content-Type": "application/json",
       };
@@ -200,7 +178,6 @@ class WhatsAppService {
         headers["Authorization"] = `Bearer ${this.apiKey}`;
       }
 
-      // Use retry mechanism for Railway deployment
       const response = await this.retryRequest(async () => {
         const axiosInstance = this.createAxiosInstance();
         return await axiosInstance.post(this.customEndpoint, payload, {
@@ -208,7 +185,6 @@ class WhatsAppService {
         });
       });
 
-      // Handle different response status codes
       if (response.status >= 400) {
         throw new Error(
           `HTTP ${response.status}: ${JSON.stringify(response.data)}`
@@ -227,7 +203,6 @@ class WhatsAppService {
         error.response?.data || error.message
       );
 
-      // Provide more specific error messages for Railway debugging
       let errorMessage = "Failed to send OTP via Facebook Graph API";
       let errorDetails = {};
 
@@ -259,16 +234,10 @@ class WhatsAppService {
     }
   }
 
-  /**
-   * Send welcome message via Custom WhatsApp API (Facebook Graph API) with Railway optimizations
-   */
   async sendWelcomeViaCustomAPI(phone, message) {
     try {
-      // Format phone number for WhatsApp (remove + and add country code if needed)
       const formattedPhone = this.formatPhoneForWhatsApp(phone);
 
-      // For welcome messages, we'll use a simple text message instead of template
-      // This prevents the OTP template from being used
       const payload = {
         messaging_product: "whatsapp",
         to: formattedPhone,
@@ -278,7 +247,6 @@ class WhatsAppService {
         },
       };
 
-      // Headers for Facebook Graph API
       const headers = {
         "Content-Type": "application/json",
       };
@@ -287,7 +255,6 @@ class WhatsAppService {
         headers["Authorization"] = `Bearer ${this.apiKey}`;
       }
 
-      // Use retry mechanism for Railway deployment
       const response = await this.retryRequest(async () => {
         const axiosInstance = this.createAxiosInstance();
         return await axiosInstance.post(this.customEndpoint, payload, {
@@ -295,7 +262,6 @@ class WhatsAppService {
         });
       });
 
-      // Handle different response status codes
       if (response.status >= 400) {
         throw new Error(
           `HTTP ${response.status}: ${JSON.stringify(response.data)}`
@@ -314,7 +280,6 @@ class WhatsAppService {
         error.response?.data || error.message
       );
 
-      // Provide more specific error messages for Railway debugging
       let errorMessage =
         "Failed to send welcome message via Facebook Graph API";
       let errorDetails = {};
@@ -353,7 +318,6 @@ class WhatsAppService {
    */
   async sendViaCustomAPI(phone, message) {
     try {
-      // Format phone number for WhatsApp (remove + and add country code if needed)
       const formattedPhone = this.formatPhoneForWhatsApp(phone);
 
       // Extract OTP from message (assuming it's the first 6-digit number)
@@ -376,18 +340,18 @@ class WhatsAppService {
               parameters: [
                 {
                   type: "text",
-                  text: otp, // OTP parameter
+                  text: otp,
                 },
               ],
             },
             {
               type: "button",
               sub_type: "url",
-              index: 0, // button index starts from 0
+              index: 0,
               parameters: [
                 {
                   type: "text",
-                  text: otp, // Use actual OTP for copy code
+                  text: otp,
                 },
               ],
             },
@@ -395,7 +359,6 @@ class WhatsAppService {
         },
       };
 
-      // Headers for Facebook Graph API
       const headers = {
         "Content-Type": "application/json",
       };

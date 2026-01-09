@@ -1,13 +1,6 @@
 const { supabaseAdmin } = require("../db/config");
 
-/**
- * Campaign Service
- * Handles all business logic for campaign CRUD operations
- */
 class CampaignService {
-  /**
-   * Validate campaign status enum
-   */
   validateStatus(status) {
     const validStatuses = [
       "DRAFT",
@@ -21,33 +14,21 @@ class CampaignService {
     return validStatuses.includes(status?.toUpperCase());
   }
 
-  /**
-   * Validate campaign type enum
-   */
   validateType(type) {
     const validTypes = ["NORMAL", "BULK"];
     return validTypes.includes(type?.toUpperCase());
   }
 
-  /**
-   * Normalize status to uppercase
-   */
   normalizeStatus(status) {
     if (!status) return "DRAFT";
     return status.toUpperCase();
   }
 
-  /**
-   * Normalize type to uppercase
-   */
   normalizeType(type) {
     if (!type) return "NORMAL";
     return type.toUpperCase();
   }
 
-  /**
-   * Normalize influencer tier
-   */
   normalizeTier(tier) {
     if (!tier) return null;
     const normalized = String(tier).toUpperCase().trim();
@@ -55,9 +36,6 @@ class CampaignService {
     return validTiers.includes(normalized) ? normalized : null;
   }
 
-  /**
-   * Check if brand owns the campaign
-   */
   async checkBrandOwnership(campaignId, brandId) {
     try {
       const { data, error } = await supabaseAdmin
@@ -86,12 +64,8 @@ class CampaignService {
     }
   }
 
-    /**
-   * Create a new campaign (Brand Owner only)
-   */
     async createCampaign(brandId, campaignData) {
       try {
-        // Validate type
         const type = this.normalizeType(campaignData.type);
         if (!this.validateType(type)) {
           return {

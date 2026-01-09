@@ -2,17 +2,12 @@ const { supabaseAdmin } = require('../db/config');
 const { canTransition } = require('./applicationStateMachine');
 
 class ApplicationService {
-  /**
-   * Helper method to update accepted_count in v1_campaigns table
-   * Counts applications with phase ACCEPTED or COMPLETED for the campaign
-   */
   async updateCampaignAcceptedCount(campaignId) {
     try {
       if (!campaignId) {
         return { success: false, message: 'Campaign ID is required' };
       }
 
-      // Count applications with phase ACCEPTED or COMPLETED for this campaign
       const { count, error: countError } = await supabaseAdmin
         .from('v1_applications')
         .select('*', { count: 'exact', head: true })
@@ -26,7 +21,6 @@ class ApplicationService {
 
       const acceptedCount = count || 0;
 
-      // Update accepted_count in v1_campaigns table
       const { error: updateError } = await supabaseAdmin
         .from('v1_campaigns')
         .update({ accepted_count: acceptedCount })
@@ -43,9 +37,6 @@ class ApplicationService {
       return { success: false, message: 'Failed to update accepted_count', error: err.message };
     }
   }
-  /**
-   * Check if brand owns the campaign (via application)
-   */
   async checkBrandOwnership(applicationId, brandId) {
     try {
       const { data, error } = await supabaseAdmin
@@ -77,9 +68,6 @@ class ApplicationService {
     }
   }
 
-  /**
-   * Check if user can cancel application (influencer or brand owner)
-   */
   async checkCancelPermission(applicationId, userId, userRole, brandId = null) {
     try {
       const { data, error } = await supabaseAdmin

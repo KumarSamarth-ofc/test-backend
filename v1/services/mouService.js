@@ -1,20 +1,8 @@
 const { supabaseAdmin } = require('../db/config');
 
-/**
- * MOU Service
- * Handles business logic for MOU operations
- */
 class MOUService {
-  /**
-   * Get the latest MOU for an application
-   * @param {string} applicationId - Application UUID
-   * @param {string} userId - User ID making the request
-   * @param {string} userRole - User role (INFLUENCER, BRAND_OWNER, ADMIN)
-   * @returns {Promise<Object>} - Latest MOU or error
-   */
   async getLatestMOU(applicationId, userId, userRole) {
     try {
-      // First, verify the application exists and user has access
       const { data: application, error: appError } = await supabaseAdmin
         .from('v1_applications')
         .select(`
@@ -36,20 +24,16 @@ class MOUService {
         return { success: false, message: 'Application not found' };
       }
 
-      // Check access permissions
       if (userRole === 'INFLUENCER') {
         if (application.influencer_id !== userId) {
           return { success: false, message: 'You do not have access to this application' };
         }
       } else if (userRole === 'BRAND_OWNER') {
-        // Brand owner access is via campaign's brand_id
         if (application.v1_campaigns.brand_id !== userId) {
           return { success: false, message: 'You do not have access to this application' };
         }
       }
-      // ADMIN has access to all
 
-      // Get the latest MOU for this application (by created_at desc)
       const { data: mous, error: mouError } = await supabaseAdmin
         .from('v1_mous')
         .select('*')
@@ -63,12 +47,10 @@ class MOUService {
       }
 
       if (!mous || mous.length === 0) {
-        // If application is ACCEPTED but no MOU exists, try to generate it automatically
         if (application && application.phase === 'ACCEPTED') {
           console.log(`[MOUService/getLatestMOU] No MOU found for ACCEPTED application ${applicationId}, attempting to generate...`);
           const generateResult = await this.generateMOUForApplication(applicationId);
           if (generateResult.success) {
-            // Fetch the newly created MOU
             const { data: newMous, error: newMouError } = await supabaseAdmin
               .from('v1_mous')
               .select('*')

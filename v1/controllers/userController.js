@@ -1,14 +1,6 @@
 const UserService = require("../services/userService");
 
-/**
- * User Controller
- * Handles HTTP requests for user-related endpoints
- */
 class UserController {
-  /**
-   * Get user details with all related data
-   * GET /api/v1/users/me
-   */
   async getUser(req, res) {
     try {
       const userId = req.user.id;
@@ -37,11 +29,6 @@ class UserController {
     }
   }
 
-  /**
-   * Get all influencers
-   * GET /api/v1/users/influencers
-   * Requires BRAND_OWNER role
-   */
   async getInfluencers(req, res) {
     try {
       const result = await UserService.getAllInfluencers();

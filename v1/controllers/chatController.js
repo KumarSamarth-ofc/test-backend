@@ -1,15 +1,10 @@
 const { ChatService } = require('../services');
 
-/**
- * Get chat history for an application
- * GET /api/v1/chat/:applicationId/history
- */
 const getHistory = async (req, res) => {
   try {
     const { applicationId } = req.params;
     const userId = req.user.id;
     
-    // Input validation
     if (!applicationId) {
       return res.status(400).json({ 
         success: false, 
@@ -17,7 +12,6 @@ const getHistory = async (req, res) => {
       });
     }
 
-    // Validate user access
     const hasAccess = await ChatService.validateUserAccess(userId, applicationId);
     if (!hasAccess) {
       return res.status(403).json({ 
@@ -26,11 +20,9 @@ const getHistory = async (req, res) => {
       });
     }
 
-    // Get pagination params
     const limit = Math.min(parseInt(req.query.limit) || 50, 100);
     const offset = parseInt(req.query.offset) || 0;
 
-    // Get chat history
     const messages = await ChatService.getChatHistory(applicationId, limit, offset);
 
     res.json({ 
@@ -51,10 +43,6 @@ const getHistory = async (req, res) => {
   }
 };
 
-/**
- * Create a chat for an application
- * POST /api/v1/chat/:applicationId
- */
 const createChat = async (req, res) => {
   try {
     const { applicationId } = req.params;
@@ -67,7 +55,6 @@ const createChat = async (req, res) => {
       });
     }
 
-    // Validate user access
     const hasAccess = await ChatService.validateUserAccess(userId, applicationId);
     if (!hasAccess) {
       return res.status(403).json({ 
@@ -76,7 +63,6 @@ const createChat = async (req, res) => {
       });
     }
 
-    // Create chat
     const chat = await ChatService.createChat(applicationId);
 
     res.status(201).json({ 
@@ -93,10 +79,6 @@ const createChat = async (req, res) => {
   }
 };
 
-/**
- * Get chat details for an application
- * GET /api/v1/chat/:applicationId
- */
 const getChat = async (req, res) => {
   try {
     const { applicationId } = req.params;
@@ -109,7 +91,6 @@ const getChat = async (req, res) => {
       });
     }
 
-    // Validate user access
     const hasAccess = await ChatService.validateUserAccess(userId, applicationId);
     if (!hasAccess) {
       return res.status(403).json({ 
@@ -118,7 +99,6 @@ const getChat = async (req, res) => {
       });
     }
 
-    // Get chat
     const chat = await ChatService.getChatByApplication(applicationId);
 
     if (!chat) {

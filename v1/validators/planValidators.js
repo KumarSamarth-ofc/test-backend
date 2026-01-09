@@ -1,10 +1,5 @@
 const { body, param } = require("express-validator");
 
-/**
- * Plan Validators
- * Validation rules for plan operations
- */
-
 const validateCreatePlan = [
   body("name")
     .notEmpty()

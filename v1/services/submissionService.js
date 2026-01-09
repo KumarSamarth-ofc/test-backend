@@ -3,22 +3,15 @@ const { canTransition } = require('./applicationStateMachine');
 const path = require('path');
 
 class SubmissionService {
-  /**
-   * Upload file to storage (supports PDF, documents, images, videos)
-   */
   async uploadFile(fileBuffer, fileName, mimeType, folder = 'submissions') {
     try {
-      // Generate unique filename
       const timestamp = Date.now();
       const fileExtension = path.extname(fileName);
       const randomString = Math.random().toString(36).substring(2, 15);
       const uniqueFileName = `${folder}/${timestamp}_${randomString}${fileExtension}`;
 
-      // Use 'attachments' bucket for all file types (it's already set up for general uploads)
-      // Files are organized by the folder parameter ('scripts' or 'work')
       const bucket = 'scripts';
 
-      // Upload to Supabase Storage
       const { data, error } = await supabaseAdmin.storage
         .from(bucket)
         .upload(uniqueFileName, fileBuffer, {
@@ -32,7 +25,6 @@ class SubmissionService {
         return { success: false, error: error.message };
       }
 
-      // Get public URL
       const { data: urlData } = supabaseAdmin.storage
         .from(bucket)
         .getPublicUrl(uniqueFileName);
@@ -44,9 +36,6 @@ class SubmissionService {
     }
   }
 
-  /**
-   * Validate script file type (PDF or document)
-   */
   validateScriptFile(mimeType, fileName) {
     const validMimeTypes = [
       'application/pdf',
@@ -63,9 +52,6 @@ class SubmissionService {
     return validMimeTypes.includes(mimeType) || validExtensions.includes(ext);
   }
 
-  /**
-   * Check if influencer owns the application
-   */
   async checkInfluencerOwnership(applicationId, influencerId) {
     try {
       const { data, error } = await supabaseAdmin
@@ -94,9 +80,6 @@ class SubmissionService {
     }
   }
 
-  /**
-   * Check if brand owns the application
-   */
   async checkBrandOwnership(applicationId, brandId) {
     try {
       const { data, error } = await supabaseAdmin

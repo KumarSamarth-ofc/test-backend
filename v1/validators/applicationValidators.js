@@ -1,10 +1,5 @@
 const { body, param } = require('express-validator');
 
-/**
- * Application Validators
- * Validation rules for application operations
- */
-
 const validateApply = [
   body('campaignId')
     .notEmpty()

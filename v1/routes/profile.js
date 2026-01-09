@@ -6,16 +6,13 @@ const authMiddleware = require("../middleware/authMiddleware");
 const { normalizeEnums } = require("../middleware/enumNormalizer");
 const { upload } = require("../../utils/imageUpload");
 
-// Single endpoint for updating profile based on user role
 router.put(
   "/update",
   authMiddleware.authenticateToken,
   normalizeEnums,
-  // Handle multipart/form-data for profile image (influencers) or brand logo (brands)
   (req, res, next) => {
     const contentType = req.headers["content-type"] || "";
     if (contentType.includes("multipart/form-data")) {
-      // Use fields to accept both profileImage and brandLogo
       upload.fields([
         { name: "profileImage", maxCount: 1 },
         { name: "brandLogo", maxCount: 1 }
@@ -35,11 +32,9 @@ router.put(
         next();
       });
     } else {
-      // JSON request - continue normally
       next();
     }
   },
-  // Validation runs after multer (for JSON fields in multipart)
   validateCompleteProfile,
   ProfileController.updateProfile
 );

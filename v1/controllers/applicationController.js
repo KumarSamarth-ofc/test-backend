@@ -4,10 +4,6 @@ const { supabaseAdmin } = require('../db/config');
 
 class ApplicationController {
 
-  /**
-   * Helper method to get brand profile ID from user ID
-   * Since v1_brand_profiles uses user_id as primary key, we just verify the profile exists
-   */
   async getBrandProfileId(userId) {
     try {
       const { data: brandProfile, error } = await supabaseAdmin
@@ -26,7 +22,6 @@ class ApplicationController {
         return { success: false, error: "Brand profile not found" };
       }
 
-      // v1_brand_profiles uses user_id as primary key, so brand_id = user_id
       return { success: true, brandId: userId };
     } catch (err) {
       console.error("[v1/getBrandProfileId] Exception:", err);
@@ -69,7 +64,6 @@ class ApplicationController {
 
       const userId = req.user.id;
       
-      // Get brand_id from brand profile (not user_id)
       const brandProfileResult = await this.getBrandProfileId(userId);
       if (!brandProfileResult || !brandProfileResult.success) {
         const errorMsg = brandProfileResult?.error || "Unknown error";
@@ -131,7 +125,6 @@ class ApplicationController {
         brandId: brandProfileResult.brandId,
       });
 
-      // Return 200 for full success, 207 for partial success
       const statusCode = result.success ? 200 : 207;
       return res.status(statusCode).json(result);
     } catch (err) {
@@ -152,7 +145,6 @@ class ApplicationController {
 
       const user = req.user;
       
-      // If user is a brand owner, get their brand profile ID
       let brandId = null;
       if (user.role === 'BRAND_OWNER') {
         const brandProfileResult = await this.getBrandProfileId(user.id);
@@ -211,7 +203,6 @@ class ApplicationController {
   }
 }
 
-// Create instance and bind methods to preserve 'this' context
 const applicationController = new ApplicationController();
 applicationController.apply = applicationController.apply.bind(applicationController);
 applicationController.accept = applicationController.accept.bind(applicationController);

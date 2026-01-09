@@ -1,10 +1,5 @@
 const { body, param } = require('express-validator');
 
-/**
- * MOU Validators
- * Validation rules for MOU operations
- */
-
 const validateGetLatestMOU = [
   param('applicationId')
     .notEmpty()

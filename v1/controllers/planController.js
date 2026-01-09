@@ -1,15 +1,7 @@
 const { validationResult } = require("express-validator");
 const PlanService = require("../services/planService");
 
-/**
- * Plan Controller
- * Handles HTTP requests for plan-related endpoints
- */
 class PlanController {
-  /**
-   * Create a new plan (Admin only)
-   * POST /api/v1/plans
-   */
   async createPlan(req, res) {
     try {
       const errors = validationResult(req);
@@ -45,10 +37,6 @@ class PlanController {
     }
   }
 
-  /**
-   * Get all active plans (Brand and Admin)
-   * GET /api/v1/plans
-   */
   async getAllPlans(req, res) {
     try {
       const result = await PlanService.getAllPlans();
@@ -76,10 +64,6 @@ class PlanController {
     }
   }
 
-  /**
-   * Update a plan (Admin only)
-   * PUT /api/v1/plans/:id
-   */
   async updatePlan(req, res) {
     try {
       const errors = validationResult(req);

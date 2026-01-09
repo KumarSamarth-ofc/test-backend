@@ -12,32 +12,24 @@ class ProfileController {
       const userId = req.user.id;
       const userRole = req.user.role;
 
-      // Handle both JSON and multipart/form-data
       let bodyData = req.body;
 
-      // If multipart, handle file uploads
       if (req.files) {
-        // Handle profile image for influencers
         if (req.files.profileImage && req.files.profileImage[0]) {
           bodyData.profile_image_file = req.files.profileImage[0];
         }
-        // Handle brand logo for brands
         if (req.files.brandLogo && req.files.brandLogo[0]) {
           bodyData.brand_logo_file = req.files.brandLogo[0];
         }
       }
-      // Backward compatibility: also check req.file (for single file uploads)
       if (req.file && !bodyData.brand_logo_file && !bodyData.profile_image_file) {
-        // Assume it's brand_logo for backward compatibility
         bodyData.brand_logo_file = req.file;
       }
 
-      // Parse JSON strings if they exist (multer sends JSON as strings)
       if (typeof bodyData.languages === "string") {
         try {
           bodyData.languages = JSON.parse(bodyData.languages);
         } catch (e) {
-          // Ignore parse errors
         }
       }
       if (typeof bodyData.categories === "string") {
@@ -61,7 +53,6 @@ class ProfileController {
             bodyData.brand_description = parsed;
           }
         } catch (e) {
-          // If not JSON, keep as string
         }
       }
 
@@ -78,7 +69,6 @@ class ProfileController {
       }
 
       if (result.success) {
-        // Return all data - service already includes everything
         return res.json(result);
       }
 

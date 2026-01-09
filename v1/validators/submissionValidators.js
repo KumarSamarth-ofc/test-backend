@@ -1,10 +1,5 @@
 const { body, param } = require('express-validator');
 
-/**
- * Submission Validators
- * Validation rules for script and work submission operations
- */
-
 const validateSubmitScript = [
   body('applicationId')
     .notEmpty()

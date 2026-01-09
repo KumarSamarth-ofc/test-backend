@@ -1,10 +1,5 @@
 const { body } = require("express-validator");
 
-/**
- * Password Authentication Validators
- * For brand owner email/password authentication
- */
-
 const validateBrandRegister = [
   body("email")
     .isEmail()

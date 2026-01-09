@@ -11,7 +11,6 @@ const {
   validateGetWorkSubmissions,
 } = require('../validators/submissionValidators');
 
-// Influencer routes
 router.post(
   '/scripts',
   authMiddleware.authenticateToken,
@@ -46,7 +45,6 @@ router.get(
   submissionController.getWorkSubmissions
 );
 
-// Brand Owner routes
 router.post(
   '/scripts/:id/review',
   authMiddleware.authenticateToken,

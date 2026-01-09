@@ -1,7 +1,6 @@
 const { body } = require("express-validator");
 
 const validateCompleteProfile = [
-  // Common fields - v1_users table
   body("name")
     .optional()
     .isString()
@@ -20,7 +19,6 @@ const validateCompleteProfile = [
     .isISO8601()
     .withMessage("Date of birth must be a valid ISO8601 date"),
   
-  // Common fields - profile tables
   body("pan_number")
     .optional()
     .isString()
@@ -28,12 +26,10 @@ const validateCompleteProfile = [
     .withMessage("PAN number must be 10 characters"),
   
 
-  // Influencer-specific fields - Social Platforms
   body("social_platforms")
     .optional()
     .isArray()
     .withMessage("Social platforms must be an array"),
-  // Accept multiple field name variations for platform
   body("social_platforms.*.platform_name")
     .optional()
     .isString()
@@ -50,7 +46,6 @@ const validateCompleteProfile = [
     .optional()
     .isString()
     .withMessage("Username must be a string"),
-  // Accept multiple field name variations for profile URL
   body("social_platforms.*.profile_url")
     .optional()
     .isURL()
@@ -85,7 +80,6 @@ const validateCompleteProfile = [
     }),
   
 
-  // Languages - array of strings
   body("languages")
     .optional()
     .isArray()
@@ -96,7 +90,6 @@ const validateCompleteProfile = [
     .withMessage("Each language must be a string"),
   
 
-  // Categories - array of strings
   body("categories")
     .optional()
     .isArray()
@@ -107,7 +100,6 @@ const validateCompleteProfile = [
     .withMessage("Each category must be a string"),
   
 
-  // Common profile fields (used by both influencer and brand)
   body("bio")
     .optional()
     .isString()
@@ -134,9 +126,8 @@ const validateCompleteProfile = [
         throw new Error("Gender must be MALE, FEMALE, or OTHER");
       }
       return true;
-    }),
-  
-  // Influencer-specific fields
+    }),  
+
   body("tier")
     .optional()
     .isString()
@@ -156,10 +147,9 @@ const validateCompleteProfile = [
   body("max_value")
     .optional()
     .isNumeric()
-    .withMessage("Max value must be a number"),
-  
+    .withMessage("Max value must be a number"),  
+
     
-  // Brand-specific fields
   body("brand_name")
     .optional()
     .isString()
@@ -170,7 +160,6 @@ const validateCompleteProfile = [
     .isString()
     .isLength({ min: 0, max: 5000 })
     .withMessage("Brand description must be up to 5000 characters"),
-  // brand_logo and profile_image are handled as file uploads, no URL validation needed
 ];
 
 module.exports = {

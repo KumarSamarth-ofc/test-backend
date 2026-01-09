@@ -1,15 +1,7 @@
 const PaymentService = require("../services/paymentService");
 const { validationResult } = require("express-validator");
 
-/**
- * Payment Controller for Applications
- * Handles HTTP requests for payment-related endpoints
- */
 class PaymentController {
-  /**
-   * Get payment config (Razorpay key) for frontend
-   * GET /api/v1/payments/config
-   */
   async getPaymentConfig(req, res) {
     try {
       const result = PaymentService.getPaymentConfig();
@@ -35,11 +27,6 @@ class PaymentController {
     }
   }
 
-  /**
-   * Create payment order for application (Brand pays admin)
-   * Only allowed when application is COMPLETED
-   * POST /api/v1/payments/applications/:applicationId
-   */
   async createApplicationPaymentOrder(req, res) {
     try {
       const errors = validationResult(req);
@@ -93,10 +80,6 @@ class PaymentController {
     }
   }
 
-  /**
-   * Verify payment
-   * POST /api/v1/payments/verify
-   */
   async verifyPayment(req, res) {
     try {
       const errors = validationResult(req);
@@ -151,10 +134,6 @@ class PaymentController {
     }
   }
 
-  /**
-   * Release payout to influencer (Admin only)
-   * POST /api/v1/payments/applications/:applicationId/release
-   */
   async releasePayout(req, res) {
     try {
       const errors = validationResult(req);
@@ -165,7 +144,6 @@ class PaymentController {
       const applicationId = req.params.applicationId;
       const userId = req.user.id;
 
-      // Verify user is admin
       const { supabaseAdmin } = require("../db/config");
       const { data: user, error: userError } = await supabaseAdmin
         .from("v1_users")
@@ -224,10 +202,6 @@ class PaymentController {
     }
   }
 
-  /**
-   * Get payments for an application
-   * GET /api/v1/payments/applications/:applicationId
-   */
   async getApplicationPayments(req, res) {
     try {
       const errors = validationResult(req);
@@ -238,7 +212,6 @@ class PaymentController {
       const applicationId = req.params.applicationId;
       const userId = req.user.id;
 
-      // Verify application exists and user has permission
       const { supabaseAdmin } = require("../db/config");
       const { data: application, error: applicationError } = await supabaseAdmin
         .from("v1_applications")
@@ -258,7 +231,6 @@ class PaymentController {
         });
       }
 
-      // Check if user is brand owner, influencer, or admin
       const { data: user, error: userError } = await supabaseAdmin
         .from("v1_users")
         .select("id, role")
@@ -272,7 +244,6 @@ class PaymentController {
         });
       }
 
-      // Permission check: Brand owner, influencer, or admin can see payments
       const isBrandOwner = application.v1_campaigns.brand_id === userId;
       const isInfluencer = application.influencer_id === userId;
       const isAdmin = user.role === "ADMIN";

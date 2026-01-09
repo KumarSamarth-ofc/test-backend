@@ -1,7 +1,7 @@
 const transitions = {
     APPLIED: ['ACCEPTED', 'CANCELLED'],
-    ACCEPTED: ['SCRIPT', 'WORK', 'CANCELLED'], // Can transition to SCRIPT or WORK after payment
-    SCRIPT: ['WORK', 'COMPLETED', 'CANCELLED'], // After script approval, move to WORK
+    ACCEPTED: ['SCRIPT', 'WORK', 'CANCELLED'],
+    SCRIPT: ['WORK', 'COMPLETED', 'CANCELLED'],
     WORK: ['COMPLETED', 'CANCELLED'],
     COMPLETED: [],
     CANCELLED: []

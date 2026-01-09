@@ -1,10 +1,5 @@
 const { body, query } = require("express-validator");
 
-/**
- * Campaign Validators
- * Validation rules for campaign CRUD operations
- */
-
 const validateCreateCampaign = [
   body("title")
     .notEmpty()
@@ -58,7 +53,6 @@ const validateCreateCampaign = [
     .optional()
     .isFloat({ min: 0 })
     .withMessage("budget must be a non-negative number"),
-  // New fields
   body("description")
     .optional()
     .isString()
@@ -111,7 +105,6 @@ const validateCreateCampaign = [
     .isLength({ max: 10000 })
     .withMessage("brand_guideline must be up to 10000 characters")
     .trim(),
-  // Custom validation: min_influencers <= max_influencers
   body().custom((value) => {
     if (
       value.min_influencers !== undefined &&
@@ -178,7 +171,6 @@ const validateUpdateCampaign = [
     .optional()
     .isFloat({ min: 0 })
     .withMessage("budget must be a non-negative number"),
-  // New fields
   body("description")
     .optional()
     .isString()
@@ -231,7 +223,6 @@ const validateUpdateCampaign = [
     .isLength({ max: 10000 })
     .withMessage("brand_guideline must be up to 10000 characters")
     .trim(),
-  // Custom validation: min_influencers <= max_influencers
   body().custom((value) => {
     if (
       value.min_influencers !== undefined &&

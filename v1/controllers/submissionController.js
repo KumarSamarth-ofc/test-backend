@@ -3,19 +3,15 @@ const SubmissionService = require('../services/submissionService');
 const { supabaseAdmin } = require('../db/config');
 const multer = require('multer');
 
-// Configure multer for memory storage
 const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB limit
+    fileSize: 50 * 1024 * 1024,
   }
 });
 
 class SubmissionController {
-  /**
-   * Helper function to transform v1_campaigns to campaigns and v1_applications to applications in response
-   */
   transformResponse(obj) {
     if (obj === null || obj === undefined) {
       return obj;
@@ -43,9 +39,6 @@ class SubmissionController {
     return transformed;
   }
 
-  /**
-   * Submit script (Influencer)
-   */
   async submitScript(req, res) {
     try {
       const errors = validationResult(req);
@@ -56,7 +49,6 @@ class SubmissionController {
       const { applicationId } = req.body;
       const influencerId = req.user.id;
 
-      // Handle file upload
       let fileUrl = null;
       if (req.file) {
         const uploadResult = await SubmissionService.uploadFile(
@@ -75,7 +67,6 @@ class SubmissionController {
 
         fileUrl = uploadResult.url;
 
-        // Validate script file type
         if (!SubmissionService.validateScriptFile(req.file.mimetype, req.file.originalname)) {
           return res.status(400).json({
             success: false,
@@ -111,9 +102,6 @@ class SubmissionController {
     }
   }
 
-  /**
-   * Submit work (Influencer)
-   */
   async submitWork(req, res) {
     try {
       const errors = validationResult(req);
@@ -124,7 +112,6 @@ class SubmissionController {
       const { applicationId } = req.body;
       const influencerId = req.user.id;
 
-      // Handle file upload
       let fileUrl = null;
       if (req.file) {
         const uploadResult = await SubmissionService.uploadFile(
@@ -171,9 +158,6 @@ class SubmissionController {
     }
   }
 
-  /**
-   * Review script (Brand Owner)
-   */
   async reviewScript(req, res) {
     try {
       const errors = validationResult(req);
@@ -183,7 +167,6 @@ class SubmissionController {
 
       const userId = req.user.id;
       
-      // Get brand_id from brand profile
       const { data: brandProfile, error: brandError } = await supabaseAdmin
         .from('v1_brand_profiles')
         .select('user_id')
@@ -198,7 +181,7 @@ class SubmissionController {
         });
       }
 
-      const brandId = userId; // brand_id = user_id in v1_brand_profiles
+      const brandId = userId;
 
       const result = await SubmissionService.reviewScript({
         scriptId: req.params.id,
@@ -222,9 +205,6 @@ class SubmissionController {
     }
   }
 
-  /**
-   * Review work (Brand Owner)
-   */
   async reviewWork(req, res) {
     try {
       const errors = validationResult(req);
@@ -234,7 +214,6 @@ class SubmissionController {
 
       const userId = req.user.id;
       
-      // Get brand_id from brand profile
       const { data: brandProfile, error: brandError } = await supabaseAdmin
         .from('v1_brand_profiles')
         .select('user_id')
@@ -249,7 +228,7 @@ class SubmissionController {
         });
       }
 
-      const brandId = userId; // brand_id = user_id in v1_brand_profiles
+      const brandId = userId;
 
       const result = await SubmissionService.reviewWork({
         workSubmissionId: req.params.id,
@@ -273,9 +252,6 @@ class SubmissionController {
     }
   }
 
-  /**
-   * Get scripts for an application
-   */
   async getScripts(req, res) {
     try {
       const { applicationId } = req.params;
@@ -288,7 +264,6 @@ class SubmissionController {
         return res.status(400).json(result);
       }
 
-      // Transform v1_campaigns to campaigns and v1_applications to applications
       const transformedResult = this.transformResponse(result);
       res.json(transformedResult);
     } catch (err) {
@@ -300,9 +275,6 @@ class SubmissionController {
     }
   }
 
-  /**
-   * Get work submissions for an application
-   */
   async getWorkSubmissions(req, res) {
     try {
       const { applicationId } = req.params;
@@ -315,7 +287,6 @@ class SubmissionController {
         return res.status(400).json(result);
       }
 
-      // Transform v1_campaigns to campaigns and v1_applications to applications
       const transformedResult = this.transformResponse(result);
       res.json(transformedResult);
     } catch (err) {
@@ -328,7 +299,6 @@ class SubmissionController {
   }
 }
 
-// Create instance and bind methods
 const submissionController = new SubmissionController();
 submissionController.submitScript = submissionController.submitScript.bind(submissionController);
 submissionController.submitWork = submissionController.submitWork.bind(submissionController);
@@ -337,7 +307,6 @@ submissionController.reviewWork = submissionController.reviewWork.bind(submissio
 submissionController.getScripts = submissionController.getScripts.bind(submissionController);
 submissionController.getWorkSubmissions = submissionController.getWorkSubmissions.bind(submissionController);
 
-// Export upload middleware
 submissionController.upload = upload.single('file');
 
 module.exports = submissionController;

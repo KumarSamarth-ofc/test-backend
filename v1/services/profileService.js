@@ -2,9 +2,6 @@ const { supabaseAdmin } = require("../db/config");
 const { uploadImageToStorage, deleteImageFromStorage } = require("../utils/imageUpload");
 
 class ProfileService {
-  /**
-   * Normalize gender value to match database constraint (uppercase)
-   */
   normalizeGender(gender) {
     if (!gender) return null;
 
@@ -15,13 +12,12 @@ class ProfileService {
       return normalized;
     }
 
-    // If lowercase provided, convert to uppercase
     const lower = normalized.toLowerCase();
     if (lower === "male") return "MALE";
     if (lower === "female") return "FEMALE";
     if (lower === "other") return "OTHER";
 
-    return null; // Invalid gender, return null
+    return null;
   }
 
   normalizeTier(tier) {
@@ -33,20 +29,16 @@ class ProfileService {
     if (validTiers.includes(normalized)) {
       return normalized;
     }
-  
-    // Handle lowercase variations
+
     const lower = normalized.toLowerCase();
     if (lower === "nano") return "NANO";
     if (lower === "micro") return "MICRO";
     if (lower === "mid") return "MID";
     if (lower === "macro") return "MACRO";
   
-    return null; // Invalid tier, return null
+    return null;
   }
 
-  /**
-   * Normalize platform name to match database constraint (INSTAGRAM | FACEBOOK | YOUTUBE)
-   */
   normalizePlatform(platformName) {
     if (!platformName) return null;
 
@@ -57,18 +49,14 @@ class ProfileService {
       return normalized;
     }
 
-    // Handle common variations
     const lower = normalized.toLowerCase();
     if (lower === "instagram" || lower === "ig") return "INSTAGRAM";
     if (lower === "facebook" || lower === "fb") return "FACEBOOK";
     if (lower === "youtube" || lower === "yt") return "YOUTUBE";
 
-    return null; // Invalid platform
+    return null;
   }
 
-  /**
-   * Upsert social platforms for influencer
-   */
   async upsertSocialPlatforms(userId, platforms) {
     try {
       if (!Array.isArray(platforms) || platforms.length === 0) {

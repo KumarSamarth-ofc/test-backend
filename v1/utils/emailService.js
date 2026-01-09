@@ -8,23 +8,17 @@ class EmailService {
     this.baseUrl = process.env.FRONTEND_URL || process.env.APP_URL || "http://localhost:3000";
     this.initialized = false;
     this.etherealAccount = null;
-    // Initialize asynchronously (don't await in constructor)
     this.initialize().catch(err => {
       console.error("Failed to initialize email service:", err);
     });
   }
 
-  /**
-   * Initialize email transporter based on environment configuration
-   */
   async initialize() {
     try {
       const emailProvider = process.env.NODE_ENV ==="development" ? "ethereal" : process.env.EMAIL_PROVIDER || "ethereal";
 
       switch (emailProvider.toLowerCase()) {
         case "ethereal":
-          // Ethereal Email - Fake SMTP service for testing
-          // Perfect for development - emails are captured and can be viewed at https://ethereal.email
           try {
             this.etherealAccount = await nodemailer.createTestAccount();
             this.transporter = nodemailer.createTransport({
@@ -32,8 +26,6 @@ class EmailService {
               port: 587,
               secure: false,
               auth: {
-                // user: this.etherealAccount.user,
-                // pass: this.etherealAccount.pass,
                 user:"isaiah.wolf@ethereal.email",
                 pass: "tYBtrbpGgCrZzXQs11",
               },
@@ -61,7 +53,6 @@ class EmailService {
           break;
 
         case "sendgrid":
-          // SendGrid uses SMTP
           this.transporter = nodemailer.createTransport({
             host: "smtp.sendgrid.net",
             port: 587,
@@ -77,7 +68,6 @@ class EmailService {
           break;
 
         case "ses":
-          // AWS SES
           this.transporter = nodemailer.createTransport({
             host: process.env.SES_HOST || `email-smtp.${process.env.AWS_REGION || "us-east-1"}.amazonaws.com`,
             port: 587,
@@ -90,11 +80,10 @@ class EmailService {
           break;
 
         case "smtp":
-          // Generic SMTP
           this.transporter = nodemailer.createTransport({
             host: process.env.SMTP_HOST || "smtp.gmail.com",
             port: parseInt(process.env.SMTP_PORT) || 587,
-            secure: process.env.SMTP_SECURE === "true", // true for 465, false for other ports
+            secure: process.env.SMTP_SECURE === "true",
             auth: {
               user: process.env.SMTP_USER || process.env.EMAIL_USER,
               pass: process.env.SMTP_PASSWORD || process.env.EMAIL_PASSWORD,

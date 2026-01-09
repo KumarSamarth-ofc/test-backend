@@ -7,7 +7,6 @@ const {
   validateCreateMOU,
 } = require('../validators/mouValidators');
 
-// Get latest MOU by application ID (Influencer, Brand Owner, Admin)
 router.get(
   '/application/:applicationId',
   authMiddleware.authenticateToken,
@@ -16,7 +15,6 @@ router.get(
   mouController.getLatestMOU
 );
 
-// Accept MOU (Influencer, Brand Owner)
 router.post(
   '/:id/accept',
   authMiddleware.authenticateToken,
@@ -25,7 +23,6 @@ router.post(
   mouController.acceptMOU
 );
 
-// Create MOU (Admin only)
 router.post(
   '/',
   authMiddleware.authenticateToken,

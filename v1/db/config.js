@@ -9,7 +9,6 @@ if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceKey) {
     throw new Error('Missing Supabase environment variables');
 }
 
-// Client for user operations (with RLS)
 const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     auth: {
         autoRefreshToken: true,
@@ -17,7 +16,6 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     }
 });
 
-// Service client for admin operations (bypasses RLS)
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
     auth: {
         autoRefreshToken: true,

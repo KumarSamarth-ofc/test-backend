@@ -1,16 +1,6 @@
 const { supabaseAdmin } = require("../db/config");
 
-/**
- * Subscription Service
- * Handles business logic for subscription operations
- */
 class SubscriptionService {
-  /**
-   * Calculate end date based on billing cycle
-   * @param {string} billingCycle - MONTHLY or YEARLY
-   * @param {Date} startDate - Start date of subscription
-   * @returns {Date} End date
-   */
   calculateEndDate(billingCycle, startDate) {
     const date = new Date(startDate);
 
@@ -28,16 +18,8 @@ class SubscriptionService {
     return date;
   }
 
-  /**
-   * Create a new subscription for a user
-   * @param {string} userId - User ID
-   * @param {string} planId - Plan ID
-   * @param {boolean} isAutoRenew - Whether subscription should auto-renew
-   * @returns {Promise<Object>} Result object with success status and data
-   */
   async createSubscription(userId, planId, isAutoRenew = false) {
     try {
-      // Validate inputs
       if (!userId || typeof userId !== "string") {
         return {
           success: false,
@@ -52,7 +34,6 @@ class SubscriptionService {
         };
       }
 
-      // Check if plan exists and is active
       const { data: plan, error: planError } = await supabaseAdmin
         .from("v1_plans")
         .select("*")
@@ -73,7 +54,6 @@ class SubscriptionService {
         };
       }
 
-      // Check if user exists
       const { data: user, error: userError } = await supabaseAdmin
         .from("v1_users")
         .select("id")
@@ -87,7 +67,6 @@ class SubscriptionService {
         };
       }
 
-      // Check if user already has an active subscription
       const { data: existingSubscriptions, error: existingError } =
         await supabaseAdmin
           .from("v1_subscriptions")
@@ -114,17 +93,15 @@ class SubscriptionService {
         };
       }
 
-      // Calculate subscription dates
       const startDate = new Date();
       const endDate = this.calculateEndDate(plan.billing_cycle, startDate);
 
-      // Create subscription
       const subscriptionData = {
         user_id: userId,
         plan_id: planId,
         status: "ACTIVE",
-        start_date: startDate.toISOString().split("T")[0], // Format as YYYY-MM-DD
-        end_date: endDate.toISOString().split("T")[0], // Format as YYYY-MM-DD
+        start_date: startDate.toISOString().split("T")[0],
+        end_date: endDate.toISOString().split("T")[0],
         is_auto_renew: Boolean(isAutoRenew),
       };
 
@@ -146,7 +123,6 @@ class SubscriptionService {
         };
       }
 
-      // Fetch subscription with plan details
       const { data: subscriptionWithPlan, error: fetchError } =
         await supabaseAdmin
           .from("v1_subscriptions")
@@ -171,7 +147,6 @@ class SubscriptionService {
           "[v1/SubscriptionService/createSubscription] Error fetching subscription with plan:",
           fetchError
         );
-        // Return subscription without plan details if fetch fails
         return {
           success: true,
           subscription: subscription,
@@ -197,14 +172,8 @@ class SubscriptionService {
     }
   }
 
-  /**
-   * Get user's current subscription with plan details
-   * @param {string} userId - User ID
-   * @returns {Promise<Object>} Result object with success status and subscription data
-   */
   async getUserSubscription(userId) {
     try {
-      // Validate input
       if (!userId || typeof userId !== "string") {
         return {
           success: false,
@@ -212,7 +181,6 @@ class SubscriptionService {
         };
       }
 
-      // Get the most recent subscription
       const { data: subscriptions, error: fetchError } = await supabaseAdmin
         .from("v1_subscriptions")
         .select("*")
@@ -232,7 +200,6 @@ class SubscriptionService {
         };
       }
 
-      // If no subscription found
       if (!subscriptions || subscriptions.length === 0) {
         return {
           success: true,
@@ -243,7 +210,6 @@ class SubscriptionService {
 
       const subscription = subscriptions[0];
 
-      // Calculate days remaining (if active)
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const endDate = new Date(subscription.end_date);
@@ -255,7 +221,6 @@ class SubscriptionService {
         daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       }
 
-      // Remove user_id and return only needed fields
       const { user_id, ...subscriptionData } = subscription;
 
       return {

@@ -1,14 +1,6 @@
 const { supabaseAdmin } = require("../db/config");
 
-/**
- * Admin Settings Controller
- * Handles HTTP requests for admin settings endpoints
- */
 class AdminSettingsController {
-  /**
-   * Get current admin settings (non-expired)
-   * GET /api/v1/admin/settings
-   */
   async getAdminSettings(req, res) {
     try {
       const { data, error } = await supabaseAdmin
@@ -48,15 +40,10 @@ class AdminSettingsController {
     }
   }
 
-  /**
-   * Create new admin settings (expires all previous settings)
-   * POST /api/v1/admin/settings
-   */
   async createAdminSettings(req, res) {
     try {
       const { commission_percentage } = req.body;
 
-      // Validate commission_percentage
       if (
         commission_percentage === undefined ||
         commission_percentage === null
@@ -79,9 +66,8 @@ class AdminSettingsController {
       }
 
       const adminUserId = req.user.id;
-      const now = new Date().toISOString(); // Format as ISO timestamp (YYYY-MM-DDTHH:mm:ss.sssZ)
+      const now = new Date().toISOString();
 
-      // Start transaction: expire all existing non-expired settings
       const { error: updateError } = await supabaseAdmin
         .from("v1_admin_settings")
         .update({
@@ -102,14 +88,12 @@ class AdminSettingsController {
         });
       }
 
-      // Insert new settings
       const { data, error: insertError } = await supabaseAdmin
         .from("v1_admin_settings")
         .insert({
           user_id: adminUserId,
           commission_percentage: commission_percentage,
           is_expired: false,
-          // created_at and expired_at will use defaults (created_at = now() as timestamp, expired_at = null)
         })
         .select()
         .single();

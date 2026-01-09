@@ -1,15 +1,7 @@
 const { validationResult } = require('express-validator');
 const MOUService = require('../services/mouService');
 
-/**
- * MOU Controller
- * Handles HTTP requests for MOU-related endpoints
- */
 class MOUController {
-  /**
-   * Get latest MOU by application ID
-   * GET /api/v1/mous/application/:applicationId
-   */
   async getLatestMOU(req, res) {
     try {
       const errors = validationResult(req);
@@ -51,10 +43,6 @@ class MOUController {
     }
   }
 
-  /**
-   * Accept MOU
-   * POST /api/v1/mous/:id/accept
-   */
   async acceptMOU(req, res) {
     try {
       const errors = validationResult(req);
@@ -98,10 +86,6 @@ class MOUController {
     }
   }
 
-  /**
-   * Create MOU (Admin only)
-   * POST /api/v1/mous
-   */
   async createMOU(req, res) {
     try {
       const errors = validationResult(req);
@@ -140,7 +124,6 @@ class MOUController {
   }
 }
 
-// Create instance and bind methods to preserve 'this' context
 const mouController = new MOUController();
 mouController.getLatestMOU = mouController.getLatestMOU.bind(mouController);
 mouController.acceptMOU = mouController.acceptMOU.bind(mouController);

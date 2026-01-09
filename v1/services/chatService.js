@@ -2,19 +2,11 @@ const { supabaseAdmin } = require('../db/config');
 const { maskContent } = require('../utils/contentSafety');
 
 const ChatService = {
-  /**
-   * createChat
-   * Should be called when Application moves to ACCEPTED state [cite: 228]
-   * @param {string} applicationId - The application ID
-   * @returns {Promise<Object>} - The created chat object
-   */
   async createChat(applicationId) {
     if (!applicationId) {
       throw new Error('applicationId is required');
     }
 
-    // Check if payment is verified before creating chat
-    // Chat should only be created after brand owner pays the platform
     const { data: paymentOrder } = await supabaseAdmin
       .from('v1_payment_orders')
       .select('status')
@@ -26,7 +18,6 @@ const ChatService = {
       throw new Error('Payment must be verified before chat can be created');
     }
 
-    // Check if chat already exists (to avoid race conditions)
     const { data: existingChat } = await supabaseAdmin
       .from('v1_chats')
       .select('id, status, application_id')
@@ -37,19 +28,17 @@ const ChatService = {
       return existingChat;
     }
 
-    // Try to insert - handle race condition where another process creates chat simultaneously
     const { data, error } = await supabaseAdmin
       .from('v1_chats')
       .insert({
         application_id: applicationId,
-        status: 'ACTIVE' // [cite: 166]
+        status: 'ACTIVE'
       })
       .select()
       .single();
 
-    if (error) {
-      // If unique constraint violation (race condition), fetch existing chat
-      if (error.code === '23505' || error.message?.includes('duplicate') || error.message?.includes('unique')) {
+      if (error) {
+        if (error.code === '23505' || error.message?.includes('duplicate') || error.message?.includes('unique')) {
         const { data: raceConditionChat } = await supabaseAdmin
           .from('v1_chats')
           .select('id, status, application_id')
@@ -68,20 +57,12 @@ const ChatService = {
     return data;
   },
 
-  /**
-   * validateUserAccess
-   * Validates that a user has access to an application's chat
-   * @param {string} userId - The user ID
-   * @param {string} applicationId - The application ID
-   * @returns {Promise<boolean>} - True if user has access
-   */
   async validateUserAccess(userId, applicationId) {
     if (!userId || !applicationId) {
       return false;
     }
 
     try {
-      // Check if user is either the influencer or brand owner of this application
       const { data: application, error } = await supabaseAdmin
         .from('v1_applications')
         .select('influencer_id, v1_campaigns!inner(brand_id)')
@@ -93,7 +74,6 @@ const ChatService = {
         return false;
       }
 
-      // User is either the influencer or the brand owner
       const isInfluencer = application.influencer_id === userId;
       const isBrandOwner = application.v1_campaigns?.brand_id === userId;
 

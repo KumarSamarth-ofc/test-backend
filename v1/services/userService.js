@@ -1,17 +1,8 @@
 const { supabaseAdmin } = require("../db/config");
 
-/**
- * User Service
- * Handles business logic for user data retrieval
- */
 class UserService {
-  /**
-   * Get user details with all related data
-   * Returns different data based on user role (BRAND_OWNER or INFLUENCER)
-   */
   async getUser(userId) {
     try {
-      // First, get the user's basic information and role
       const { data: user, error: userError } = await supabaseAdmin
         .from("v1_users")
         .select("*")
@@ -26,13 +17,11 @@ class UserService {
         };
       }
 
-      // Get role-specific data
       if (user.role === "BRAND_OWNER") {
         return await this.getBrandUserData(user);
       } else if (user.role === "INFLUENCER") {
         return await this.getInfluencerUserData(user);
       } else {
-        // For other roles (e.g., ADMIN), return basic user data only
         return {
           success: true,
           user: user,
@@ -48,12 +37,8 @@ class UserService {
     }
   }
 
-  /**
-   * Get brand user data with related tables
-   */
   async getBrandUserData(user) {
     try {
-      // Get brand profile
       const { data: brandProfile, error: brandProfileError } =
         await supabaseAdmin
           .from("v1_brand_profiles")
@@ -69,7 +54,6 @@ class UserService {
         );
       }
 
-      // Get campaigns created by this brand with nested applications
       const { data: campaigns, error: campaignsError } = await supabaseAdmin
         .from("v1_campaigns")
         .select(`
@@ -89,7 +73,6 @@ class UserService {
         );
       }
 
-      // Rename v1_applications to applications
       const campaignsWithApplications = (campaigns || []).map(campaign => {
         const { v1_applications, ...campaignData } = campaign;
         return {
@@ -101,7 +84,7 @@ class UserService {
       return {
         success: true,
         user: user,
-        brand_id: user.id, // Add brand_id explicitly
+        brand_id: user.id,
         brand_profile: brandProfile || null,
         campaigns: campaignsWithApplications,
       };
@@ -118,12 +101,8 @@ class UserService {
     }
   }
 
-  /**
-   * Get influencer user data with related tables
-   */
   async getInfluencerUserData(user) {
     try {
-      // Get influencer profile
       const { data: influencerProfile, error: influencerProfileError } =
         await supabaseAdmin
           .from("v1_influencer_profiles")
@@ -139,7 +118,6 @@ class UserService {
         );
       }
 
-      // Get social accounts
       const { data: socialAccounts, error: socialAccountsError } =
         await supabaseAdmin
           .from("v1_influencer_social_accounts")
@@ -155,7 +133,6 @@ class UserService {
         );
       }
 
-      // Get applications made by this influencer with nested campaign data
       const { data: applications, error: applicationsError } =
         await supabaseAdmin
           .from("v1_applications")
@@ -175,7 +152,6 @@ class UserService {
         );
       }
 
-      // Rename v1_campaigns to campaign (singular, as each application has one campaign)
       const applicationsWithCampaigns = (applications || []).map(application => {
         const { v1_campaigns, ...applicationData } = application;
         return {
@@ -204,13 +180,8 @@ class UserService {
     }
   }
 
-  /**
-   * Get all influencers from v1_users table
-   * Returns all users with role INFLUENCER with their profiles, social accounts, and categories
-   */
   async getAllInfluencers() {
     try {
-      // Get all influencer users
       const { data: influencers, error: influencersError } = await supabaseAdmin
         .from("v1_users")
         .select("*")
@@ -230,7 +201,6 @@ class UserService {
         };
       }
 
-      // Get influencer profiles for all influencers
       const userIds = (influencers || []).map((inf) => inf.id);
       let influencerProfiles = [];
       let profilesError = null;
@@ -247,7 +217,6 @@ class UserService {
         influencerProfiles = profilesResult.data || [];
         profilesError = profilesResult.error;
 
-        // Fetch social accounts for all influencers
         const socialAccountsResult = await supabaseAdmin
           .from("v1_influencer_social_accounts")
           .select("*")
@@ -262,7 +231,6 @@ class UserService {
             socialAccountsError
           );
         } else if (socialAccountsResult.data) {
-          // Group social accounts by user_id
           socialAccountsResult.data.forEach((account) => {
             if (!socialAccountsMap[account.user_id]) {
               socialAccountsMap[account.user_id] = [];
@@ -279,30 +247,21 @@ class UserService {
         );
       }
 
-      // Map profiles to users
       const profileMap = {};
       (influencerProfiles || []).forEach((profile) => {
         profileMap[profile.user_id] = profile;
       });
 
-      // Combine user data with profiles, social accounts, and categories
-      // Structure the response to include all requested data
       const influencersWithProfiles = (influencers || []).map((influencer) => {
         const profile = profileMap[influencer.id] || null;
         
-        // Filter out sensitive fields from user data
         const { password_hash, password_reset_token, password_reset_token_expires_at, is_deleted, ...userDetails } = influencer;
         
         return {
-          // User details
           ...userDetails,
-          // Profile details (includes all profile fields including portfolio if it exists)
           profile: profile || null,
-          // Portfolio (if it exists as a field in profile, otherwise null)
           portfolio: profile?.portfolio || profile?.portfolio_links || null,
-          // Social accounts
           social_accounts: socialAccountsMap[influencer.id] || [],
-          // Categories (from profile, fallback to empty array for easy access)
           categories: profile?.categories || [],
         };
       });

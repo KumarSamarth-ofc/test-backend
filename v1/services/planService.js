@@ -1,16 +1,8 @@
 const { supabaseAdmin } = require("../db/config");
 
-/**
- * Plan Service
- * Handles business logic for plan operations
- */
 class PlanService {
-  /**
-   * Create a new plan
-   */
   async createPlan(planData) {
     try {
-      // Validate billing cycle
       const billingCycle = planData.billing_cycle?.toUpperCase();
       if (!billingCycle || !["MONTHLY", "YEARLY"].includes(billingCycle)) {
         return {
@@ -19,7 +11,6 @@ class PlanService {
         };
       }
 
-      // Validate price
       const price = parseFloat(planData.price);
       if (isNaN(price) || price < 0) {
         return {
@@ -28,7 +19,6 @@ class PlanService {
         };
       }
 
-      // Validate name
       if (!planData.name || typeof planData.name !== "string" || planData.name.trim().length === 0) {
         return {
           success: false,
@@ -36,13 +26,11 @@ class PlanService {
         };
       }
 
-      // Validate features (should be an object, defaults to empty object)
       let features = planData.features || {};
       if (typeof features !== "object" || Array.isArray(features)) {
         features = {};
       }
 
-      // Build plan object
       const plan = {
         name: planData.name.trim(),
         features: features,
@@ -51,7 +39,6 @@ class PlanService {
         is_active: planData.is_active !== undefined ? Boolean(planData.is_active) : true,
       };
 
-      // Insert plan
       const { data, error } = await supabaseAdmin
         .from("v1_plans")
         .insert(plan)
@@ -82,9 +69,6 @@ class PlanService {
     }
   }
 
-  /**
-   * Get all active plans
-   */
   async getAllPlans() {
     try {
       const { data, error } = await supabaseAdmin
@@ -117,12 +101,8 @@ class PlanService {
     }
   }
 
-  /**
-   * Update a plan by ID
-   */
   async updatePlan(planId, updateData) {
     try {
-      // Check if plan exists
       const { data: existingPlan, error: fetchError } = await supabaseAdmin
         .from("v1_plans")
         .select("*")
@@ -136,7 +116,6 @@ class PlanService {
         };
       }
 
-      // Build update object (only include provided fields)
       const update = {};
 
       if (updateData.name !== undefined) {
@@ -185,7 +164,6 @@ class PlanService {
         update.is_active = Boolean(updateData.is_active);
       }
 
-      // Check if there's anything to update
       if (Object.keys(update).length === 0) {
         return {
           success: false,
@@ -193,7 +171,6 @@ class PlanService {
         };
       }
 
-      // Update plan
       const { data: updated, error: updateError } = await supabaseAdmin
         .from("v1_plans")
         .update(update)

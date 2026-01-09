@@ -2,7 +2,6 @@ const { supabaseAdmin } = require("../db/config");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
 
-// Initialize Razorpay
 let razorpay = null;
 if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
   razorpay = new Razorpay({
@@ -15,15 +14,7 @@ if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
   );
 }
 
-/**
- * Payment Service for Applications
- * Handles payment flow: Brand pays admin after application completion, Admin releases to influencer
- */
 class PaymentService {
-  /**
-   * Normalize payment status to UPPERCASE
-   * Valid statuses: CREATED, PROCESSING, VERIFIED, FAILED, REFUNDED
-   */
   normalizeStatus(status) {
     if (!status) return null;
     const normalized = String(status).toUpperCase().trim();
@@ -31,12 +22,9 @@ class PaymentService {
     if (validStatuses.includes(normalized)) {
       return normalized;
     }
-    return status; // Return original if not valid (for error handling)
+    return status;
   }
 
-  /**
-   * Convert Razorpay order object amounts from paise to rupees
-   */
   convertRazorpayOrderToRupees(razorpayOrder) {
     if (!razorpayOrder) return null;
     
@@ -48,20 +36,13 @@ class PaymentService {
     };
   }
 
-  /**
-   * Calculate commission and breakdown (all amounts in rupees)
-   * @param {number} amount - Total amount to calculate commission for
-   * @param {number} platformFeePercentage - Optional platform fee percentage from campaign/application
-   */
   async calculateCommissionBreakdown(amount, platformFeePercentage = null) {
     try {
       let commissionPercentage;
       
       if (platformFeePercentage !== null && platformFeePercentage !== undefined) {
-        // Use platform_fee_percentage from campaign/application
         commissionPercentage = parseFloat(platformFeePercentage);
       } else {
-        // Fallback: Get current admin settings (non-expired) - for backward compatibility
         const { data: adminSettings, error: commError } = await supabaseAdmin
           .from("v1_admin_settings")
           .select("*")
@@ -76,7 +57,6 @@ class PaymentService {
         }
       }
 
-      // All calculations in rupees
       const totalAmount = parseFloat(amount);
       const commissionAmount = (totalAmount * commissionPercentage) / 100;
       const netAmount = totalAmount - commissionAmount;
@@ -93,10 +73,6 @@ class PaymentService {
     }
   }
 
-  /**
-   * Create Razorpay order for application payment (Brand pays admin)
-   * Only allowed when application phase is ACCEPTED
-   */
   async createPaymentOrder(applicationId, userId) {
     try {
       if (!razorpay) {
@@ -106,7 +82,6 @@ class PaymentService {
         };
       }
 
-      // Get application with campaign details including budget and platform_fee_percentage
       const { data: application, error: applicationError } = await supabaseAdmin
         .from("v1_applications")
         .select(`
@@ -129,7 +104,6 @@ class PaymentService {
         };
       }
 
-      // Check if application phase is ACCEPTED (payment can be made after acceptance)
       if (application.phase !== "ACCEPTED") {
         return {
           success: false,
@@ -137,7 +111,6 @@ class PaymentService {
         };
       }
 
-      // Check if user is the brand owner
       const { data: user, error: userError } = await supabaseAdmin
         .from("v1_users")
         .select("id, role")
@@ -151,7 +124,6 @@ class PaymentService {
         };
       }
 
-      // Permission check: Only brand owner can pay for their applications
       if (user.role !== "ADMIN" && application.v1_campaigns.brand_id !== userId) {
         return {
           success: false,
@@ -159,7 +131,6 @@ class PaymentService {
         };
       }
 
-      // Validate that campaign budget equals application budget_amount
       const campaignBudget = application.v1_campaigns.budget;
       const applicationBudgetAmount = application.budget_amount;
       
@@ -177,7 +148,6 @@ class PaymentService {
         };
       }
 
-      // Validate budget matches (allow small floating point differences)
       if (Math.abs(campaignBudget - applicationBudgetAmount) > 0.01) {
         return {
           success: false,
@@ -185,8 +155,6 @@ class PaymentService {
         };
       }
 
-      // Determine payment amount: use budget from campaign or budget_amount from application
-      // Both should be equal after validation above, but prefer campaign budget as source of truth
       const paymentAmount = campaignBudget || applicationBudgetAmount;
 
       if (!paymentAmount || paymentAmount <= 0) {
@@ -196,7 +164,6 @@ class PaymentService {
         };
       }
 
-      // Get platform_fee_percentage from application (which came from campaign)
       const platformFeePercentage = application.platform_fee_percentage ?? application.v1_campaigns.platform_fee_percentage;
 
       if (platformFeePercentage === null || platformFeePercentage === undefined) {
@@ -206,7 +173,6 @@ class PaymentService {
         };
       }
 
-      // Check if payment already exists for this application
       const { data: existingPayment } = await supabaseAdmin
         .from("v1_payment_orders")
         .select("id, status")
@@ -214,7 +180,6 @@ class PaymentService {
         .maybeSingle();
 
       if (existingPayment) {
-        // Normalize status to UPPERCASE
         const normalizedStatus = this.normalizeStatus(existingPayment.status) || existingPayment.status;
         if (normalizedStatus === "VERIFIED") {
           return {
@@ -222,24 +187,19 @@ class PaymentService {
             message: "Payment already completed for this application",
           };
         }
-        // If payment exists but not verified, can create new one or return existing
         return {
           success: false,
           message: "Payment order already exists for this application",
         };
       }
 
-      // Calculate commission breakdown using payment amount (budget) and platform_fee_percentage from application
       const breakdown = await this.calculateCommissionBreakdown(paymentAmount, platformFeePercentage);
 
-      // Razorpay receipt must be <= 40 chars
       const rawReceipt = `app_${applicationId.substring(0, 20)}_${Date.now()}`;
       const safeReceipt = rawReceipt.substring(0, 40);
 
-      // Convert to paise for Razorpay API (Razorpay requires amounts in paise)
       const amountInPaise = Math.round(breakdown.total_amount * 100);
 
-      // Create Razorpay order
       const orderOptions = {
         amount: amountInPaise,
         currency: "INR",
@@ -257,7 +217,6 @@ class PaymentService {
 
       const razorpayOrder = await razorpay.orders.create(orderOptions);
 
-      // Store payment order in database (amount in rupees)
       const { data: paymentOrder, error: orderError } = await supabaseAdmin
         .from("v1_payment_orders")
         .insert({
@@ -273,8 +232,8 @@ class PaymentService {
             payer_id: userId,
             payer_role: user.role,
             payment_type: "application_payment",
-            budget_amount: paymentAmount, // Store the budget amount paid
-            agreed_amount: application.agreed_amount, // Keep for reference
+            budget_amount: paymentAmount,
+            agreed_amount: application.agreed_amount,
             commission_percentage: breakdown.commission_percentage,
             commission_amount: breakdown.commission_amount,
             net_amount: breakdown.net_amount,
@@ -296,7 +255,6 @@ class PaymentService {
         };
       }
 
-      // Convert Razorpay order amounts from paise to rupees for response
       const orderInRupees = this.convertRazorpayOrderToRupees(razorpayOrder);
 
       return {
@@ -316,9 +274,6 @@ class PaymentService {
     }
   }
 
-  /**
-   * Verify payment and update payment order
-   */
   async verifyPayment(paymentData) {
     try {
       const {
@@ -335,7 +290,6 @@ class PaymentService {
         };
       }
 
-      // Verify payment signature
       const text = `${razorpay_order_id}|${razorpay_payment_id}`;
       const expectedSignature = crypto
         .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)

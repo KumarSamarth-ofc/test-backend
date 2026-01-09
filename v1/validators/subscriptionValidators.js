@@ -1,10 +1,5 @@
 const { body } = require("express-validator");
 
-/**
- * Subscription Validators
- * Validation rules for subscription operations
- */
-
 const validateCreateSubscription = [
   body("plan_id")
     .notEmpty()

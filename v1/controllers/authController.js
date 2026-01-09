@@ -150,10 +150,6 @@ class AuthController {
     }
   }
 
-  // ============================================
-  // PASSWORD AUTHENTICATION (Brand Owners)
-  // ============================================
-
   async registerBrandOwner(req, res) {
     try {
       const errors = validationResult(req);
@@ -173,7 +169,6 @@ class AuthController {
         return res.status(201).json({
           success: true,
           user: result.user,
-          // Only return token in development
           ...(result.verification_token && {
             verification_token: result.verification_token,
           }),
@@ -279,7 +274,6 @@ class AuthController {
         return res.json({
           success: true,
           message: result.message,
-          // Only return token in development
           ...(result.verification_token && {
             verification_token: result.verification_token,
           }),
@@ -315,7 +309,6 @@ class AuthController {
         return res.json({
           success: true,
           message: result.message,
-          // Only return token in development
           ...(result.reset_token && { reset_token: result.reset_token }),
         });
       }
@@ -370,6 +363,5 @@ class AuthController {
 
 module.exports = {
   AuthController: new AuthController(),
-  // Export validators from validators folder
   ...validators,
 };

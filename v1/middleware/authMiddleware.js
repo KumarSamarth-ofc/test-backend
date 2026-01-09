@@ -7,9 +7,6 @@ class AuthMiddleware {
       process.env.JWT_SECRET || "your-secret-key-change-in-production";
   }
 
-  /**
-   * Verify JWT token
-   */
   verifyToken(token) {
     try {
       const decoded = jwt.verify(token, this.jwtSecret);
@@ -19,9 +16,6 @@ class AuthMiddleware {
     }
   }
 
-  /**
-   * Middleware to authenticate requests using JWT token
-   */
   authenticateToken = (req, res, next) => {
     const authHeader = req.headers["authorization"];
     const token = authHeader && authHeader.split(" ")[1];
@@ -30,7 +24,6 @@ class AuthMiddleware {
       return res.status(401).json({ error: "Access token required" });
     }
 
-    // Verify JWT token
     const result = this.verifyToken(token);
     if (!result.success) {
       console.log("⛔ [AUTH] Token verification failed:", result.message);
@@ -41,36 +34,25 @@ class AuthMiddleware {
     next();
   };
 
-  /**
-   * Optional authentication middleware - doesn't fail if no token provided
-   * Sets req.user if valid token is present, otherwise continues without req.user
-   */
   authenticateTokenOptional = (req, res, next) => {
     const authHeader = req.headers["authorization"];
     const token = authHeader && authHeader.split(" ")[1];
 
     if (!token) {
-      // No token provided - continue without authentication
       req.user = undefined;
       return next();
     }
 
-    // Verify JWT token
     const result = this.verifyToken(token);
     if (!result.success) {
-      // Invalid token - continue without authentication
       req.user = undefined;
       return next();
     }
 
-    // Valid token - set user
     req.user = result.user;
     next();
   };
 
-  /**
-   * Middleware to check role permissions
-   */
   requireRole(roles) {
     return (req, res, next) => {
       if (!req.user) {

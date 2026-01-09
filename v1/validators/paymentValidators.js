@@ -1,11 +1,5 @@
 const { body, param } = require('express-validator');
 
-/**
- * Payment Validators
- * Validation rules for payment operations
- */
-
-// Validate applicationId in URL params
 const validateApplicationIdParam = [
   param('applicationId')
     .notEmpty()
@@ -14,7 +8,6 @@ const validateApplicationIdParam = [
     .withMessage('Application ID must be a valid UUID'),
 ];
 
-// Validate verify payment request body
 const validateVerifyPayment = [
   body('razorpay_order_id')
     .notEmpty()

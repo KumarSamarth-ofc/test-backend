@@ -1,15 +1,7 @@
 const { validationResult } = require("express-validator");
 const SubscriptionService = require("../services/subscriptionService");
 
-/**
- * Subscription Controller
- * Handles HTTP requests for subscription-related endpoints
- */
 class SubscriptionController {
-  /**
-   * Create a new subscription (BRAND_OWNER only)
-   * POST /api/v1/subscriptions
-   */
   async createSubscription(req, res) {
     try {
       const errors = validationResult(req);
@@ -64,10 +56,6 @@ class SubscriptionController {
     }
   }
 
-  /**
-   * Get subscription status and details (BRAND_OWNER only)
-   * GET /api/v1/subscriptions/status
-   */
   async getSubscriptionStatus(req, res) {
     try {
       const userId = req.user.id;

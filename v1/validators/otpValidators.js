@@ -1,9 +1,5 @@
 const { body } = require("express-validator");
 
-/**
- * OTP Authentication Validators
- */
-
 const validateSendOTP = [
   body("phone")
     .isMobilePhone("any")

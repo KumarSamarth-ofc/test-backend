@@ -4,10 +4,6 @@ const { supabaseAdmin } = require("../db/config");
 
 class CampaignController {
 
-  /**
-   * Helper method to get brand profile ID from user ID
-   * Since v1_brand_profiles uses user_id as primary key, we just verify the profile exists
-   */
   async getBrandProfileId(userId) {
     try {
       const { data: brandProfile, error } = await supabaseAdmin
@@ -26,7 +22,6 @@ class CampaignController {
         return { success: false, error: "Brand profile not found" };
       }
 
-      // v1_brand_profiles uses user_id as primary key, so brand_id = user_id
       return { success: true, brandId: userId };
     } catch (err) {
       console.error("[v1/getBrandProfileId] Exception:", err);
@@ -50,7 +45,6 @@ class CampaignController {
       const userId = req.user.id;
       const userRole = req.user.role;
 
-      // Only brand owners can create campaigns
       if (userRole !== "BRAND_OWNER") {
         return res.status(403).json({
           success: false,
@@ -58,7 +52,6 @@ class CampaignController {
         });
       }
 
-      // Get brand_id from brand profile (not user_id)
       const brandProfileResult = await this.getBrandProfileId(userId);
       if (!brandProfileResult || !brandProfileResult.success) {
         const errorMsg = brandProfileResult?.error || "Unknown error";
@@ -75,7 +68,6 @@ class CampaignController {
 
       const brandId = brandProfileResult.brandId;
 
-      // Handle cover image upload if provided
       let coverImageUrl = null;
       if (req.file) {
         const { uploadImageToStorage } = require("../utils/imageUpload");
@@ -93,7 +85,6 @@ class CampaignController {
         coverImageUrl = url;
       }
 
-      // Merge cover image URL into body
       const campaignData = {
         ...req.body,
         cover_image_url: coverImageUrl || req.body.cover_image_url || null,
@@ -125,12 +116,6 @@ class CampaignController {
     }
   }
 
-  /**
-   * Get all campaigns with filtering and pagination
-   * GET /api/v1/campaigns
-   * - Influencers: See all campaigns
-   * - Brand Owners: See all campaigns (can filter by brand_id)
-   */
   async getCampaigns(req, res) {
     try {
       const errors = validationResult(req);
@@ -141,7 +126,6 @@ class CampaignController {
         });
       }
 
-      // Extract filters from query params
       const filters = {
         status: req.query.status,
         type: req.query.type,
@@ -155,12 +139,10 @@ class CampaignController {
         search: req.query.search,
       };
 
-      // Remove undefined filters
       Object.keys(filters).forEach(
         (key) => filters[key] === undefined && delete filters[key]
       );
 
-      // Extract pagination
       const pagination = {
         page: req.query.page ? parseInt(req.query.page) : 1,
         limit: req.query.limit ? parseInt(req.query.limit) : 20,
@@ -190,10 +172,6 @@ class CampaignController {
     }
   }
 
-  /**
-   * Get campaigns created by authenticated brand owner
-   * GET /api/v1/campaigns/my
-   */
   async getMyCampaigns(req, res) {
     try {
       const errors = validationResult(req);
@@ -207,7 +185,6 @@ class CampaignController {
       const userId = req.user.id;
       const userRole = req.user.role;
 
-      // Only brand owners can see their own campaigns
       if (userRole !== "BRAND_OWNER") {
         return res.status(403).json({
           success: false,
@@ -215,7 +192,6 @@ class CampaignController {
         });
       }
 
-      // Get brand_id from brand profile (not user_id)
       const brandProfileResult = await this.getBrandProfileId(userId);
       if (!brandProfileResult || !brandProfileResult.success) {
         const errorMsg = brandProfileResult?.error || "Unknown error";
@@ -250,7 +226,6 @@ class CampaignController {
         (key) => filters[key] === undefined && delete filters[key]
       );
 
-      // Extract pagination
       const pagination = {
         page: req.query.page ? parseInt(req.query.page) : 1,
         limit: req.query.limit ? parseInt(req.query.limit) : 20,
@@ -284,10 +259,6 @@ class CampaignController {
     }
   }
 
-  /**
-   * Get single campaign by ID
-   * GET /api/v1/campaigns/:id
-   */
   async getCampaign(req, res) {
     try {
       const campaignId = req.params.id;
@@ -317,10 +288,6 @@ class CampaignController {
     }
   }
 
-  /**
-   * Update campaign (Brand Owner only)
-   * PUT /api/v1/campaigns/:id
-   */
   async updateCampaign(req, res) {
     try {
       const errors = validationResult(req);
@@ -335,7 +302,6 @@ class CampaignController {
       const userRole = req.user.role;
       const campaignId = req.params.id;
 
-      // Only brand owners can update campaigns
       if (userRole !== "BRAND_OWNER") {
         return res.status(403).json({
           success: false,
@@ -343,7 +309,6 @@ class CampaignController {
         });
       }
 
-      // Get brand_id from brand profile (not user_id)
       const brandProfileResult = await this.getBrandProfileId(userId);
       if (!brandProfileResult || !brandProfileResult.success) {
         const errorMsg = brandProfileResult?.error || "Unknown error";
@@ -360,18 +325,15 @@ class CampaignController {
 
       const brandId = brandProfileResult.brandId;
 
-      // Handle cover image upload if provided
       let coverImageUrl = undefined;
       if (req.file) {
         const { uploadImageToStorage, deleteImageFromStorage } = require("../utils/imageUpload");
         
-        // Get current campaign to check for existing image
         const currentCampaignResult = await CampaignService.getCampaignById(campaignId, req.user.id);
         const currentCoverImageUrl = currentCampaignResult.success && currentCampaignResult.campaign?.cover_image_url
           ? currentCampaignResult.campaign.cover_image_url
           : null;
 
-        // Upload new image
         const { url, error: uploadError } = await uploadImageToStorage(
           req.file.buffer,
           req.file.originalname,
@@ -385,14 +347,12 @@ class CampaignController {
         }
         coverImageUrl = url;
 
-        // Delete old image if it exists (and not placeholder)
         const placeholderUrl = "https://via.placeholder.com/800x400?text=Campaign+Image";
         if (currentCoverImageUrl && currentCoverImageUrl !== placeholderUrl) {
           await deleteImageFromStorage(currentCoverImageUrl);
         }
       }
 
-      // Merge cover image URL into body if uploaded
       const campaignData = {
         ...req.body,
       };
@@ -429,17 +389,12 @@ class CampaignController {
     }
   }
 
-  /**
-   * Delete campaign (Brand Owner only)
-   * DELETE /api/v1/campaigns/:id
-   */
   async deleteCampaign(req, res) {
     try {
       const userId = req.user.id;
       const userRole = req.user.role;
       const campaignId = req.params.id;
 
-      // Only brand owners can delete campaigns
       if (userRole !== "BRAND_OWNER") {
         return res.status(403).json({
           success: false,
@@ -447,7 +402,6 @@ class CampaignController {
         });
       }
 
-      // Get brand_id from brand profile (not user_id)
       const brandProfileResult = await this.getBrandProfileId(userId);
       if (!brandProfileResult || !brandProfileResult.success) {
         const errorMsg = brandProfileResult?.error || "Unknown error";
@@ -494,7 +448,6 @@ class CampaignController {
   
 }
 
-// Create instance and bind methods to preserve 'this' context
 const campaignController = new CampaignController();
 campaignController.createCampaign = campaignController.createCampaign.bind(campaignController);
 campaignController.getCampaigns = campaignController.getCampaigns.bind(campaignController);

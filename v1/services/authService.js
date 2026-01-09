@@ -12,11 +12,8 @@ class AuthService {
     this.jwtExpiry = "1d";
     this.refreshJwtExpiry = "180d";
 
-    // Mock phone for testing (same as legacy)
     this.mockPhone = "9876543210";
   }
-
-  // ---------- OTP helpers (reuse otp_codes table) ----------
 
   generateOTP() {
     return Math.floor(100000 + Math.random() * 900000).toString();
@@ -24,7 +21,7 @@ class AuthService {
 
   async storeOTP(phone, otp) {
     try {
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
       const { error } = await supabaseAdmin.from("otp_codes").upsert({
         phone,
@@ -61,7 +58,6 @@ class AuthService {
         return { success: false, message: "Invalid or expired OTP" };
       }
 
-      // Delete the used OTP
       await supabaseAdmin.from("otp_codes").delete().eq("id", data.id);
 
       return { success: true };
@@ -70,8 +66,6 @@ class AuthService {
       return { success: false, message: "OTP verification failed" };
     }
   }
-
-  // ---------- v1_users helpers ----------
 
   async findV1UserByPhone(phone) {
     try {
@@ -93,7 +87,6 @@ class AuthService {
     }
   }
 
-  // Map legacy roles → v1 roles
   mapRole(userDataRole) {
     if (!userDataRole) return "INFLUENCER";
 
@@ -125,7 +118,6 @@ class AuthService {
         };
       }
 
-      // Check if user exists
       const { success, user } = await this.findV1UserByPhone(phone);
       if (!success) {
         return { success: false, message: "Database error" };
@@ -139,7 +131,6 @@ class AuthService {
         };
       }
 
-      // Validate role if provided
       if (role) {
         const validRoles = ["BRAND_OWNER", "INFLUENCER", "ADMIN"];
         if (!validRoles.includes(role)) {
@@ -150,7 +141,6 @@ class AuthService {
           };
         }
 
-        // Check if user's role matches the provided role
         if (user.role !== role) {
           return {
             success: false,
@@ -160,12 +150,10 @@ class AuthService {
         }
       }
 
-      // Generate and store OTP
       const otp = this.generateOTP();
       const storeResult = await this.storeOTP(phone, otp);
       if (!storeResult.success) return storeResult;
 
-      // Send via WhatsApp
       return await whatsappService.sendOTP(phone, otp);
     } catch (err) {
       console.error("[v1/sendOTP] error:", err);
@@ -173,7 +161,6 @@ class AuthService {
     }
   }
 
-  // ---------- Send OTP for registration (new v1 user) ----------
 
   async sendRegistrationOTP(phone) {
     try {
@@ -194,7 +181,6 @@ class AuthService {
         };
       }
 
-      // Check if user already exists
       const { success, user } = await this.findV1UserByPhone(phone);
       if (!success) {
         return { success: false, message: "Database error" };
@@ -208,12 +194,10 @@ class AuthService {
         };
       }
 
-      // Generate and store OTP
       const otp = this.generateOTP();
       const storeResult = await this.storeOTP(phone, otp);
       if (!storeResult.success) return storeResult;
 
-      // Send via WhatsApp
       return await whatsappService.sendOTP(phone, otp);
     } catch (err) {
       console.error("[v1/sendRegistrationOTP] error:", err);
@@ -221,7 +205,6 @@ class AuthService {
     }
   }
 
-  // ---------- Verify OTP & create/update v1 users + profiles ----------
 
   async verifyOTP(phone, token, userData) {
     try {
@@ -281,7 +264,6 @@ class AuthService {
               "[v1/verifyOTP] Failed to create influencer profile:",
               profileResult.error
             );
-            // Continue anyway - user is created, profile can be added later
           }
         } else if (role === "BRAND_OWNER") {
           const profileResult = await ProfileService.createBrandProfile(user, userData);
@@ -290,12 +272,9 @@ class AuthService {
               "[v1/verifyOTP] Failed to create brand profile:",
               profileResult.error
             );
-            // Continue anyway - user is created, profile can be added later
           }
         }
-        // ADMIN and AGENT don't need profiles for now
       } else {
-        // Existing user: optionally update basic fields
         await this.updateBasicUserFields(user, userData);
       }
 
@@ -333,7 +312,6 @@ class AuthService {
     }
   }
 
-  // ---------- JWT helpers ----------
 
   generateToken(user) {
     return jwt.sign(
@@ -370,7 +348,6 @@ class AuthService {
         };
       }
 
-      // Verify refresh token
       let decoded;
       try {
         decoded = jwt.verify(refreshToken, this.jwtSecret);
@@ -382,7 +359,6 @@ class AuthService {
         };
       }
 
-      // Ensure it is a refresh token
       if (decoded.type !== "refresh") {
         return {
           success: false,
@@ -391,7 +367,6 @@ class AuthService {
         };
       }
 
-      // Find user in v1_users
       const { data: user, error } = await supabaseAdmin
         .from("v1_users")
         .select("*")
@@ -407,7 +382,6 @@ class AuthService {
         };
       }
 
-      // Generate new tokens (rolling refresh)
       const newToken = this.generateToken(user);
       const newRefreshToken = this.generateRefreshToken(user);
 
@@ -427,21 +401,12 @@ class AuthService {
     }
   }
 
-  // ---------- WhatsApp status passthrough ----------
 
   getWhatsAppStatus() {
     return whatsappService.getServiceStatus();
   }
 
   // ============================================
-  // PASSWORD AUTHENTICATION (Brand Owners)
-  // ============================================
-
-  // ---------- Password helpers ----------
-
-  /**
-   * Hash password using bcrypt
-   */
   async hashPassword(password) {
     try {
       const saltRounds = 10;
@@ -452,9 +417,6 @@ class AuthService {
     }
   }
 
-  /**
-   * Compare password with hash
-   */
   async comparePassword(password, hash) {
     try {
       return await bcrypt.compare(password, hash);

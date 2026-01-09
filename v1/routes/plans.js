@@ -5,12 +5,6 @@ const authMiddleware = require("../middleware/authMiddleware");
 const { normalizeEnums } = require("../middleware/enumNormalizer");
 const { validateCreatePlan, validateUpdatePlan } = require("../validators/planValidators");
 
-/**
- * Plan Routes
- * All routes require authentication
- */
-
-// Get all active plans (Brand and Admin)
 router.get(
   "/",
   authMiddleware.authenticateToken,
@@ -18,7 +12,6 @@ router.get(
   PlanController.getAllPlans
 );
 
-// Create a new plan (Admin only)
 router.post(
   "/",
   authMiddleware.authenticateToken,
@@ -28,7 +21,6 @@ router.post(
   PlanController.createPlan
 );
 
-// Update a plan (Admin only)
 router.put(
   "/:id",
   authMiddleware.authenticateToken,

@@ -1,14 +1,5 @@
-/**
- * Enum Normalizer Middleware
- * Normalizes enum values to uppercase before they reach services
- */
-
-/**
- * Normalize enum values in request body to uppercase
- */
 function normalizeEnums(req, res, next) {
   if (req.body) {
-    // Gender enum
     if (req.body.gender !== undefined && req.body.gender !== null) {
       const normalized = String(req.body.gender).toUpperCase().trim();
       const validGenders = ["MALE", "FEMALE", "OTHER"];
@@ -17,7 +8,6 @@ function normalizeEnums(req, res, next) {
       }
     }
 
-    // Tier enum
     if (req.body.tier !== undefined && req.body.tier !== null) {
       const normalized = String(req.body.tier).toUpperCase().trim();
       const validTiers = ["NANO", "MICRO", "MID", "MACRO"];
@@ -26,7 +16,6 @@ function normalizeEnums(req, res, next) {
       }
     }
 
-    // Influencer tier enum
     if (req.body.influencer_tier !== undefined && req.body.influencer_tier !== null) {
       const normalized = String(req.body.influencer_tier).toUpperCase().trim();
       const validTiers = ["NANO", "MICRO", "MID", "MACRO"];
@@ -35,7 +24,6 @@ function normalizeEnums(req, res, next) {
       }
     }
 
-    // Campaign type enum
     if (req.body.type !== undefined && req.body.type !== null) {
       const normalized = String(req.body.type).toUpperCase().trim();
       const validTypes = ["NORMAL", "BULK"];
@@ -44,7 +32,6 @@ function normalizeEnums(req, res, next) {
       }
     }
 
-    // Campaign status enum
     if (req.body.status !== undefined && req.body.status !== null) {
       const normalized = String(req.body.status).toUpperCase().trim();
       const validStatuses = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
@@ -71,19 +58,14 @@ function normalizeEnums(req, res, next) {
       }
     }
 
-    // Script/Work submission status enum
     if (req.body.status !== undefined && req.body.status !== null) {
       const normalized = String(req.body.status).toUpperCase().trim();
       const validSubmissionStatuses = ["PENDING", "ACCEPTED", "REVISION", "REJECTED"];
-      // Only normalize if it's a valid submission status (not campaign status)
       if (validSubmissionStatuses.includes(normalized)) {
-        // Check if this is likely a submission status (not campaign status)
-        // We'll normalize it if it matches submission statuses
         req.body.status = normalized;
       }
     }
 
-    // Entity type enum (for rejections)
     if (req.body.entity_type !== undefined && req.body.entity_type !== null) {
       const normalized = String(req.body.entity_type).toUpperCase().trim();
       const validEntityTypes = ["SCRIPT", "WORK"];
@@ -92,7 +74,6 @@ function normalizeEnums(req, res, next) {
       }
     }
 
-    // Rejected by role enum
     if (req.body.rejected_by_role !== undefined && req.body.rejected_by_role !== null) {
       const normalized = String(req.body.rejected_by_role).toUpperCase().trim();
       const validRoles = ["BRAND", "ADMIN"];
@@ -101,7 +82,6 @@ function normalizeEnums(req, res, next) {
       }
     }
 
-    // Role enum
     if (req.body.role !== undefined && req.body.role !== null) {
       const normalized = String(req.body.role).toUpperCase().trim();
       const validRoles = ["BRAND_OWNER", "INFLUENCER", "ADMIN"];
@@ -110,12 +90,10 @@ function normalizeEnums(req, res, next) {
       }
     }
 
-    // Social platforms array
     if (Array.isArray(req.body.social_platforms)) {
       req.body.social_platforms = req.body.social_platforms.map((platform) => {
         const normalized = { ...platform };
         
-        // Normalize platform name
         if (normalized.platform_name || normalized.platform || normalized.platformName) {
           const platformName = normalized.platform_name || normalized.platform || normalized.platformName;
           const normalizedPlatform = String(platformName).toUpperCase().trim();
@@ -127,7 +105,6 @@ function normalizeEnums(req, res, next) {
           }
         }
 
-        // Normalize data_source
         if (normalized.data_source !== undefined && normalized.data_source !== null) {
           const normalizedDataSource = String(normalized.data_source).toUpperCase().trim();
           const validDataSources = ["MANUAL", "GRAPH_API"];
@@ -140,9 +117,7 @@ function normalizeEnums(req, res, next) {
       });
     }
 
-    // Normalize query parameters
     if (req.query) {
-      // Campaign status filter
       if (req.query.status !== undefined && req.query.status !== null) {
         const normalized = String(req.query.status).toUpperCase().trim();
         const validStatuses = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
@@ -151,7 +126,6 @@ function normalizeEnums(req, res, next) {
         }
       }
 
-      // Campaign type filter
       if (req.query.type !== undefined && req.query.type !== null) {
         const normalized = String(req.query.type).toUpperCase().trim();
         const validTypes = ["NORMAL", "BULK"];
@@ -160,7 +134,6 @@ function normalizeEnums(req, res, next) {
         }
       }
 
-      // Application phase filter
       if (req.query.phase !== undefined && req.query.phase !== null) {
         const normalized = String(req.query.phase).toUpperCase().trim();
         const validPhases = ["APPLIED", "ACCEPTED", "SCRIPT", "WORK", "COMPLETED", "CANCELLED"];
@@ -169,7 +142,6 @@ function normalizeEnums(req, res, next) {
         }
       }
 
-      // Script/Work submission status filter
       if (req.query.status !== undefined && req.query.status !== null) {
         const normalized = String(req.query.status).toUpperCase().trim();
         const validSubmissionStatuses = ["PENDING", "ACCEPTED", "REVISION", "REJECTED"];
@@ -178,7 +150,6 @@ function normalizeEnums(req, res, next) {
         }
       }
 
-      // Payout status filter
       if (req.query.payout_status !== undefined && req.query.payout_status !== null) {
         const normalized = String(req.query.payout_status).toUpperCase().trim();
         const validPayoutStatuses = ["PENDING", "RELEASED", "FAILED"];
@@ -187,7 +158,6 @@ function normalizeEnums(req, res, next) {
         }
       }
 
-      // Payment order status filter
       if (req.query.payment_status !== undefined && req.query.payment_status !== null) {
         const normalized = String(req.query.payment_status).toUpperCase().trim();
         const validPaymentStatuses = ["CREATED", "PROCESSING", "VERIFIED", "FAILED", "REFUNDED"];
@@ -197,7 +167,6 @@ function normalizeEnums(req, res, next) {
       }
     }
 
-    // Payment order status in body
     if (req.body.payment_status !== undefined && req.body.payment_status !== null) {
       const normalized = String(req.body.payment_status).toUpperCase().trim();
       const validPaymentStatuses = ["CREATED", "PROCESSING", "VERIFIED", "FAILED", "REFUNDED"];

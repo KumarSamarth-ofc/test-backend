@@ -15,14 +15,10 @@ const AuthService = require("../services/authService");
 const authMiddleware = require("../middleware/authMiddleware");
 const { normalizeEnums } = require("../middleware/enumNormalizer");
 
-// Backward compatibility: redirect old profile route to new profile controller
 const { ProfileController } = require("../controllers/profileController");
 const { validateCompleteProfile } = require("../validators");
 const { upload } = require("../../utils/imageUpload");
 
-// ============================================
-// PUBLIC ROUTES - OTP Authentication (Influencers)
-// ============================================
 router.post("/send-otp", normalizeEnums, validateSendOTP, AuthController.sendOTP);
 router.post(
   "/send-registration-otp",
@@ -32,15 +28,11 @@ router.post(
 router.post("/verify-otp", validateVerifyOTP, AuthController.verifyOTP);
 router.post("/refresh-token", AuthController.refreshToken);
 
-// WhatsApp service status (reuses utils/whatsapp)
 router.get("/whatsapp-status", (req, res) => {
   const status = AuthService.getWhatsAppStatus();
   res.json({ success: true, whatsapp: status });
 });
 
-// ============================================
-// PUBLIC ROUTES - Password Authentication (Brand Owners)
-// ============================================
 router.post(
   "/brand/register",
   validateBrandRegister,

@@ -3,21 +3,18 @@ const jwt = require('jsonwebtoken');
 const { ChatService } = require('../services');
 const { supabaseAdmin } = require('../db/config');
 
-// Rate limiting: Track message counts per user
 const messageRateLimits = new Map();
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const MAX_MESSAGES_PER_WINDOW = 30; // Max 30 messages per minute
+const RATE_LIMIT_WINDOW = 60000;
+const MAX_MESSAGES_PER_WINDOW = 30;
 
-// Cleanup rate limiting map periodically to prevent memory leaks
 setInterval(() => {
   const now = Date.now();
   for (const [userId, limits] of messageRateLimits.entries()) {
-    // Remove entries that are past their reset time
     if (now > limits.resetTime) {
       messageRateLimits.delete(userId);
     }
   }
-}, RATE_LIMIT_WINDOW * 2); // Cleanup every 2 minutes
+}, RATE_LIMIT_WINDOW * 2);
 
 const initSocket = (server) => {
   const io = socketIo(server, {
@@ -33,10 +30,9 @@ const initSocket = (server) => {
     transports: ["websocket", "polling"],
     pingTimeout: 60000,
     pingInterval: 25000,
-    maxHttpBufferSize: 1e8 // 100MB for file uploads
+    maxHttpBufferSize: 1e8
   });
 
-  // Authentication middleware
   io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth.token;
@@ -59,11 +55,9 @@ const initSocket = (server) => {
   io.on('connection', (socket) => {
     console.log(`User connected: ${socket.user.id}`);
     
-    // Track user's current room
     socket.currentRoom = null;
     socket.userId = socket.user.id;
 
-    // Join chat room
     socket.on('join_chat', async ({ applicationId }) => {
       try {
         if (!applicationId) {
@@ -72,7 +66,6 @@ const initSocket = (server) => {
           });
         }
 
-        // Validate access
         const hasAccess = await ChatService.validateUserAccess(
           socket.user.id, 
           applicationId
@@ -84,7 +77,6 @@ const initSocket = (server) => {
           });
         }
 
-        // Check if chat exists and is active
         const chat = await ChatService.getChatByApplication(applicationId);
         if (!chat) {
           return socket.emit('error', { 
@@ -100,7 +92,6 @@ const initSocket = (server) => {
 
         const roomName = `app_${applicationId}`;
         
-        // Leave previous room if any
         if (socket.currentRoom) {
           socket.leave(socket.currentRoom);
         }
@@ -110,14 +101,12 @@ const initSocket = (server) => {
         
         console.log(`User ${socket.user.id} joined room ${roomName}`);
         
-        // Notify others
         socket.to(roomName).emit('user_joined', {
           userId: socket.user.id,
           applicationId,
           timestamp: new Date().toISOString()
         });
 
-        // Acknowledge join
         socket.emit('joined_chat', {
           applicationId,
           roomName
@@ -130,12 +119,10 @@ const initSocket = (server) => {
       }
     });
 
-    // Send message
     socket.on('send_message', async (payload, callback) => {
       try {
         const { applicationId, message, attachmentUrl } = payload;
         
-        // Validation
         if (!applicationId) {
           return socket.emit('error', { 
             message: 'applicationId is required' 
@@ -148,19 +135,16 @@ const initSocket = (server) => {
           });
         }
 
-        // Message length validation
         if (message.length > 10000) {
           return socket.emit('error', { 
             message: 'Message exceeds maximum length of 10000 characters' 
           });
         }
 
-        // Rate limiting
         const now = Date.now();
         const userLimits = messageRateLimits.get(socket.userId) || { count: 0, resetTime: now + RATE_LIMIT_WINDOW };
         
         if (now > userLimits.resetTime) {
-          // Reset window
           userLimits.count = 0;
           userLimits.resetTime = now + RATE_LIMIT_WINDOW;
         }
@@ -174,14 +158,12 @@ const initSocket = (server) => {
         userLimits.count++;
         messageRateLimits.set(socket.userId, userLimits);
 
-        // Check if in room
         if (!socket.rooms.has(`app_${applicationId}`)) {
           return socket.emit('error', { 
             message: 'You must join the chat room first' 
           });
         }
 
-        // Save message
         const savedMessage = await ChatService.saveMessage(
           socket.user.id,
           applicationId,
@@ -189,7 +171,6 @@ const initSocket = (server) => {
           attachmentUrl
         );
 
-        // Broadcast to room (including sender)
         io.to(`app_${applicationId}`).emit('receive_message', {
           ...savedMessage,
           sender: {
@@ -198,7 +179,6 @@ const initSocket = (server) => {
           }
         });
 
-        // Acknowledge to sender
         if (callback) {
           callback({ 
             success: true, 
@@ -220,7 +200,6 @@ const initSocket = (server) => {
       }
     });
 
-    // Typing indicator
     socket.on('typing', ({ applicationId, isTyping }) => {
       if (!applicationId) {
         return;
@@ -235,7 +214,6 @@ const initSocket = (server) => {
       }
     });
 
-    // Mark message as read
     socket.on('mark_read', async ({ messageId }, callback) => {
       try {
         if (!messageId) {
@@ -244,7 +222,6 @@ const initSocket = (server) => {
           });
         }
 
-        // Get the message first to find the chat room (before marking as read)
         const { data: message, error: messageError } = await supabaseAdmin
           .from('v1_chat_messages')
           .select('chat_id, v1_chats(application_id)')
@@ -257,18 +234,15 @@ const initSocket = (server) => {
           });
         }
 
-        // Mark message as read
         const readReceipt = await ChatService.markMessageAsRead(
           messageId,
           socket.user.id
         );
 
-        // Broadcast read receipt to room if we have the application ID
         if (message.v1_chats && message.v1_chats.application_id) {
           const applicationId = message.v1_chats.application_id;
           const roomName = `app_${applicationId}`;
 
-          // Broadcast read receipt to room
           io.to(roomName).emit('message_read', {
             messageId,
             userId: socket.user.id,
@@ -277,7 +251,6 @@ const initSocket = (server) => {
           });
         }
 
-        // Acknowledge to sender
         if (callback) {
           callback({ 
             success: true, 
@@ -298,7 +271,6 @@ const initSocket = (server) => {
       }
     });
 
-    // Leave room
     socket.on('leave_chat', () => {
       if (socket.currentRoom) {
         socket.to(socket.currentRoom).emit('user_left', {
@@ -310,7 +282,6 @@ const initSocket = (server) => {
       }
     });
 
-    // Disconnect handler
     socket.on('disconnect', (reason) => {
       console.log(`User ${socket.user.id} disconnected: ${reason}`);
       
@@ -321,7 +292,6 @@ const initSocket = (server) => {
         });
       }
 
-      // Cleanup
       messageRateLimits.delete(socket.userId);
     });
   });

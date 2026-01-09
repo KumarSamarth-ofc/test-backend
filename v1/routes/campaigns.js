@@ -10,18 +10,8 @@ const {
 } = require("../validators/campaignValidators");
 const { upload } = require("../utils/imageUpload");
 
-// ============================================
-// PROTECTED ROUTES - Campaign Management
-// ============================================
-
-// All routes require authentication
 router.use(authMiddleware.authenticateToken);
 
-/**
- * Create a new campaign (Brand Owner only)
- * POST /api/v1/campaigns
- * Accepts multipart/form-data with optional 'coverImage' file field
- */
 router.post(
   "/",
   authMiddleware.requireRole(["BRAND_OWNER"]),
@@ -47,12 +37,6 @@ router.post(
   CampaignController.createCampaign
 );
 
-/**
- * Get all campaigns with filtering and pagination
- * GET /api/v1/campaigns
- * - Influencers: See all campaigns
- * - Brand Owners: See all campaigns
- */
 router.get(
   "/",
   normalizeEnums,
@@ -60,11 +44,6 @@ router.get(
   CampaignController.getCampaigns
 );
 
-/**
- * Get campaigns created by authenticated brand owner
- * GET /api/v1/campaigns/my
- * (Brand Owner only)
- */
 router.get(
   "/my",
   authMiddleware.requireRole(["BRAND_OWNER"]),
@@ -73,18 +52,8 @@ router.get(
   CampaignController.getMyCampaigns
 );
 
-/**
- * Get single campaign by ID
- * GET /api/v1/campaigns/:id
- * (Public for authenticated users)
- */
 router.get("/:id", CampaignController.getCampaign);
 
-/**
- * Update campaign (Brand Owner only)
- * PUT /api/v1/campaigns/:id
- * Accepts multipart/form-data with optional 'coverImage' file field
- */
 router.put(
   "/:id",
   authMiddleware.requireRole(["BRAND_OWNER"]),
@@ -110,10 +79,6 @@ router.put(
   CampaignController.updateCampaign
 );
 
-/**
- * Delete campaign (Brand Owner only)
- * DELETE /api/v1/campaigns/:id
- */
 router.delete(
   "/:id",
   authMiddleware.requireRole(["BRAND_OWNER"]),
