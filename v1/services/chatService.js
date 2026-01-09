@@ -26,10 +26,10 @@ const ChatService = {
       throw new Error('Payment must be verified before chat can be created');
     }
 
-    // Check if chat already exists
+    // Check if chat already exists (to avoid race conditions)
     const { data: existingChat } = await supabaseAdmin
       .from('v1_chats')
-      .select('id')
+      .select('id, status, application_id')
       .eq('application_id', applicationId)
       .maybeSingle();
 
@@ -37,6 +37,7 @@ const ChatService = {
       return existingChat;
     }
 
+    // Try to insert - handle race condition where another process creates chat simultaneously
     const { data, error } = await supabaseAdmin
       .from('v1_chats')
       .insert({
@@ -47,6 +48,19 @@ const ChatService = {
       .single();
 
     if (error) {
+      // If unique constraint violation (race condition), fetch existing chat
+      if (error.code === '23505' || error.message?.includes('duplicate') || error.message?.includes('unique')) {
+        const { data: raceConditionChat } = await supabaseAdmin
+          .from('v1_chats')
+          .select('id, status, application_id')
+          .eq('application_id', applicationId)
+          .maybeSingle();
+        
+        if (raceConditionChat) {
+          return raceConditionChat;
+        }
+      }
+      
       console.error('Error creating chat:', error);
       throw new Error(`Failed to create chat: ${error.message}`);
     }
@@ -101,6 +115,7 @@ const ChatService = {
       return null;
     }
 
+    // Note: Using .single() because there should be exactly one chat per application
     const { data: chat, error } = await supabaseAdmin
       .from('v1_chats')
       .select('id, status, application_id')
@@ -109,8 +124,13 @@ const ChatService = {
 
     if (error) {
       if (error.code === 'PGRST116') {
-        // Not found
+        // Not found - this is expected if chat doesn't exist yet
         return null;
+      }
+      // Handle case where multiple chats exist (data integrity issue)
+      if (error.message?.includes('More than one row')) {
+        console.error(`Data integrity issue: Multiple chats found for application ${applicationId}`);
+        throw new Error("Multiple chats found for this application. Please contact support.");
       }
       console.error('Error getting chat:', error);
       throw new Error(`Failed to get chat: ${error.message}`);
@@ -143,13 +163,24 @@ const ChatService = {
     }
 
     // 1. Fetch Chat and Application Status
+    // Note: Using .single() because there should be exactly one chat per application
+    // If multiple chats exist, this indicates a data integrity issue
     const { data: chat, error: chatError } = await supabaseAdmin
       .from('v1_chats')
       .select('id, status, applications(phase)')
       .eq('application_id', applicationId)
       .single();
 
-    if (chatError || !chat) {
+    if (chatError) {
+      // Handle case where multiple chats exist (data integrity issue)
+      if (chatError.code === 'PGRST116' || chatError.message?.includes('More than one row')) {
+        console.error(`Data integrity issue: Multiple chats found for application ${applicationId}`);
+        throw new Error("Multiple chats found for this application. Please contact support.");
+      }
+      throw new Error(`Chat not found for this application: ${chatError.message}`);
+    }
+
+    if (!chat) {
       throw new Error("Chat not found for this application");
     }
 
@@ -205,11 +236,16 @@ const ChatService = {
       limit = 100; // Cap at 100 messages per request
     }
 
-    const { data: chat } = await supabaseAdmin
+    const { data: chat, error: chatError } = await supabaseAdmin
       .from('v1_chats')
       .select('id')
       .eq('application_id', applicationId)
-      .single();
+      .maybeSingle();
+
+    if (chatError) {
+      console.error('Error getting chat in getChatHistory:', chatError);
+      throw new Error(`Failed to get chat: ${chatError.message}`);
+    }
 
     if (!chat) {
       return [];

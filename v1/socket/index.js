@@ -8,6 +8,17 @@ const messageRateLimits = new Map();
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
 const MAX_MESSAGES_PER_WINDOW = 30; // Max 30 messages per minute
 
+// Cleanup rate limiting map periodically to prevent memory leaks
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, limits] of messageRateLimits.entries()) {
+    // Remove entries that are past their reset time
+    if (now > limits.resetTime) {
+      messageRateLimits.delete(userId);
+    }
+  }
+}, RATE_LIMIT_WINDOW * 2); // Cleanup every 2 minutes
+
 const initSocket = (server) => {
   const io = socketIo(server, {
     cors: {
@@ -233,20 +244,27 @@ const initSocket = (server) => {
           });
         }
 
-        // Mark message as read
-        const readReceipt = await ChatService.markMessageAsRead(
-          messageId,
-          socket.user.id
-        );
-
-        // Get the message to find the chat room
+        // Get the message first to find the chat room (before marking as read)
         const { data: message, error: messageError } = await supabaseAdmin
           .from('v1_chat_messages')
           .select('chat_id, v1_chats(application_id)')
           .eq('id', messageId)
           .single();
 
-        if (!messageError && message && message.v1_chats) {
+        if (messageError || !message) {
+          return socket.emit('error', { 
+            message: 'Message not found' 
+          });
+        }
+
+        // Mark message as read
+        const readReceipt = await ChatService.markMessageAsRead(
+          messageId,
+          socket.user.id
+        );
+
+        // Broadcast read receipt to room if we have the application ID
+        if (message.v1_chats && message.v1_chats.application_id) {
           const applicationId = message.v1_chats.application_id;
           const roomName = `app_${applicationId}`;
 
