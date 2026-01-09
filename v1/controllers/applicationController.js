@@ -1,9 +1,9 @@
-const { validationResult } = require('express-validator');
-const { ApplicationService } = require('../services');
-const { supabaseAdmin } = require('../db/config');
+const { validationResult } = require("express-validator");
+const { ApplicationService } = require("../services");
+const { supabaseAdmin } = require("../db/config");
 
 class ApplicationController {
-
+  // Get brand profile ID for a user
   async getBrandProfileId(userId) {
     try {
       const { data: brandProfile, error } = await supabaseAdmin
@@ -29,6 +29,7 @@ class ApplicationController {
     }
   }
 
+  // Apply to a campaign
   async apply(req, res) {
     try {
       const errors = validationResult(req);
@@ -36,8 +37,7 @@ class ApplicationController {
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const campaignId = req.body.campaignId;
-
+      const { campaignId } = req.body;
       const result = await ApplicationService.apply({
         campaignId: campaignId,
         influencerId: req.user.id,
@@ -49,12 +49,15 @@ class ApplicationController {
 
       res.status(201).json(result);
     } catch (err) {
+      console.error("[ApplicationController/apply] Exception:", err);
       res.status(500).json({
-        message: err.message || 'Failed to apply to campaign',
+        success: false,
+        message: err.message || "Failed to apply to campaign",
       });
     }
   }
 
+  // Accept an application
   async accept(req, res) {
     try {
       const errors = validationResult(req);
@@ -63,8 +66,8 @@ class ApplicationController {
       }
 
       const userId = req.user.id;
-      
       const brandProfileResult = await this.getBrandProfileId(userId);
+
       if (!brandProfileResult || !brandProfileResult.success) {
         const errorMsg = brandProfileResult?.error || "Unknown error";
         const isNotFound = errorMsg.includes("not found");
@@ -89,12 +92,15 @@ class ApplicationController {
 
       res.json(result);
     } catch (err) {
+      console.error("[ApplicationController/accept] Exception:", err);
       res.status(500).json({
-        message: err.message || 'Failed to accept application',
+        success: false,
+        message: err.message || "Failed to accept application",
       });
     }
   }
 
+  // Bulk accept multiple applications
   async bulkAccept(req, res) {
     try {
       const errors = validationResult(req);
@@ -103,9 +109,8 @@ class ApplicationController {
       }
 
       const userId = req.user.id;
-
-      // Get brand_id from brand profile
       const brandProfileResult = await this.getBrandProfileId(userId);
+
       if (!brandProfileResult || !brandProfileResult.success) {
         const errorMsg = brandProfileResult?.error || "Unknown error";
         const isNotFound = errorMsg.includes("not found");
@@ -128,14 +133,15 @@ class ApplicationController {
       const statusCode = result.success ? 200 : 207;
       return res.status(statusCode).json(result);
     } catch (err) {
-      console.error('[ApplicationController/bulkAccept] Exception:', err);
+      console.error("[ApplicationController/bulkAccept] Exception:", err);
       return res.status(500).json({
         success: false,
-        message: err.message || 'Failed to bulk accept applications',
+        message: err.message || "Failed to bulk accept applications",
       });
     }
   }
 
+  // Cancel an application
   async cancel(req, res) {
     try {
       const errors = validationResult(req);
@@ -144,9 +150,9 @@ class ApplicationController {
       }
 
       const user = req.user;
-      
       let brandId = null;
-      if (user.role === 'BRAND_OWNER') {
+
+      if (user.role === "BRAND_OWNER") {
         const brandProfileResult = await this.getBrandProfileId(user.id);
         if (!brandProfileResult || !brandProfileResult.success) {
           const errorMsg = brandProfileResult?.error || "Unknown error";
@@ -175,12 +181,15 @@ class ApplicationController {
 
       res.json(result);
     } catch (err) {
+      console.error("[ApplicationController/cancel] Exception:", err);
       res.status(500).json({
-        message: err.message || 'Failed to cancel application',
+        success: false,
+        message: err.message || "Failed to cancel application",
       });
     }
   }
 
+  // Complete an application
   async complete(req, res) {
     try {
       const errors = validationResult(req);
@@ -196,18 +205,13 @@ class ApplicationController {
 
       res.json(result);
     } catch (err) {
+      console.error("[ApplicationController/complete] Exception:", err);
       res.status(500).json({
-        message: err.message || 'Failed to complete application',
+        success: false,
+        message: err.message || "Failed to complete application",
       });
     }
   }
 }
 
-const applicationController = new ApplicationController();
-applicationController.apply = applicationController.apply.bind(applicationController);
-applicationController.accept = applicationController.accept.bind(applicationController);
-applicationController.bulkAccept = applicationController.bulkAccept.bind(applicationController);
-applicationController.cancel = applicationController.cancel.bind(applicationController);
-applicationController.complete = applicationController.complete.bind(applicationController);
-
-module.exports = applicationController;
+module.exports = new ApplicationController();

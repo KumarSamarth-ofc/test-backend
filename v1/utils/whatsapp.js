@@ -7,13 +7,13 @@ class WhatsAppService {
     this.apiKey = process.env.WHATSAPP_API_KEY;
     this.templateName =
       process.env.WHATSAPP_TEMPLATE_NAME || "otp_verification";
-
     this.timeout = parseInt(process.env.WHATSAPP_TIMEOUT) || 30000;
     this.retryAttempts = parseInt(process.env.WHATSAPP_RETRY_ATTEMPTS) || 3;
     this.retryDelay = parseInt(process.env.WHATSAPP_RETRY_DELAY) || 1000;
     this.setupService();
   }
 
+  // Setup WhatsApp service based on configuration
   setupService() {
     switch (this.service) {
       case "custom":
@@ -30,6 +30,7 @@ class WhatsAppService {
     }
   }
 
+  // Setup custom WhatsApp API (Facebook Graph API)
   setupCustomAPI() {
     if (!this.customEndpoint) {
       console.error(
@@ -49,10 +50,12 @@ class WhatsAppService {
     }
   }
 
+  // Setup console mode for development
   setupConsole() {
     console.log("📱 Console WhatsApp service configured (for development)");
   }
 
+  // Create configured axios instance
   createAxiosInstance() {
     return axios.create({
       timeout: this.timeout,
@@ -67,6 +70,7 @@ class WhatsAppService {
     });
   }
 
+  // Retry request with exponential backoff
   async retryRequest(requestFn, maxAttempts = this.retryAttempts) {
     let lastError;
 
@@ -88,17 +92,16 @@ class WhatsAppService {
     throw lastError;
   }
 
+  // Send OTP via WhatsApp
   async sendOTP(phone, otp) {
     try {
-      const message = this.formatOTPMessage(otp);
-
       switch (this.service) {
         case "custom":
           return await this.sendOTPViaCustomAPI(phone, otp);
         case "console":
-          return await this.sendViaConsole(phone, message);
+          return await this.sendViaConsole(phone, this.formatOTPMessage(otp));
         default:
-          return await this.sendViaConsole(phone, message);
+          return await this.sendViaConsole(phone, this.formatOTPMessage(otp));
       }
     } catch (error) {
       console.error("WhatsApp OTP error:", error);
@@ -110,6 +113,7 @@ class WhatsAppService {
     }
   }
 
+  // Send welcome message via WhatsApp
   async sendWelcome(phone, userName) {
     try {
       const message = this.formatWelcomeMessage(userName);
@@ -132,6 +136,7 @@ class WhatsAppService {
     }
   }
 
+  // Send OTP via custom API (Facebook Graph API)
   async sendOTPViaCustomAPI(phone, otp) {
     try {
       const formattedPhone = this.formatPhoneForWhatsApp(phone);
@@ -198,42 +203,11 @@ class WhatsAppService {
         response: response.data,
       };
     } catch (error) {
-      console.error(
-        "Facebook Graph API error:",
-        error.response?.data || error.message
-      );
-
-      let errorMessage = "Failed to send OTP via Facebook Graph API";
-      let errorDetails = {};
-
-      if (error.response?.data?.error) {
-        errorMessage = error.response.data.error.message || errorMessage;
-        errorDetails = error.response.data.error;
-      } else if (error.code === "ECONNABORTED") {
-        errorMessage = "Request timeout - Facebook Graph API is not responding";
-        errorDetails = { code: "TIMEOUT", timeout: this.timeout };
-      } else if (error.code === "ENOTFOUND") {
-        errorMessage = "Network error - Cannot reach Facebook Graph API";
-        errorDetails = { code: "NETWORK_ERROR", endpoint: this.customEndpoint };
-      } else if (error.code === "ECONNREFUSED") {
-        errorMessage =
-          "Connection refused - Facebook Graph API is not accessible";
-        errorDetails = { code: "CONNECTION_REFUSED" };
-      }
-
-      return {
-        success: false,
-        message: errorMessage,
-        error: errorDetails,
-        debug: {
-          endpoint: this.customEndpoint,
-          timeout: this.timeout,
-          retryAttempts: this.retryAttempts,
-        },
-      };
+      return this.handleAPIError(error, "Failed to send OTP via Facebook Graph API");
     }
   }
 
+  // Send welcome message via custom API (Facebook Graph API)
   async sendWelcomeViaCustomAPI(phone, message) {
     try {
       const formattedPhone = this.formatPhoneForWhatsApp(phone);
@@ -275,138 +249,58 @@ class WhatsAppService {
         response: response.data,
       };
     } catch (error) {
-      console.error(
-        "Facebook Graph API error:",
-        error.response?.data || error.message
+      return this.handleAPIError(
+        error,
+        "Failed to send welcome message via Facebook Graph API"
       );
-
-      let errorMessage =
-        "Failed to send welcome message via Facebook Graph API";
-      let errorDetails = {};
-
-      if (error.response?.data?.error) {
-        errorMessage = error.response.data.error.message || errorMessage;
-        errorDetails = error.response.data.error;
-      } else if (error.code === "ECONNABORTED") {
-        errorMessage = "Request timeout - Facebook Graph API is not responding";
-        errorDetails = { code: "TIMEOUT", timeout: this.timeout };
-      } else if (error.code === "ENOTFOUND") {
-        errorMessage = "Network error - Cannot reach Facebook Graph API";
-        errorDetails = { code: "NETWORK_ERROR", endpoint: this.customEndpoint };
-      } else if (error.code === "ECONNREFUSED") {
-        errorMessage =
-          "Connection refused - Facebook Graph API is not accessible";
-        errorDetails = { code: "CONNECTION_REFUSED" };
-      }
-
-      return {
-        success: false,
-        message: errorMessage,
-        error: errorDetails,
-        debug: {
-          endpoint: this.customEndpoint,
-          timeout: this.timeout,
-          retryAttempts: this.retryAttempts,
-        },
-      };
     }
   }
 
-  /**
-   * Send via Custom WhatsApp API (Facebook Graph API) - DEPRECATED
-   * @deprecated Use sendOTPViaCustomAPI or sendWelcomeViaCustomAPI instead
-   */
-  async sendViaCustomAPI(phone, message) {
-    try {
-      const formattedPhone = this.formatPhoneForWhatsApp(phone);
+  // Handle API errors and return structured error response
+  handleAPIError(error, defaultMessage) {
+    console.error(
+      "Facebook Graph API error:",
+      error.response?.data || error.message
+    );
 
-      // Extract OTP from message (assuming it's the first 6-digit number)
-      const otpMatch = message.match(/\*(\d{6})\*/);
-      const otp = otpMatch ? otpMatch[1] : "123456"; // fallback
+    let errorMessage = defaultMessage;
+    let errorDetails = {};
 
-      // Facebook Graph API template message payload (working format)
-      const payload = {
-        messaging_product: "whatsapp",
-        to: formattedPhone,
-        type: "template",
-        template: {
-          name: this.templateName,
-          language: {
-            code: "en_US",
-          },
-          components: [
-            {
-              type: "body",
-              parameters: [
-                {
-                  type: "text",
-                  text: otp,
-                },
-              ],
-            },
-            {
-              type: "button",
-              sub_type: "url",
-              index: 0,
-              parameters: [
-                {
-                  type: "text",
-                  text: otp,
-                },
-              ],
-            },
-          ],
-        },
-      };
-
-      const headers = {
-        "Content-Type": "application/json",
-      };
-
-      if (this.apiKey) {
-        headers["Authorization"] = `Bearer ${this.apiKey}`;
-      }
-
-      const response = await axios.post(this.customEndpoint, payload, {
-        headers,
-      });
-
-      return {
-        success: true,
-        message: "OTP sent successfully via WhatsApp",
-        provider: "facebook-graph-api",
-        response: response.data,
-      };
-    } catch (error) {
-      console.error(
-        "Facebook Graph API error:",
-        error.response?.data || error.message
-      );
-
-      // Provide more specific error messages
-      let errorMessage = "Failed to send via Facebook Graph API";
-      if (error.response?.data?.error) {
-        errorMessage = error.response.data.error.message || errorMessage;
-      }
-
-      return {
-        success: false,
-        message: errorMessage,
-        error: error.response?.data || error.message,
-      };
+    if (error.response?.data?.error) {
+      errorMessage = error.response.data.error.message || errorMessage;
+      errorDetails = error.response.data.error;
+    } else if (error.code === "ECONNABORTED") {
+      errorMessage = "Request timeout - Facebook Graph API is not responding";
+      errorDetails = { code: "TIMEOUT", timeout: this.timeout };
+    } else if (error.code === "ENOTFOUND") {
+      errorMessage = "Network error - Cannot reach Facebook Graph API";
+      errorDetails = { code: "NETWORK_ERROR", endpoint: this.customEndpoint };
+    } else if (error.code === "ECONNREFUSED") {
+      errorMessage =
+        "Connection refused - Facebook Graph API is not accessible";
+      errorDetails = { code: "CONNECTION_REFUSED" };
     }
+
+    return {
+      success: false,
+      message: errorMessage,
+      error: errorDetails,
+      debug: {
+        endpoint: this.customEndpoint,
+        timeout: this.timeout,
+        retryAttempts: this.retryAttempts,
+      },
+    };
   }
 
-  /**
-   * Format phone number for WhatsApp (Facebook Graph API)
-   */
+  // Format phone number for WhatsApp (Facebook Graph API)
+  // Removes + prefix as required by Facebook Graph API
   formatPhoneForWhatsApp(phone) {
     // Remove any non-digit characters except +
     let formatted = phone.replace(/[^\d+]/g, "");
 
     // Ensure phone starts with + for proper international format
     if (!formatted.startsWith("+")) {
-      // If no country code provided, this is an error - require proper format
       throw new Error(
         "Phone number must include country code (e.g., +1234567890)"
       );
@@ -424,9 +318,7 @@ class WhatsAppService {
     return formatted.replace("+", "");
   }
 
-  /**
-   * Send via Console (for development)
-   */
+  // Send message via console (for development)
   async sendViaConsole(phone, message) {
     console.log("\n📱 WhatsApp Message (Console Mode)");
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -441,9 +333,7 @@ class WhatsAppService {
     };
   }
 
-  /**
-   * Format OTP message
-   */
+  // Format OTP message
   formatOTPMessage(otp) {
     return `🔐 Your Stoory verification code is: *${otp}*
 
@@ -454,9 +344,7 @@ class WhatsAppService {
 📱 If you didn't request this code, please ignore this message.`;
   }
 
-  /**
-   * Format welcome message
-   */
+  // Format welcome message
   formatWelcomeMessage(userName) {
     return `🎉 Welcome to Stoory, ${userName}!
 
@@ -473,23 +361,19 @@ Best regards,
 The Stoory Team`;
   }
 
-  /**
-   * Validate phone number format
-   */
+  // Validate phone number format
   validatePhoneNumber(phone) {
-    // Basic phone number validation
     const phoneRegex = /^\+[1-9]\d{1,14}$/;
     return phoneRegex.test(phone);
   }
 
-  /**
-   * Get service status
-   */
+  // Get service status
   getServiceStatus() {
     return {
       service: this.service,
       configured: this.service === "custom" ? !!this.customEndpoint : true,
-      provider: this.service === "custom" ? "facebook-graph-api" : this.service,
+      provider:
+        this.service === "custom" ? "facebook-graph-api" : this.service,
       endpoint: this.service === "custom" ? this.customEndpoint : null,
     };
   }

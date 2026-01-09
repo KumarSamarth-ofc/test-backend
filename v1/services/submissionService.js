@@ -1,27 +1,28 @@
-const { supabaseAdmin } = require('../db/config');
-const { canTransition } = require('./applicationStateMachine');
-const path = require('path');
+const { supabaseAdmin } = require("../db/config");
+const { canTransition } = require("./applicationStateMachine");
+const path = require("path");
 
 class SubmissionService {
-  async uploadFile(fileBuffer, fileName, mimeType, folder = 'submissions') {
+  // Upload file to storage
+  async uploadFile(fileBuffer, fileName, mimeType, folder = "submissions") {
     try {
       const timestamp = Date.now();
       const fileExtension = path.extname(fileName);
       const randomString = Math.random().toString(36).substring(2, 15);
       const uniqueFileName = `${folder}/${timestamp}_${randomString}${fileExtension}`;
 
-      const bucket = 'scripts';
+      const bucket = "scripts";
 
       const { data, error } = await supabaseAdmin.storage
         .from(bucket)
         .upload(uniqueFileName, fileBuffer, {
           contentType: mimeType,
-          cacheControl: '3600',
-          upsert: false
+          cacheControl: "3600",
+          upsert: false,
         });
 
       if (error) {
-        console.error('[SubmissionService/uploadFile] Upload error:', error);
+        console.error("[SubmissionService/uploadFile] Upload error:", error);
         return { success: false, error: error.message };
       }
 
@@ -31,73 +32,90 @@ class SubmissionService {
 
       return { success: true, url: urlData.publicUrl };
     } catch (err) {
-      console.error('[SubmissionService/uploadFile] Exception:', err);
+      console.error("[SubmissionService/uploadFile] Exception:", err);
       return { success: false, error: err.message };
     }
   }
 
+  // Validate script file type
   validateScriptFile(mimeType, fileName) {
     const validMimeTypes = [
-      'application/pdf',
-      'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/vnd.ms-excel',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'text/plain'
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.ms-excel",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "text/plain",
     ];
-    
+
     const ext = path.extname(fileName).toLowerCase();
-    const validExtensions = ['.pdf', '.doc', '.docx', '.txt', '.xls', '.xlsx'];
-    
-    return validMimeTypes.includes(mimeType) || validExtensions.includes(ext);
+    const validExtensions = [".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx"];
+
+    return (
+      validMimeTypes.includes(mimeType) || validExtensions.includes(ext)
+    );
   }
 
+  // Verify influencer owns the application
   async checkInfluencerOwnership(applicationId, influencerId) {
     try {
       const { data, error } = await supabaseAdmin
-        .from('v1_applications')
-        .select('id, influencer_id, phase, campaign_id')
-        .eq('id', applicationId)
+        .from("v1_applications")
+        .select("id, influencer_id, phase, campaign_id")
+        .eq("id", applicationId)
         .maybeSingle();
 
       if (error) {
-        console.error('[SubmissionService/checkInfluencerOwnership] Error:', error);
-        return { success: false, message: 'Database error' };
+        console.error(
+          "[SubmissionService/checkInfluencerOwnership] Error:",
+          error
+        );
+        return { success: false, message: "Database error" };
       }
 
       if (!data) {
-        return { success: false, message: 'Application not found' };
+        return { success: false, message: "Application not found" };
       }
 
       if (data.influencer_id !== influencerId) {
-        return { success: false, message: 'Unauthorized: Not your application' };
+        return {
+          success: false,
+          message: "Unauthorized: Not your application",
+        };
       }
 
       return { success: true, application: data };
     } catch (err) {
-      console.error('[SubmissionService/checkInfluencerOwnership] Exception:', err);
-      return { success: false, message: 'Internal server error' };
+      console.error(
+        "[SubmissionService/checkInfluencerOwnership] Exception:",
+        err
+      );
+      return { success: false, message: "Internal server error" };
     }
   }
 
+  // Verify brand owns the application's campaign
   async checkBrandOwnership(applicationId, brandId) {
     try {
       const { data, error } = await supabaseAdmin
-        .from('v1_applications')
+        .from("v1_applications")
         .select(`
           *,
           v1_campaigns!inner(brand_id)
         `)
-        .eq('id', applicationId)
+        .eq("id", applicationId)
         .maybeSingle();
 
       if (error) {
-        console.error('[SubmissionService/checkBrandOwnership] Error:', error);
-        return { success: false, message: 'Database error' };
+        console.error(
+          "[SubmissionService/checkBrandOwnership] Error:",
+          error
+        );
+        return { success: false, message: "Database error" };
       }
 
       if (!data || !data.v1_campaigns) {
-        return { success: false, message: 'Application not found' };
+        return { success: false, message: "Application not found" };
       }
 
       if (data.v1_campaigns.brand_id !== brandId) {
@@ -111,9 +129,7 @@ class SubmissionService {
     }
   }
 
-  /**
-   * Submit script (Influencer)
-   */
+  // Submit script for an application (Influencer)
   async submitScript({ applicationId, influencerId, fileUrl }) {
     try {
       // Check ownership and application status
@@ -219,9 +235,7 @@ class SubmissionService {
     }
   }
 
-  /**
-   * Submit work (Influencer)
-   */
+  // Submit work for an application (Influencer)
   async submitWork({ applicationId, influencerId, fileUrl }) {
     try {
       // Check ownership and application status
@@ -303,9 +317,7 @@ class SubmissionService {
     }
   }
 
-  /**
-   * Review script (Brand Owner)
-   */
+  // Review script submission (Brand Owner)
   async reviewScript({ scriptId, brandId, status, rejectionReasonId, remarks }) {
     try {
       // Get script with application and campaign info
@@ -428,9 +440,7 @@ class SubmissionService {
     }
   }
 
-  /**
-   * Review work (Brand Owner)
-   */
+  // Review work submission (Brand Owner)
   async reviewWork({ workSubmissionId, brandId, status, rejectionReasonId, remarks }) {
     try {
       // Get work submission with application and campaign info
@@ -553,9 +563,7 @@ class SubmissionService {
     }
   }
 
-  /**
-   * Get scripts for an application
-   */
+  // Get scripts for an application
   async getScripts(applicationId, userId, userRole) {
     try {
       // First, get the application with campaign info to check access
@@ -688,9 +696,7 @@ class SubmissionService {
     }
   }
 
-  /**
-   * Get work submissions for an application
-   */
+  // Get work submissions for an application
   async getWorkSubmissions(applicationId, userId, userRole) {
     try {
       // First, get the application with campaign info to check access

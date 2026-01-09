@@ -1,5 +1,29 @@
 const { body, query } = require("express-validator");
 
+// Valid enum values
+const CAMPAIGN_TYPES = ["NORMAL", "BULK"];
+const CAMPAIGN_STATUSES = [
+  "DRAFT",
+  "LIVE",
+  "LOCKED",
+  "ACTIVE",
+  "COMPLETED",
+  "EXPIRED",
+  "CANCELLED",
+];
+const INFLUENCER_TIERS = ["NANO", "MICRO", "MID", "MACRO"];
+
+// Helper function to validate enum values
+const validateEnum = (value, validValues, errorMessage) => {
+  if (!value) return true;
+  const normalized = String(value).toUpperCase().trim();
+  if (!validValues.includes(normalized)) {
+    throw new Error(errorMessage);
+  }
+  return true;
+};
+
+// Validate create campaign
 const validateCreateCampaign = [
   body("title")
     .notEmpty()
@@ -10,27 +34,19 @@ const validateCreateCampaign = [
   body("type")
     .optional()
     .isString()
-    .custom((value) => {
-      if (!value) return true;
-      const normalized = String(value).toUpperCase().trim();
-      const validValues = ["NORMAL", "BULK"];
-      if (!validValues.includes(normalized)) {
-        throw new Error("Type must be NORMAL or BULK");
-      }
-      return true;
-    }),
+    .custom((value) =>
+      validateEnum(value, CAMPAIGN_TYPES, "Type must be NORMAL or BULK")
+    ),
   body("status")
     .optional()
     .isString()
-    .custom((value) => {
-      if (!value) return true;
-      const normalized = String(value).toUpperCase().trim();
-      const validValues = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
-      if (!validValues.includes(normalized)) {
-        throw new Error("Invalid status. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED");
-      }
-      return true;
-    }),
+    .custom((value) =>
+      validateEnum(
+        value,
+        CAMPAIGN_STATUSES,
+        "Invalid status. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED"
+      )
+    ),
   body("min_influencers")
     .optional()
     .isInt({ min: 0 })
@@ -78,15 +94,13 @@ const validateCreateCampaign = [
   body("influencer_tier")
     .optional()
     .isString()
-    .custom((value) => {
-      if (!value) return true;
-      const normalized = String(value).toUpperCase().trim();
-      const validValues = ["NANO", "MICRO", "MID", "MACRO"];
-      if (!validValues.includes(normalized)) {
-        throw new Error("influencer_tier must be NANO, MICRO, MID, or MACRO");
-      }
-      return true;
-    }),
+    .custom((value) =>
+      validateEnum(
+        value,
+        INFLUENCER_TIERS,
+        "influencer_tier must be NANO, MICRO, MID, or MACRO"
+      )
+    ),
   body("categories")
     .optional()
     .isString()
@@ -120,6 +134,7 @@ const validateCreateCampaign = [
   }),
 ];
 
+// Validate update campaign
 const validateUpdateCampaign = [
   body("title")
     .optional()
@@ -129,27 +144,19 @@ const validateUpdateCampaign = [
   body("type")
     .optional()
     .isString()
-    .custom((value) => {
-      if (!value) return true;
-      const normalized = String(value).toUpperCase().trim();
-      const validValues = ["NORMAL", "BULK"];
-      if (!validValues.includes(normalized)) {
-        throw new Error("Type must be NORMAL or BULK");
-      }
-      return true;
-    }),
+    .custom((value) =>
+      validateEnum(value, CAMPAIGN_TYPES, "Type must be NORMAL or BULK")
+    ),
   body("status")
     .optional()
     .isString()
-    .custom((value) => {
-      if (!value) return true;
-      const normalized = String(value).toUpperCase().trim();
-      const validValues = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
-      if (!validValues.includes(normalized)) {
-        throw new Error("Invalid status. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED");
-      }
-      return true;
-    }),
+    .custom((value) =>
+      validateEnum(
+        value,
+        CAMPAIGN_STATUSES,
+        "Invalid status. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED"
+      )
+    ),
   body("min_influencers")
     .optional()
     .isInt({ min: 0 })
@@ -196,15 +203,13 @@ const validateUpdateCampaign = [
   body("influencer_tier")
     .optional()
     .isString()
-    .custom((value) => {
-      if (!value) return true;
-      const normalized = String(value).toUpperCase().trim();
-      const validValues = ["NANO", "MICRO", "MID", "MACRO"];
-      if (!validValues.includes(normalized)) {
-        throw new Error("influencer_tier must be NANO, MICRO, MID, or MACRO");
-      }
-      return true;
-    }),
+    .custom((value) =>
+      validateEnum(
+        value,
+        INFLUENCER_TIERS,
+        "influencer_tier must be NANO, MICRO, MID, or MACRO"
+      )
+    ),
   body("categories")
     .optional()
     .isString()
@@ -238,31 +243,24 @@ const validateUpdateCampaign = [
   }),
 ];
 
+// Validate campaign filters
 const validateCampaignFilters = [
   query("status")
     .optional()
     .isString()
-    .custom((value) => {
-      if (!value) return true;
-      const normalized = String(value).toUpperCase().trim();
-      const validValues = ["DRAFT", "LIVE", "LOCKED", "ACTIVE", "COMPLETED", "EXPIRED", "CANCELLED"];
-      if (!validValues.includes(normalized)) {
-        throw new Error("Invalid status filter. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED");
-      }
-      return true;
-    }),
+    .custom((value) =>
+      validateEnum(
+        value,
+        CAMPAIGN_STATUSES,
+        "Invalid status filter. Must be one of: DRAFT, LIVE, LOCKED, ACTIVE, COMPLETED, EXPIRED, CANCELLED"
+      )
+    ),
   query("type")
     .optional()
     .isString()
-    .custom((value) => {
-      if (!value) return true;
-      const normalized = String(value).toUpperCase().trim();
-      const validValues = ["NORMAL", "BULK"];
-      if (!validValues.includes(normalized)) {
-        throw new Error("Invalid type filter. Must be NORMAL or BULK");
-      }
-      return true;
-    }),
+    .custom((value) =>
+      validateEnum(value, CAMPAIGN_TYPES, "Invalid type filter. Must be NORMAL or BULK")
+    ),
   query("brand_id")
     .optional()
     .isUUID()

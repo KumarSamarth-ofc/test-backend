@@ -1,7 +1,9 @@
-const PaymentService = require("../services/paymentService");
 const { validationResult } = require("express-validator");
+const PaymentService = require("../services/paymentService");
+const { supabaseAdmin } = require("../db/config");
 
 class PaymentController {
+  // Get payment configuration
   async getPaymentConfig(req, res) {
     try {
       const result = PaymentService.getPaymentConfig();
@@ -27,6 +29,7 @@ class PaymentController {
     }
   }
 
+  // Create payment order for an application
   async createApplicationPaymentOrder(req, res) {
     try {
       const errors = validationResult(req);
@@ -80,6 +83,7 @@ class PaymentController {
     }
   }
 
+  // Verify payment
   async verifyPayment(req, res) {
     try {
       const errors = validationResult(req);
@@ -134,6 +138,7 @@ class PaymentController {
     }
   }
 
+  // Release payout to influencer (Admin only)
   async releasePayout(req, res) {
     try {
       const errors = validationResult(req);
@@ -144,7 +149,7 @@ class PaymentController {
       const applicationId = req.params.applicationId;
       const userId = req.user.id;
 
-      const { supabaseAdmin } = require("../db/config");
+      // Verify user is admin
       const { data: user, error: userError } = await supabaseAdmin
         .from("v1_users")
         .select("id, role")
@@ -165,7 +170,10 @@ class PaymentController {
         });
       }
 
-      const result = await PaymentService.releasePayoutToInfluencer(applicationId, userId);
+      const result = await PaymentService.releasePayoutToInfluencer(
+        applicationId,
+        userId
+      );
 
       if (!result.success) {
         const statusCode =
@@ -202,6 +210,7 @@ class PaymentController {
     }
   }
 
+  // Get payment history for an application
   async getApplicationPayments(req, res) {
     try {
       const errors = validationResult(req);
@@ -212,7 +221,7 @@ class PaymentController {
       const applicationId = req.params.applicationId;
       const userId = req.user.id;
 
-      const { supabaseAdmin } = require("../db/config");
+      // Verify application exists
       const { data: application, error: applicationError } = await supabaseAdmin
         .from("v1_applications")
         .select(`
@@ -231,6 +240,7 @@ class PaymentController {
         });
       }
 
+      // Verify user access
       const { data: user, error: userError } = await supabaseAdmin
         .from("v1_users")
         .select("id, role")

@@ -1,101 +1,105 @@
-const { body, param } = require('express-validator');
+const { body, param } = require("express-validator");
 
+// Valid submission statuses
+const SUBMISSION_STATUSES = ["ACCEPTED", "REVISION", "REJECTED"];
+
+// Helper function to validate submission status
+const validateSubmissionStatus = (value) => {
+  const normalized = String(value).toUpperCase().trim();
+  if (!SUBMISSION_STATUSES.includes(normalized)) {
+    throw new Error("status must be ACCEPTED, REVISION, or REJECTED");
+  }
+  return true;
+};
+
+// Validate submit script
 const validateSubmitScript = [
-  body('applicationId')
+  body("applicationId")
     .notEmpty()
-    .withMessage('applicationId is required')
+    .withMessage("applicationId is required")
     .isUUID()
-    .withMessage('applicationId must be a valid UUID'),
-  body('fileUrl')
+    .withMessage("applicationId must be a valid UUID"),
+  body("fileUrl")
     .optional()
     .isURL()
-    .withMessage('fileUrl must be a valid URL'),
+    .withMessage("fileUrl must be a valid URL"),
 ];
 
+// Validate submit work
 const validateSubmitWork = [
-  body('applicationId')
+  body("applicationId")
     .notEmpty()
-    .withMessage('applicationId is required')
+    .withMessage("applicationId is required")
     .isUUID()
-    .withMessage('applicationId must be a valid UUID'),
-  body('fileUrl')
+    .withMessage("applicationId must be a valid UUID"),
+  body("fileUrl")
     .optional()
     .isURL()
-    .withMessage('fileUrl must be a valid URL'),
+    .withMessage("fileUrl must be a valid URL"),
 ];
 
+// Validate review script
 const validateReviewScript = [
-  param('id')
+  param("id")
     .notEmpty()
-    .withMessage('Script ID is required')
+    .withMessage("Script ID is required")
     .isUUID()
-    .withMessage('Script ID must be a valid UUID'),
-  body('status')
+    .withMessage("Script ID must be a valid UUID"),
+  body("status")
     .notEmpty()
-    .withMessage('status is required')
+    .withMessage("status is required")
     .isString()
-    .custom((value) => {
-      const normalized = String(value).toUpperCase().trim();
-      const validStatuses = ['ACCEPTED', 'REVISION', 'REJECTED'];
-      if (!validStatuses.includes(normalized)) {
-        throw new Error('status must be ACCEPTED, REVISION, or REJECTED');
-      }
-      return true;
-    }),
-  body('rejectionReasonId')
+    .custom(validateSubmissionStatus),
+  body("rejectionReasonId")
     .optional()
     .isUUID()
-    .withMessage('rejectionReasonId must be a valid UUID'),
-  body('remarks')
+    .withMessage("rejectionReasonId must be a valid UUID"),
+  body("remarks")
     .optional()
     .isString()
     .isLength({ max: 5000 })
-    .withMessage('remarks must be up to 5000 characters'),
+    .withMessage("remarks must be up to 5000 characters"),
 ];
 
+// Validate review work
 const validateReviewWork = [
-  param('id')
+  param("id")
     .notEmpty()
-    .withMessage('Work submission ID is required')
+    .withMessage("Work submission ID is required")
     .isUUID()
-    .withMessage('Work submission ID must be a valid UUID'),
-  body('status')
+    .withMessage("Work submission ID must be a valid UUID"),
+  body("status")
     .notEmpty()
-    .withMessage('status is required')
+    .withMessage("status is required")
     .isString()
-    .custom((value) => {
-      const normalized = String(value).toUpperCase().trim();
-      const validStatuses = ['ACCEPTED', 'REVISION', 'REJECTED'];
-      if (!validStatuses.includes(normalized)) {
-        throw new Error('status must be ACCEPTED, REVISION, or REJECTED');
-      }
-      return true;
-    }),
-  body('rejectionReasonId')
+    .custom(validateSubmissionStatus),
+  body("rejectionReasonId")
     .optional()
     .isUUID()
-    .withMessage('rejectionReasonId must be a valid UUID'),
-  body('remarks')
+    .withMessage("rejectionReasonId must be a valid UUID"),
+  body("remarks")
     .optional()
     .isString()
     .isLength({ max: 5000 })
-    .withMessage('remarks must be up to 5000 characters'),
+    .withMessage("remarks must be up to 5000 characters"),
 ];
 
+// Validate get scripts
 const validateGetScripts = [
-  param('applicationId')
+  param("applicationId")
     .notEmpty()
-    .withMessage('applicationId is required')
+    .withMessage("applicationId is required")
     .isUUID()
-    .withMessage('applicationId must be a valid UUID'),
+    .withMessage("applicationId must be a valid UUID"),
 ];
 
+// Validate get work submissions
 const validateGetWorkSubmissions = [
-  param('applicationId')
+  param("applicationId")
     .notEmpty()
-    .withMessage('applicationId is required')
+    .withMessage("applicationId is required")
     .isUUID()
-    .withMessage('applicationId must be a valid UUID'),
+    .withMessage("applicationId must be a valid UUID"),
 ];
 
 module.exports = {
@@ -106,4 +110,3 @@ module.exports = {
   validateGetScripts,
   validateGetWorkSubmissions,
 };
-

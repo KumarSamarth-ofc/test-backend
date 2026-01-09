@@ -3,6 +3,7 @@ const { AuthService } = require("../services");
 const validators = require("../validators");
 
 class AuthController {
+  // Send OTP for login
   async sendOTP(req, res) {
     try {
       const errors = validationResult(req);
@@ -34,6 +35,7 @@ class AuthController {
     }
   }
 
+  // Send OTP for registration
   async sendRegistrationOTP(req, res) {
     try {
       const errors = validationResult(req);
@@ -65,6 +67,7 @@ class AuthController {
     }
   }
 
+  // Verify OTP and authenticate user
   async verifyOTP(req, res) {
     try {
       const errors = validationResult(req);
@@ -105,6 +108,7 @@ class AuthController {
     }
   }
 
+  // Refresh authentication token
   async refreshToken(req, res) {
     try {
       const { refreshToken } = req.body;
@@ -150,6 +154,7 @@ class AuthController {
     }
   }
 
+  // Register new brand owner
   async registerBrandOwner(req, res) {
     try {
       const errors = validationResult(req);
@@ -158,12 +163,7 @@ class AuthController {
       }
 
       const { email, password, name } = req.body;
-
-      const result = await AuthService.registerBrandOwner(
-        email,
-        password,
-        name
-      );
+      const result = await AuthService.registerBrandOwner(email, password, name);
 
       if (result.success) {
         return res.status(201).json({
@@ -190,6 +190,7 @@ class AuthController {
     }
   }
 
+  // Login brand owner
   async loginBrandOwner(req, res) {
     try {
       const errors = validationResult(req);
@@ -198,7 +199,6 @@ class AuthController {
       }
 
       const { email, password } = req.body;
-
       const result = await AuthService.loginBrandOwner(email, password);
 
       if (result.success) {
@@ -227,6 +227,7 @@ class AuthController {
     }
   }
 
+  // Verify email address
   async verifyEmail(req, res) {
     try {
       const errors = validationResult(req);
@@ -235,7 +236,6 @@ class AuthController {
       }
 
       const { token } = req.body;
-
       const result = await AuthService.verifyEmail(token);
 
       if (result.success) {
@@ -259,6 +259,7 @@ class AuthController {
     }
   }
 
+  // Resend email verification token
   async resendEmailVerification(req, res) {
     try {
       const errors = validationResult(req);
@@ -267,7 +268,6 @@ class AuthController {
       }
 
       const { email } = req.body;
-
       const result = await AuthService.resendEmailVerification(email);
 
       if (result.success) {
@@ -294,6 +294,7 @@ class AuthController {
     }
   }
 
+  // Request password reset
   async forgotPassword(req, res) {
     try {
       const errors = validationResult(req);
@@ -302,7 +303,6 @@ class AuthController {
       }
 
       const { email } = req.body;
-
       const result = await AuthService.forgotPassword(email);
 
       if (result.success) {
@@ -326,6 +326,7 @@ class AuthController {
     }
   }
 
+  // Reset password with token
   async resetPassword(req, res) {
     try {
       const errors = validationResult(req);
@@ -334,7 +335,6 @@ class AuthController {
       }
 
       const { token, new_password } = req.body;
-
       const result = await AuthService.resetPassword(token, new_password);
 
       if (result.success) {
@@ -344,9 +344,7 @@ class AuthController {
         });
       }
 
-      const status = result.code === "INVALID_TOKEN" ? 400 : 400;
-
-      return res.status(status).json({
+      return res.status(400).json({
         success: false,
         message: result.message,
         code: result.code,

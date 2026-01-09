@@ -1,3 +1,4 @@
+// Export all validators
 const otpValidators = require("./otpValidators");
 const passwordValidators = require("./passwordValidators");
 const profileValidators = require("./profileValidators");

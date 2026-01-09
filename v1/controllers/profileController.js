@@ -2,6 +2,20 @@ const { validationResult } = require("express-validator");
 const ProfileService = require("../services/profileService");
 
 class ProfileController {
+  // Parse JSON string if needed
+  parseJsonField(field, defaultValue = null) {
+    if (typeof field === "string") {
+      try {
+        const parsed = JSON.parse(field);
+        return typeof parsed === "string" ? parsed : parsed;
+      } catch (e) {
+        return defaultValue !== null ? defaultValue : field;
+      }
+    }
+    return field;
+  }
+
+  // Update user profile (influencer or brand owner)
   async updateProfile(req, res) {
     try {
       const errors = validationResult(req);
@@ -11,9 +25,9 @@ class ProfileController {
 
       const userId = req.user.id;
       const userRole = req.user.role;
-
       let bodyData = req.body;
 
+      // Handle file uploads
       if (req.files) {
         if (req.files.profileImage && req.files.profileImage[0]) {
           bodyData.profile_image_file = req.files.profileImage[0];
@@ -26,36 +40,19 @@ class ProfileController {
         bodyData.brand_logo_file = req.file;
       }
 
-      if (typeof bodyData.languages === "string") {
-        try {
-          bodyData.languages = JSON.parse(bodyData.languages);
-        } catch (e) {
-        }
-      }
-      if (typeof bodyData.categories === "string") {
-        try {
-          bodyData.categories = JSON.parse(bodyData.categories);
-        } catch (e) {
-          // Ignore parse errors
-        }
-      }
-      if (typeof bodyData.social_platforms === "string") {
-        try {
-          bodyData.social_platforms = JSON.parse(bodyData.social_platforms);
-        } catch (e) {
-          // Ignore parse errors
-        }
-      }
-      if (typeof bodyData.brand_description === "string") {
-        try {
-          const parsed = JSON.parse(bodyData.brand_description);
-          if (typeof parsed === "string") {
-            bodyData.brand_description = parsed;
-          }
-        } catch (e) {
-        }
-      }
+      // Parse JSON fields if they are strings
+      bodyData.languages = this.parseJsonField(bodyData.languages, bodyData.languages);
+      bodyData.categories = this.parseJsonField(bodyData.categories, bodyData.categories);
+      bodyData.social_platforms = this.parseJsonField(
+        bodyData.social_platforms,
+        bodyData.social_platforms
+      );
+      bodyData.brand_description = this.parseJsonField(
+        bodyData.brand_description,
+        bodyData.brand_description
+      );
 
+      // Update profile based on user role
       let result;
       if (userRole === "INFLUENCER") {
         result = await ProfileService.updateInfluencerProfile(userId, bodyData);

@@ -1,6 +1,7 @@
 const { supabaseAdmin } = require("../db/config");
 
 class PlanService {
+  // Create a new subscription plan
   async createPlan(planData) {
     try {
       const billingCycle = planData.billing_cycle?.toUpperCase();
@@ -69,6 +70,7 @@ class PlanService {
     }
   }
 
+  // Get all active subscription plans
   async getAllPlans() {
     try {
       const { data, error } = await supabaseAdmin
@@ -101,6 +103,7 @@ class PlanService {
     }
   }
 
+  // Update an existing plan
   async updatePlan(planId, updateData) {
     try {
       const { data: existingPlan, error: fetchError } = await supabaseAdmin
@@ -204,4 +207,3 @@ class PlanService {
 }
 
 module.exports = new PlanService();
-

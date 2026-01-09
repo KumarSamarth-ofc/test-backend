@@ -1,6 +1,7 @@
 const { supabaseAdmin } = require("../db/config");
 
 class SubscriptionService {
+  // Calculate subscription end date based on billing cycle
   calculateEndDate(billingCycle, startDate) {
     const date = new Date(startDate);
 
@@ -18,6 +19,7 @@ class SubscriptionService {
     return date;
   }
 
+  // Create a new subscription for a user
   async createSubscription(userId, planId, isAutoRenew = false) {
     try {
       if (!userId || typeof userId !== "string") {
@@ -34,6 +36,7 @@ class SubscriptionService {
         };
       }
 
+      // Verify plan exists and is active
       const { data: plan, error: planError } = await supabaseAdmin
         .from("v1_plans")
         .select("*")
@@ -54,6 +57,7 @@ class SubscriptionService {
         };
       }
 
+      // Verify user exists
       const { data: user, error: userError } = await supabaseAdmin
         .from("v1_users")
         .select("id")
@@ -67,6 +71,7 @@ class SubscriptionService {
         };
       }
 
+      // Check for existing active subscription
       const { data: existingSubscriptions, error: existingError } =
         await supabaseAdmin
           .from("v1_subscriptions")
@@ -93,6 +98,7 @@ class SubscriptionService {
         };
       }
 
+      // Calculate subscription dates
       const startDate = new Date();
       const endDate = this.calculateEndDate(plan.billing_cycle, startDate);
 
@@ -123,6 +129,7 @@ class SubscriptionService {
         };
       }
 
+      // Fetch subscription with plan details
       const { data: subscriptionWithPlan, error: fetchError } =
         await supabaseAdmin
           .from("v1_subscriptions")
@@ -172,6 +179,7 @@ class SubscriptionService {
     }
   }
 
+  // Get subscription status for a user
   async getUserSubscription(userId) {
     try {
       if (!userId || typeof userId !== "string") {
@@ -210,13 +218,13 @@ class SubscriptionService {
 
       const subscription = subscriptions[0];
 
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const endDate = new Date(subscription.end_date);
-      endDate.setHours(0, 0, 0, 0);
-
+      // Calculate days remaining for active subscriptions
       let daysRemaining = null;
       if (subscription.status === "ACTIVE") {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const endDate = new Date(subscription.end_date);
+        endDate.setHours(0, 0, 0, 0);
         const diffTime = endDate - today;
         daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       }
@@ -246,4 +254,3 @@ class SubscriptionService {
 }
 
 module.exports = new SubscriptionService();
-

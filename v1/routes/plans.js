@@ -1,10 +1,15 @@
 const express = require("express");
 const router = express.Router();
+
 const PlanController = require("../controllers/planController");
 const authMiddleware = require("../middleware/authMiddleware");
 const { normalizeEnums } = require("../middleware/enumNormalizer");
-const { validateCreatePlan, validateUpdatePlan } = require("../validators/planValidators");
+const {
+  validateCreatePlan,
+  validateUpdatePlan,
+} = require("../validators/planValidators");
 
+// Get all subscription plans (Brand owner or Admin)
 router.get(
   "/",
   authMiddleware.authenticateToken,
@@ -12,6 +17,7 @@ router.get(
   PlanController.getAllPlans
 );
 
+// Create a new subscription plan (Admin only)
 router.post(
   "/",
   authMiddleware.authenticateToken,
@@ -21,6 +27,7 @@ router.post(
   PlanController.createPlan
 );
 
+// Update an existing plan (Admin only)
 router.put(
   "/:id",
   authMiddleware.authenticateToken,
@@ -31,4 +38,3 @@ router.put(
 );
 
 module.exports = router;
-

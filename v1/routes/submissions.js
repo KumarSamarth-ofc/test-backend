@@ -1,7 +1,9 @@
-const router = require('express').Router();
-const submissionController = require('../controllers/submissionController');
-const authMiddleware = require('../middleware/authMiddleware');
-const { normalizeEnums } = require('../middleware/enumNormalizer');
+const express = require("express");
+const router = express.Router();
+
+const submissionController = require("../controllers/submissionController");
+const authMiddleware = require("../middleware/authMiddleware");
+const { normalizeEnums } = require("../middleware/enumNormalizer");
 const {
   validateSubmitScript,
   validateSubmitWork,
@@ -9,59 +11,64 @@ const {
   validateReviewWork,
   validateGetScripts,
   validateGetWorkSubmissions,
-} = require('../validators/submissionValidators');
+} = require("../validators/submissionValidators");
 
+// Submit script for an application (Influencer only)
 router.post(
-  '/scripts',
+  "/scripts",
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole('INFLUENCER'),
+  authMiddleware.requireRole("INFLUENCER"),
   normalizeEnums,
   submissionController.upload,
   validateSubmitScript,
   submissionController.submitScript
 );
 
+// Submit work for an application (Influencer only)
 router.post(
-  '/work',
+  "/work",
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole('INFLUENCER'),
+  authMiddleware.requireRole("INFLUENCER"),
   normalizeEnums,
   submissionController.upload,
   validateSubmitWork,
   submissionController.submitWork
 );
 
+// Get script submissions for an application
 router.get(
-  '/applications/:applicationId/scripts',
+  "/applications/:applicationId/scripts",
   authMiddleware.authenticateToken,
   validateGetScripts,
   submissionController.getScripts
 );
 
+// Get work submissions for an application
 router.get(
-  '/applications/:applicationId/work',
+  "/applications/:applicationId/work",
   authMiddleware.authenticateToken,
   validateGetWorkSubmissions,
   submissionController.getWorkSubmissions
 );
 
+// Review script submission (Brand owner only)
 router.post(
-  '/scripts/:id/review',
+  "/scripts/:id/review",
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole('BRAND_OWNER'),
+  authMiddleware.requireRole("BRAND_OWNER"),
   normalizeEnums,
   validateReviewScript,
   submissionController.reviewScript
 );
 
+// Review work submission (Brand owner only)
 router.post(
-  '/work/:id/review',
+  "/work/:id/review",
   authMiddleware.authenticateToken,
-  authMiddleware.requireRole('BRAND_OWNER'),
+  authMiddleware.requireRole("BRAND_OWNER"),
   normalizeEnums,
   validateReviewWork,
   submissionController.reviewWork
 );
 
 module.exports = router;
-

@@ -11,14 +11,15 @@ class AuthService {
       process.env.JWT_SECRET || "your-secret-key-change-in-production";
     this.jwtExpiry = "1d";
     this.refreshJwtExpiry = "180d";
-
     this.mockPhone = "9876543210";
   }
 
+  // Generate 6-digit OTP
   generateOTP() {
     return Math.floor(100000 + Math.random() * 900000).toString();
   }
 
+  // Store OTP in database (expires in 10 minutes)
   async storeOTP(phone, otp) {
     try {
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
@@ -34,7 +35,7 @@ class AuthService {
         console.error("[v1/storeOTP] error:", error);
         return { success: false, message: "Failed to store OTP" };
       }
-      
+
       return { success: true };
     } catch (err) {
       console.error("[v1/storeOTP] error:", err);
@@ -42,6 +43,7 @@ class AuthService {
     }
   }
 
+  // Verify OTP from database and delete after verification
   async verifyStoredOTP(phone, otp) {
     try {
       const { data, error } = await supabaseAdmin
@@ -67,6 +69,7 @@ class AuthService {
     }
   }
 
+  // Find user by phone number
   async findV1UserByPhone(phone) {
     try {
       const { data, error } = await supabaseAdmin
@@ -87,21 +90,21 @@ class AuthService {
     }
   }
 
+  // Normalize role string to standard format
   mapRole(userDataRole) {
     if (!userDataRole) return "INFLUENCER";
 
     const role = String(userDataRole).toLowerCase().trim();
     if (role === "influencer") return "INFLUENCER";
-    if (role === "brand_owner" || role === "brand" || role === "owner") return "BRAND_OWNER";
+    if (role === "brand_owner" || role === "brand" || role === "owner")
+      return "BRAND_OWNER";
     if (role === "admin") return "ADMIN";
-    return "INFLUENCER"; // default
+    return "INFLUENCER";
   }
 
-  // ---------- Send OTP (login existing v1 user) ----------
-
+  // Send OTP for login (requires existing account)
   async sendOTP(phone, role = null) {
     try {
-      // Validate phone format
       if (!phone.startsWith("+")) {
         return {
           success: false,
@@ -162,6 +165,7 @@ class AuthService {
   }
 
 
+  // Send OTP for registration (requires new account)
   async sendRegistrationOTP(phone) {
     try {
       // Validate phone format
@@ -206,6 +210,7 @@ class AuthService {
   }
 
 
+  // Verify OTP and authenticate/create user
   async verifyOTP(phone, token, userData) {
     try {
       // 1) Verify OTP from otp_codes table
@@ -296,6 +301,7 @@ class AuthService {
   }
 
 
+  // Update basic user fields (name, email) if provided
   async updateBasicUserFields(user, userData) {
     if (!userData) return;
 
@@ -313,6 +319,7 @@ class AuthService {
   }
 
 
+  // Generate JWT access token
   generateToken(user) {
     return jwt.sign(
       {
@@ -325,6 +332,7 @@ class AuthService {
     );
   }
 
+  // Generate JWT refresh token
   generateRefreshToken(user) {
     return jwt.sign(
       {
@@ -338,6 +346,7 @@ class AuthService {
     );
   }
 
+  // Refresh access token using refresh token
   async refreshToken(refreshToken) {
     try {
       if (!refreshToken) {
@@ -402,11 +411,12 @@ class AuthService {
   }
 
 
+  // Get WhatsApp service status
   getWhatsAppStatus() {
     return whatsappService.getServiceStatus();
   }
 
-  // ============================================
+  // Hash password using bcrypt
   async hashPassword(password) {
     try {
       const saltRounds = 10;
@@ -417,6 +427,7 @@ class AuthService {
     }
   }
 
+  // Compare password with hash
   async comparePassword(password, hash) {
     try {
       return await bcrypt.compare(password, hash);
@@ -426,9 +437,7 @@ class AuthService {
     }
   }
 
-  /**
-   * Find brand owner by email
-   */
+  // Find brand owner by email
   async findBrandOwnerByEmail(email) {
     try {
       const { data, error } = await supabaseAdmin
@@ -451,25 +460,17 @@ class AuthService {
     }
   }
 
-  /**
-   * Generate password reset token
-   */
+  // Generate password reset token
   generatePasswordResetToken() {
     return crypto.randomBytes(32).toString("hex");
   }
 
-  /**
-   * Generate email verification token
-   */
+  // Generate email verification token
   generateEmailVerificationToken() {
     return crypto.randomBytes(32).toString("hex");
   }
 
-  // ---------- Brand Owner Registration ----------
-
-  /**
-   * Register brand owner with email and password
-   */
+  // Register brand owner with email and password
   async registerBrandOwner(email, password, name) {
     let createdUserId = null; // Track created user ID for cleanup
     
@@ -738,11 +739,7 @@ class AuthService {
     }
   }
 
-  // ---------- Brand Owner Login ----------
-
-  /**
-   * Login brand owner with email and password
-   */
+  // Login brand owner with email and password
   async loginBrandOwner(email, password) {
     try {
       // 1) Find user by email
@@ -804,13 +801,7 @@ class AuthService {
     }
   }
 
-  // ---------- Email Verification ----------
-
-  /**
-   * Verify email using verification token
-   * Note: For MVP, token is stored in password_reset_token temporarily
-   * TODO: Add email_verification_token column to v1_users table
-   */
+  // Verify email using verification token
   async verifyEmail(token) {
     try {
       // Find user by verification token (stored in password_reset_token temporarily)
@@ -865,9 +856,7 @@ class AuthService {
     }
   }
 
-  /**
-   * Resend email verification
-   */
+  // Resend email verification token
   async resendEmailVerification(email) {
     try {
       // 1) Find brand owner by email
@@ -962,11 +951,7 @@ class AuthService {
     }
   }
 
-  // ---------- Forgot Password ----------
-
-  /**
-   * Generate and store password reset token
-   */
+  // Generate and send password reset token
   async forgotPassword(email) {
     try {
       // 1) Find brand owner by email
@@ -1043,11 +1028,7 @@ class AuthService {
     }
   }
 
-  // ---------- Reset Password ----------
-
-  /**
-   * Reset password using reset token
-   */
+  // Reset password using reset token
   async resetPassword(token, newPassword) {
     try {
       // 1) Validate password strength
@@ -1103,8 +1084,6 @@ class AuthService {
       return { success: false, message: "Failed to reset password" };
     }
   }
-
-
 }
 
 module.exports = new AuthService();

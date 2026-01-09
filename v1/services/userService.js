@@ -1,6 +1,7 @@
 const { supabaseAdmin } = require("../db/config");
 
 class UserService {
+  // Get user data with role-specific details
   async getUser(userId) {
     try {
       const { data: user, error: userError } = await supabaseAdmin
@@ -17,6 +18,7 @@ class UserService {
         };
       }
 
+      // Return role-specific data
       if (user.role === "BRAND_OWNER") {
         return await this.getBrandUserData(user);
       } else if (user.role === "INFLUENCER") {
@@ -37,6 +39,7 @@ class UserService {
     }
   }
 
+  // Get brand owner data with profile and campaigns
   async getBrandUserData(user) {
     try {
       const { data: brandProfile, error: brandProfileError } =
@@ -58,9 +61,7 @@ class UserService {
         .from("v1_campaigns")
         .select(`
           *,
-          v1_applications(
-            *
-          )
+          v1_applications(*)
         `)
         .eq("brand_id", user.id)
         .eq("is_deleted", false)
@@ -73,11 +74,11 @@ class UserService {
         );
       }
 
-      const campaignsWithApplications = (campaigns || []).map(campaign => {
+      const campaignsWithApplications = (campaigns || []).map((campaign) => {
         const { v1_applications, ...campaignData } = campaign;
         return {
           ...campaignData,
-          applications: v1_applications || []
+          applications: v1_applications || [],
         };
       });
 
@@ -101,6 +102,7 @@ class UserService {
     }
   }
 
+  // Get influencer data with profile, social accounts, and applications
   async getInfluencerUserData(user) {
     try {
       const { data: influencerProfile, error: influencerProfileError } =
@@ -138,9 +140,7 @@ class UserService {
           .from("v1_applications")
           .select(`
             *,
-            v1_campaigns(
-              *
-            )
+            v1_campaigns(*)
           `)
           .eq("influencer_id", user.id)
           .order("created_at", { ascending: false });
@@ -152,13 +152,15 @@ class UserService {
         );
       }
 
-      const applicationsWithCampaigns = (applications || []).map(application => {
-        const { v1_campaigns, ...applicationData } = application;
-        return {
-          ...applicationData,
-          campaign: v1_campaigns || null
-        };
-      });
+      const applicationsWithCampaigns = (applications || []).map(
+        (application) => {
+          const { v1_campaigns, ...applicationData } = application;
+          return {
+            ...applicationData,
+            campaign: v1_campaigns || null,
+          };
+        }
+      );
 
       return {
         success: true,
@@ -180,6 +182,7 @@ class UserService {
     }
   }
 
+  // Get all influencers with profiles and social accounts
   async getAllInfluencers() {
     try {
       const { data: influencers, error: influencersError } = await supabaseAdmin
@@ -207,13 +210,14 @@ class UserService {
       let socialAccountsMap = {};
       let socialAccountsError = null;
 
+      // Fetch profiles and social accounts in parallel
       if (userIds.length > 0) {
         const profilesResult = await supabaseAdmin
           .from("v1_influencer_profiles")
           .select("*")
           .in("user_id", userIds)
           .eq("is_deleted", false);
-        
+
         influencerProfiles = profilesResult.data || [];
         profilesError = profilesResult.error;
 
@@ -247,16 +251,24 @@ class UserService {
         );
       }
 
+      // Map profiles to users
       const profileMap = {};
       (influencerProfiles || []).forEach((profile) => {
         profileMap[profile.user_id] = profile;
       });
 
+      // Combine user data with profiles and social accounts
       const influencersWithProfiles = (influencers || []).map((influencer) => {
         const profile = profileMap[influencer.id] || null;
-        
-        const { password_hash, password_reset_token, password_reset_token_expires_at, is_deleted, ...userDetails } = influencer;
-        
+
+        const {
+          password_hash,
+          password_reset_token,
+          password_reset_token_expires_at,
+          is_deleted,
+          ...userDetails
+        } = influencer;
+
         return {
           ...userDetails,
           profile: profile || null,
@@ -286,4 +298,3 @@ class UserService {
 }
 
 module.exports = new UserService();
-

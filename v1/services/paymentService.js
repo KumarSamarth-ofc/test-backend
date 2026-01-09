@@ -15,6 +15,7 @@ if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
 }
 
 class PaymentService {
+  // Normalize payment status to uppercase
   normalizeStatus(status) {
     if (!status) return null;
     const normalized = String(status).toUpperCase().trim();
@@ -25,6 +26,7 @@ class PaymentService {
     return status;
   }
 
+  // Convert Razorpay amounts from paise to rupees
   convertRazorpayOrderToRupees(razorpayOrder) {
     if (!razorpayOrder) return null;
     
@@ -36,6 +38,7 @@ class PaymentService {
     };
   }
 
+  // Calculate commission breakdown (total, commission, net amount)
   async calculateCommissionBreakdown(amount, platformFeePercentage = null) {
     try {
       let commissionPercentage;
@@ -73,6 +76,7 @@ class PaymentService {
     }
   }
 
+  // Create payment order for an application
   async createPaymentOrder(applicationId, userId) {
     try {
       if (!razorpay) {
@@ -274,6 +278,7 @@ class PaymentService {
     }
   }
 
+  // Verify payment and update application phase
   async verifyPayment(paymentData) {
     try {
       const {
@@ -386,8 +391,7 @@ class PaymentService {
           console.error("[v1/PaymentService/verifyPayment] Campaign fetch error:", campaignError);
         }
 
-        // Determine next phase based on requires_script
-        const nextPhase = campaign?.requires_script === true ? 'SCRIPT' : 'WORK';
+        const nextPhase = campaign?.requires_script === true ? "SCRIPT" : "WORK";
 
         // Update application phase after payment verification
         const { error: phaseUpdateError } = await supabaseAdmin
@@ -455,10 +459,7 @@ class PaymentService {
     }
   }
 
-  /**
-   * Release payout to influencer (Admin only)
-   * Admin releases payment to influencer after keeping commission
-   */
+  // Release payout to influencer (Admin only)
   async releasePayoutToInfluencer(applicationId, adminUserId) {
     try {
       // Get verified payment order for this application
@@ -705,9 +706,7 @@ class PaymentService {
     }
   }
 
-  /**
-   * Get payment config for frontend
-   */
+  // Get payment configuration for frontend
   getPaymentConfig() {
     if (!razorpay) {
       return {
@@ -725,9 +724,7 @@ class PaymentService {
     };
   }
 
-  /**
-   * Get payments for an application
-   */
+  // Get payment history for an application
   async getApplicationPayments(applicationId) {
     try {
       // Get payment orders for this application

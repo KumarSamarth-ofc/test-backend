@@ -1,5 +1,21 @@
 const { body } = require("express-validator");
 
+// Valid enum values
+const GENDERS = ["MALE", "FEMALE", "OTHER"];
+const TIERS = ["NANO", "MICRO", "MID", "MACRO"];
+const DATA_SOURCES = ["MANUAL", "GRAPH_API"];
+
+// Helper function to validate enum values
+const validateEnum = (value, validValues, errorMessage) => {
+  if (!value) return true;
+  const normalized = String(value).toUpperCase().trim();
+  if (!validValues.includes(normalized)) {
+    throw new Error(errorMessage);
+  }
+  return true;
+};
+
+// Validate complete profile
 const validateCompleteProfile = [
   body("name")
     .optional()
@@ -18,14 +34,11 @@ const validateCompleteProfile = [
     .optional()
     .isISO8601()
     .withMessage("Date of birth must be a valid ISO8601 date"),
-  
   body("pan_number")
     .optional()
     .isString()
     .isLength({ min: 10, max: 10 })
     .withMessage("PAN number must be 10 characters"),
-  
-
   body("social_platforms")
     .optional()
     .isArray()
@@ -69,17 +82,9 @@ const validateCompleteProfile = [
   body("social_platforms.*.data_source")
     .optional()
     .isString()
-    .custom((value) => {
-      if (!value) return true;
-      const normalized = String(value).toUpperCase().trim();
-      const validValues = ["MANUAL", "GRAPH_API"];
-      if (!validValues.includes(normalized)) {
-        throw new Error("Data source must be MANUAL or GRAPH_API");
-      }
-      return true;
-    }),
-  
-
+    .custom((value) =>
+      validateEnum(value, DATA_SOURCES, "Data source must be MANUAL or GRAPH_API")
+    ),
   body("languages")
     .optional()
     .isArray()
@@ -88,8 +93,6 @@ const validateCompleteProfile = [
     .optional()
     .isString()
     .withMessage("Each language must be a string"),
-  
-
   body("categories")
     .optional()
     .isArray()
@@ -98,8 +101,6 @@ const validateCompleteProfile = [
     .optional()
     .isString()
     .withMessage("Each category must be a string"),
-  
-
   body("bio")
     .optional()
     .isString()
@@ -118,28 +119,15 @@ const validateCompleteProfile = [
   body("gender")
     .optional()
     .isString()
-    .custom((value) => {
-      if (!value) return true;
-      const normalized = String(value).toUpperCase().trim();
-      const validValues = ["MALE", "FEMALE", "OTHER"];
-      if (!validValues.includes(normalized)) {
-        throw new Error("Gender must be MALE, FEMALE, or OTHER");
-      }
-      return true;
-    }),  
-
+    .custom((value) =>
+      validateEnum(value, GENDERS, "Gender must be MALE, FEMALE, or OTHER")
+    ),
   body("tier")
     .optional()
     .isString()
-    .custom((value) => {
-      if (!value) return true;
-      const normalized = String(value).toUpperCase().trim();
-      const validValues = ["NANO", "MICRO", "MID", "MACRO"];
-      if (!validValues.includes(normalized)) {
-        throw new Error("Tier must be NANO, MICRO, MID, or MACRO");
-      }
-      return true;
-    }),
+    .custom((value) =>
+      validateEnum(value, TIERS, "Tier must be NANO, MICRO, MID, or MACRO")
+    ),
   body("min_value")
     .optional()
     .isNumeric()
@@ -147,9 +135,7 @@ const validateCompleteProfile = [
   body("max_value")
     .optional()
     .isNumeric()
-    .withMessage("Max value must be a number"),  
-
-    
+    .withMessage("Max value must be a number"),
   body("brand_name")
     .optional()
     .isString()

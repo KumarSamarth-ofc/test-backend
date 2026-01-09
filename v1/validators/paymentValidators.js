@@ -1,41 +1,42 @@
-const { body, param } = require('express-validator');
+const { body, param } = require("express-validator");
 
+// Validate application ID parameter
 const validateApplicationIdParam = [
-  param('applicationId')
+  param("applicationId")
     .notEmpty()
-    .withMessage('Application ID is required')
+    .withMessage("Application ID is required")
     .isUUID()
-    .withMessage('Application ID must be a valid UUID'),
+    .withMessage("Application ID must be a valid UUID"),
 ];
 
+// Validate verify payment
 const validateVerifyPayment = [
-  body('razorpay_order_id')
+  body("razorpay_order_id")
     .notEmpty()
-    .withMessage('razorpay_order_id is required')
+    .withMessage("razorpay_order_id is required")
     .isString()
-    .withMessage('razorpay_order_id must be a string')
+    .withMessage("razorpay_order_id must be a string")
     .trim(),
-  body('razorpay_payment_id')
+  body("razorpay_payment_id")
     .notEmpty()
-    .withMessage('razorpay_payment_id is required')
+    .withMessage("razorpay_payment_id is required")
     .isString()
-    .withMessage('razorpay_payment_id must be a string')
+    .withMessage("razorpay_payment_id must be a string")
     .trim(),
-  body('razorpay_signature')
+  body("razorpay_signature")
     .notEmpty()
-    .withMessage('razorpay_signature is required')
+    .withMessage("razorpay_signature is required")
     .isString()
-    .withMessage('razorpay_signature must be a string')
+    .withMessage("razorpay_signature must be a string")
     .trim(),
-  body('application_id')
+  body("application_id")
     .notEmpty()
-    .withMessage('application_id is required')
+    .withMessage("application_id is required")
     .isUUID()
-    .withMessage('application_id must be a valid UUID'),
+    .withMessage("application_id must be a valid UUID"),
 ];
 
 module.exports = {
   validateApplicationIdParam,
   validateVerifyPayment,
 };
-

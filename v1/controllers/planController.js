@@ -2,6 +2,7 @@ const { validationResult } = require("express-validator");
 const PlanService = require("../services/planService");
 
 class PlanController {
+  // Create a new subscription plan
   async createPlan(req, res) {
     try {
       const errors = validationResult(req);
@@ -37,6 +38,7 @@ class PlanController {
     }
   }
 
+  // Get all subscription plans
   async getAllPlans(req, res) {
     try {
       const result = await PlanService.getAllPlans();
@@ -64,6 +66,7 @@ class PlanController {
     }
   }
 
+  // Update an existing plan
   async updatePlan(req, res) {
     try {
       const errors = validationResult(req);
@@ -103,4 +106,3 @@ class PlanController {
 }
 
 module.exports = new PlanController();
-

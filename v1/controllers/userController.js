@@ -1,6 +1,7 @@
 const UserService = require("../services/userService");
 
 class UserController {
+  // Get current user details
   async getUser(req, res) {
     try {
       const userId = req.user.id;
@@ -29,6 +30,7 @@ class UserController {
     }
   }
 
+  // Get all influencers
   async getInfluencers(req, res) {
     try {
       const result = await UserService.getAllInfluencers();
@@ -60,4 +62,3 @@ class UserController {
 }
 
 module.exports = new UserController();
-

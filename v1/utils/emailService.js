@@ -5,41 +5,26 @@ class EmailService {
     this.transporter = null;
     this.fromEmail = process.env.EMAIL_FROM || "noreply@stoory.com";
     this.fromName = process.env.EMAIL_FROM_NAME || "Stoory";
-    this.baseUrl = process.env.FRONTEND_URL || process.env.APP_URL || "http://localhost:3000";
+    this.baseUrl =
+      process.env.FRONTEND_URL || process.env.APP_URL || "http://localhost:3000";
     this.initialized = false;
     this.etherealAccount = null;
-    this.initialize().catch(err => {
+    this.initialize().catch((err) => {
       console.error("Failed to initialize email service:", err);
     });
   }
 
+  // Initialize email service based on environment configuration
   async initialize() {
     try {
-      const emailProvider = process.env.NODE_ENV ==="development" ? "ethereal" : process.env.EMAIL_PROVIDER || "ethereal";
+      const emailProvider =
+        process.env.NODE_ENV === "development"
+          ? "ethereal"
+          : process.env.EMAIL_PROVIDER || "ethereal";
 
       switch (emailProvider.toLowerCase()) {
         case "ethereal":
-          try {
-            this.etherealAccount = await nodemailer.createTestAccount();
-            this.transporter = nodemailer.createTransport({
-              host: "smtp.ethereal.email",
-              port: 587,
-              secure: false,
-              auth: {
-                user:"isaiah.wolf@ethereal.email",
-                pass: "tYBtrbpGgCrZzXQs11",
-              },
-            });
-            this.fromEmail = this.etherealAccount.user;
-            console.log("✅ Ethereal Email test account created");
-            console.log("📧 Test account:", this.etherealAccount.user);
-            console.log("🔑 Password:", this.etherealAccount.pass);
-            console.log("🌐 View emails at: https://ethereal.email");
-            this.initialized = true;
-          } catch (error) {
-            console.error("❌ Failed to create Ethereal test account:", error);
-            this.initialized = false;
-          }
+          await this.setupEthereal();
           return;
 
         case "gmail":
@@ -63,13 +48,16 @@ class EmailService {
             },
           });
           if (process.env.SENDGRID_API_KEY) {
-            this.fromEmail = process.env.EMAIL_FROM || process.env.SENDGRID_FROM_EMAIL;
+            this.fromEmail =
+              process.env.EMAIL_FROM || process.env.SENDGRID_FROM_EMAIL;
           }
           break;
 
         case "ses":
           this.transporter = nodemailer.createTransport({
-            host: process.env.SES_HOST || `email-smtp.${process.env.AWS_REGION || "us-east-1"}.amazonaws.com`,
+            host:
+              process.env.SES_HOST ||
+              `email-smtp.${process.env.AWS_REGION || "us-east-1"}.amazonaws.com`,
             port: 587,
             secure: false,
             auth: {
@@ -92,46 +80,31 @@ class EmailService {
           break;
 
         default:
-          console.warn(`⚠️ Unknown email provider: ${emailProvider}. Using Ethereal for testing.`);
-          // Fallback to Ethereal
-          try {
-            this.etherealAccount = await nodemailer.createTestAccount();
-            this.transporter = nodemailer.createTransport({
-              host: "smtp.ethereal.email",
-              port: 587,
-              secure: false,
-              auth: {
-                user: this.etherealAccount.user,
-                pass: this.etherealAccount.pass,
-              },
-            });
-            this.fromEmail = this.etherealAccount.user;
-            console.log("✅ Ethereal Email test account created (fallback)");
-            console.log("📧 Test account:", this.etherealAccount.user);
-            console.log("🌐 View emails at: https://ethereal.email");
-            this.initialized = true;
-            return;
-          } catch (error) {
-            console.error("❌ Failed to create Ethereal test account:", error);
-            this.initialized = false;
-            return;
-          }
+          console.warn(
+            `⚠️ Unknown email provider: ${emailProvider}. Using Ethereal for testing.`
+          );
+          await this.setupEthereal();
+          return;
       }
 
-      // Verify connection (async, don't block) - Skip for Ethereal as it's already initialized
-      if (this.transporter && emailProvider.toLowerCase() !== "ethereal") {
+      // Verify connection for non-Ethereal providers
+      if (this.transporter) {
         this.transporter.verify((error, success) => {
           if (error) {
             console.warn("⚠️ Email service configuration issue:", error.message);
-            console.warn("⚠️ Email sending will be disabled. Check your EMAIL_* environment variables.");
+            console.warn(
+              "⚠️ Email sending will be disabled. Check your EMAIL_* environment variables."
+            );
             this.initialized = false;
           } else {
             console.log("✅ Email service initialized successfully");
             this.initialized = true;
           }
         });
-      } else if (!this.transporter && emailProvider.toLowerCase() !== "ethereal") {
-        console.warn("⚠️ Email transporter not configured. Email sending will be disabled.");
+      } else {
+        console.warn(
+          "⚠️ Email transporter not configured. Email sending will be disabled."
+        );
         this.initialized = false;
       }
     } catch (error) {
@@ -140,22 +113,50 @@ class EmailService {
     }
   }
 
-  /**
-   * Send email verification email
-   */
-  async sendVerificationEmail(email, token, name = null) {
-    // Wait a bit if still initializing (for async Ethereal account creation)
+  // Setup Ethereal email test account
+  async setupEthereal() {
+    try {
+      this.etherealAccount = await nodemailer.createTestAccount();
+      this.transporter = nodemailer.createTransport({
+        host: "smtp.ethereal.email",
+        port: 587,
+        secure: false,
+        auth: {
+          user: this.etherealAccount.user,
+          pass: this.etherealAccount.pass,
+        },
+      });
+      this.fromEmail = this.etherealAccount.user;
+      console.log("✅ Ethereal Email test account created");
+      console.log("📧 Test account:", this.etherealAccount.user);
+      console.log("🔑 Password:", this.etherealAccount.pass);
+      console.log("🌐 View emails at: https://ethereal.email");
+      this.initialized = true;
+    } catch (error) {
+      console.error("❌ Failed to create Ethereal test account:", error);
+      this.initialized = false;
+    }
+  }
+
+  // Wait for email service initialization if still in progress
+  async waitForInitialization() {
     if (!this.initialized && !this.transporter) {
-      // Wait up to 2 seconds for initialization
       let attempts = 0;
       while (!this.initialized && attempts < 20) {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 100));
         attempts++;
       }
     }
-    
+  }
+
+  // Send email verification email
+  async sendVerificationEmail(email, token, name = null) {
+    await this.waitForInitialization();
+
     if (!this.initialized || !this.transporter) {
-      console.warn("[EmailService] Email service not initialized. Skipping email send.");
+      console.warn(
+        "[EmailService] Email service not initialized. Skipping email send."
+      );
       return { success: false, message: "Email service not configured" };
     }
 
@@ -220,38 +221,34 @@ class EmailService {
 
       const info = await this.transporter.sendMail(mailOptions);
       console.log("[EmailService] Verification email sent:", info.messageId);
-      
-      // If using Ethereal, get preview URL
-      if (this.etherealAccount) {
-        const previewUrl = nodemailer.getTestMessageUrl(info);
-        if (previewUrl) {
-          console.log("📧 Preview email at:", previewUrl);
-        }
+
+      // Get preview URL for Ethereal
+      const previewUrl = this.etherealAccount
+        ? nodemailer.getTestMessageUrl(info)
+        : null;
+      if (previewUrl) {
+        console.log("📧 Preview email at:", previewUrl);
       }
-      
-      return { success: true, messageId: info.messageId, previewUrl: this.etherealAccount ? nodemailer.getTestMessageUrl(info) : null };
+
+      return {
+        success: true,
+        messageId: info.messageId,
+        previewUrl,
+      };
     } catch (error) {
       console.error("[EmailService] Failed to send verification email:", error);
       return { success: false, message: error.message };
     }
   }
 
-  /**
-   * Send password reset email
-   */
+  // Send password reset email
   async sendPasswordResetEmail(email, token, name = null) {
-    // Wait a bit if still initializing (for async Ethereal account creation)
-    if (!this.initialized && !this.transporter) {
-      // Wait up to 2 seconds for initialization
-      let attempts = 0;
-      while (!this.initialized && attempts < 20) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        attempts++;
-      }
-    }
-    
+    await this.waitForInitialization();
+
     if (!this.initialized || !this.transporter) {
-      console.warn("[EmailService] Email service not initialized. Skipping email send.");
+      console.warn(
+        "[EmailService] Email service not initialized. Skipping email send."
+      );
       return { success: false, message: "Email service not configured" };
     }
 
@@ -316,29 +313,30 @@ class EmailService {
 
       const info = await this.transporter.sendMail(mailOptions);
       console.log("[EmailService] Password reset email sent:", info.messageId);
-      
-      // If using Ethereal, get preview URL
-      if (this.etherealAccount) {
-        const previewUrl = nodemailer.getTestMessageUrl(info);
-        if (previewUrl) {
-          console.log("📧 Preview email at:", previewUrl);
-        }
+
+      // Get preview URL for Ethereal
+      const previewUrl = this.etherealAccount
+        ? nodemailer.getTestMessageUrl(info)
+        : null;
+      if (previewUrl) {
+        console.log("📧 Preview email at:", previewUrl);
       }
-      
-      return { success: true, messageId: info.messageId, previewUrl: this.etherealAccount ? nodemailer.getTestMessageUrl(info) : null };
+
+      return {
+        success: true,
+        messageId: info.messageId,
+        previewUrl,
+      };
     } catch (error) {
       console.error("[EmailService] Failed to send password reset email:", error);
       return { success: false, message: error.message };
     }
   }
 
-  /**
-   * Check if email service is available
-   */
+  // Check if email service is available
   isAvailable() {
     return this.initialized && this.transporter !== null;
   }
 }
 
 module.exports = new EmailService();
-

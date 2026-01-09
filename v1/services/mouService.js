@@ -1,10 +1,11 @@
-const { supabaseAdmin } = require('../db/config');
+const { supabaseAdmin } = require("../db/config");
 
 class MOUService {
+  // Get latest MOU for an application
   async getLatestMOU(applicationId, userId, userRole) {
     try {
       const { data: application, error: appError } = await supabaseAdmin
-        .from('v1_applications')
+        .from("v1_applications")
         .select(`
           id,
           phase,
@@ -12,100 +13,112 @@ class MOUService {
           brand_id,
           v1_campaigns!inner(brand_id)
         `)
-        .eq('id', applicationId)
+        .eq("id", applicationId)
         .maybeSingle();
 
       if (appError) {
-        console.error('[MOUService/getLatestMOU] Application fetch error:', appError);
-        return { success: false, message: 'Database error' };
+        console.error(
+          "[MOUService/getLatestMOU] Application fetch error:",
+          appError
+        );
+        return { success: false, message: "Database error" };
       }
 
       if (!application) {
-        return { success: false, message: 'Application not found' };
+        return { success: false, message: "Application not found" };
       }
 
-      if (userRole === 'INFLUENCER') {
+      if (userRole === "INFLUENCER") {
         if (application.influencer_id !== userId) {
-          return { success: false, message: 'You do not have access to this application' };
+          return {
+            success: false,
+            message: "You do not have access to this application",
+          };
         }
-      } else if (userRole === 'BRAND_OWNER') {
+      } else if (userRole === "BRAND_OWNER") {
         if (application.v1_campaigns.brand_id !== userId) {
-          return { success: false, message: 'You do not have access to this application' };
+          return {
+            success: false,
+            message: "You do not have access to this application",
+          };
         }
       }
 
       const { data: mous, error: mouError } = await supabaseAdmin
-        .from('v1_mous')
-        .select('*')
-        .eq('application_id', applicationId)
-        .order('created_at', { ascending: false })
+        .from("v1_mous")
+        .select("*")
+        .eq("application_id", applicationId)
+        .order("created_at", { ascending: false })
         .limit(1);
 
       if (mouError) {
-        console.error('[MOUService/getLatestMOU] MOU fetch error:', mouError);
-        return { success: false, message: 'Database error' };
+        console.error("[MOUService/getLatestMOU] MOU fetch error:", mouError);
+        return { success: false, message: "Database error" };
       }
 
       if (!mous || mous.length === 0) {
-        if (application && application.phase === 'ACCEPTED') {
-          console.log(`[MOUService/getLatestMOU] No MOU found for ACCEPTED application ${applicationId}, attempting to generate...`);
-          const generateResult = await this.generateMOUForApplication(applicationId);
+        if (application && application.phase === "ACCEPTED") {
+          console.log(
+            `[MOUService/getLatestMOU] No MOU found for ACCEPTED application ${applicationId}, attempting to generate...`
+          );
+          const generateResult =
+            await this.generateMOUForApplication(applicationId);
           if (generateResult.success) {
             const { data: newMous, error: newMouError } = await supabaseAdmin
-              .from('v1_mous')
-              .select('*')
-              .eq('application_id', applicationId)
-              .order('created_at', { ascending: false })
+              .from("v1_mous")
+              .select("*")
+              .eq("application_id", applicationId)
+              .order("created_at", { ascending: false })
               .limit(1);
 
             if (!newMouError && newMous && newMous.length > 0) {
               return {
                 success: true,
-                message: 'MOU generated and fetched successfully',
-                data: newMous[0]
+                message: "MOU generated and fetched successfully",
+                data: newMous[0],
               };
             } else {
-              console.error(`[MOUService/getLatestMOU] Failed to fetch newly generated MOU:`, newMouError?.message || 'Unknown error');
+              console.error(
+                `[MOUService/getLatestMOU] Failed to fetch newly generated MOU:`,
+                newMouError?.message || "Unknown error"
+              );
             }
           } else {
-            console.error(`[MOUService/getLatestMOU] Failed to auto-generate MOU: ${generateResult.message}`, generateResult.error || '');
+            console.error(
+              `[MOUService/getLatestMOU] Failed to auto-generate MOU: ${generateResult.message}`,
+              generateResult.error || ""
+            );
           }
         }
 
-        return { 
-          success: true, 
-          message: 'No MOU found for this application',
-          data: null 
+        return {
+          success: true,
+          message: "No MOU found for this application",
+          data: null,
         };
       }
 
       return {
         success: true,
-        message: 'MOU fetched successfully',
-        data: mous[0]
+        message: "MOU fetched successfully",
+        data: mous[0],
       };
     } catch (err) {
-      console.error('[MOUService/getLatestMOU] Exception:', err);
+      console.error("[MOUService/getLatestMOU] Exception:", err);
       return {
         success: false,
-        message: 'Failed to fetch MOU',
-        error: err.message
+        message: "Failed to fetch MOU",
+        error: err.message,
       };
     }
   }
 
-  /**
-   * Accept a MOU
-   * @param {string} mouId - MOU UUID
-   * @param {string} userId - User ID accepting the MOU
-   * @param {string} userRole - User role (INFLUENCER or BRAND_OWNER)
-   * @returns {Promise<Object>} - Updated MOU or error
-   */
+  // Accept a MOU (Influencer or Brand owner)
   async acceptMOU(mouId, userId, userRole) {
     try {
       // Get the MOU with application details
       const { data: mou, error: mouError } = await supabaseAdmin
-        .from('v1_mous')
+        .from("v1_mous")
         .select(`
           *,
           v1_applications!inner(
@@ -115,152 +128,146 @@ class MOUService {
             v1_campaigns!inner(brand_id)
           )
         `)
-        .eq('id', mouId)
+        .eq("id", mouId)
         .maybeSingle();
 
       if (mouError) {
-        console.error('[MOUService/acceptMOU] MOU fetch error:', mouError);
-        return { success: false, message: 'Database error' };
+        console.error("[MOUService/acceptMOU] MOU fetch error:", mouError);
+        return { success: false, message: "Database error" };
       }
 
       if (!mou) {
-        return { success: false, message: 'MOU not found' };
+        return { success: false, message: "MOU not found" };
       }
 
       const application = mou.v1_applications;
 
-      // Validate user has access and can accept
-      if (userRole === 'INFLUENCER') {
+      if (userRole === "INFLUENCER") {
         if (application.influencer_id !== userId) {
-          return { 
-            success: false, 
-            message: 'Only the influencer associated with this MOU can accept it as influencer' 
+          return {
+            success: false,
+            message:
+              "Only the influencer associated with this MOU can accept it as influencer",
           };
         }
-      } else if (userRole === 'BRAND_OWNER') {
+      } else if (userRole === "BRAND_OWNER") {
         if (application.v1_campaigns.brand_id !== userId) {
-          return { 
-            success: false, 
-            message: 'Only the brand owner associated with this MOU can accept it as brand' 
+          return {
+            success: false,
+            message:
+              "Only the brand owner associated with this MOU can accept it as brand",
           };
         }
       } else {
-        return { 
-          success: false, 
-          message: 'Only influencers and brand owners can accept MOUs' 
+        return {
+          success: false,
+          message: "Only influencers and brand owners can accept MOUs",
         };
       }
 
-      // Check if already accepted by this party
-      if (userRole === 'INFLUENCER' && mou.accepted_by_influencer) {
-        return { 
-          success: false, 
-          message: 'MOU has already been accepted by the influencer' 
+      if (userRole === "INFLUENCER" && mou.accepted_by_influencer) {
+        return {
+          success: false,
+          message: "MOU has already been accepted by the influencer",
         };
       }
 
-      if (userRole === 'BRAND_OWNER' && mou.accepted_by_brand) {
-        return { 
-          success: false, 
-          message: 'MOU has already been accepted by the brand' 
+      if (userRole === "BRAND_OWNER" && mou.accepted_by_brand) {
+        return {
+          success: false,
+          message: "MOU has already been accepted by the brand",
         };
       }
 
-      // Check if MOU is in a state that prevents acceptance
-      // CANCELLED and EXPIRED always block acceptance
-      if (['CANCELLED', 'EXPIRED'].includes(mou.status)) {
-        return { 
-          success: false, 
-          message: `MOU cannot be accepted. Current status: ${mou.status}` 
+      if (["CANCELLED", "EXPIRED"].includes(mou.status)) {
+        return {
+          success: false,
+          message: `MOU cannot be accepted. Current status: ${mou.status}`,
         };
       }
 
-      // For ACTIVE status, only block if both parties have actually accepted
-      // (This handles cases where admin set status to ACTIVE but parties haven't accepted)
-      if (mou.status === 'ACTIVE' && mou.accepted_by_influencer && mou.accepted_by_brand) {
-        return { 
-          success: false, 
-          message: 'MOU has already been fully accepted by both parties' 
+      if (
+        mou.status === "ACTIVE" &&
+        mou.accepted_by_influencer &&
+        mou.accepted_by_brand
+      ) {
+        return {
+          success: false,
+          message: "MOU has already been fully accepted by both parties",
         };
       }
 
-      // Prepare update data
       const now = new Date().toISOString();
       const updateData = {};
 
-      if (userRole === 'INFLUENCER') {
+      if (userRole === "INFLUENCER") {
         updateData.accepted_by_influencer = true;
         updateData.influencer_accepted_at = now;
-      } else if (userRole === 'BRAND_OWNER') {
+      } else if (userRole === "BRAND_OWNER") {
         updateData.accepted_by_brand = true;
         updateData.brand_accepted_at = now;
       }
 
-      // Determine new status
-      const willBeFullyAccepted = 
-        (userRole === 'INFLUENCER' && mou.accepted_by_brand) ||
-        (userRole === 'BRAND_OWNER' && mou.accepted_by_influencer);
+      const willBeFullyAccepted =
+        (userRole === "INFLUENCER" && mou.accepted_by_brand) ||
+        (userRole === "BRAND_OWNER" && mou.accepted_by_influencer);
 
       if (willBeFullyAccepted) {
-        updateData.status = 'ACTIVE';
-      } else if (mou.status === 'DRAFT') {
-        // If status is DRAFT and first party accepts, change to SENT
-        updateData.status = 'SENT';
-      } else if (mou.status === 'ACTIVE' && !mou.accepted_by_influencer && !mou.accepted_by_brand) {
-        // If status was set to ACTIVE by admin but no one has accepted yet, change to SENT on first acceptance
-        updateData.status = 'SENT';
+        updateData.status = "ACTIVE";
+      } else if (mou.status === "DRAFT") {
+        updateData.status = "SENT";
+      } else if (
+        mou.status === "ACTIVE" &&
+        !mou.accepted_by_influencer &&
+        !mou.accepted_by_brand
+      ) {
+        updateData.status = "SENT";
       }
-      // If status is already SENT, keep it as SENT until both parties accept
 
-      // Update MOU
       const { data: updatedMOU, error: updateError } = await supabaseAdmin
-        .from('v1_mous')
+        .from("v1_mous")
         .update(updateData)
-        .eq('id', mouId)
+        .eq("id", mouId)
         .select()
         .single();
 
       if (updateError) {
-        console.error('[MOUService/acceptMOU] Update error:', updateError);
-        return { 
-          success: false, 
-          message: 'Failed to accept MOU',
-          error: updateError.message 
+        console.error("[MOUService/acceptMOU] Update error:", updateError);
+        return {
+          success: false,
+          message: "Failed to accept MOU",
+          error: updateError.message,
         };
       }
 
-      const fullyAccepted = updatedMOU.accepted_by_influencer && updatedMOU.accepted_by_brand;
+      const fullyAccepted =
+        updatedMOU.accepted_by_influencer && updatedMOU.accepted_by_brand;
 
       return {
         success: true,
-        message: 'MOU accepted successfully',
+        message: "MOU accepted successfully",
         data: updatedMOU,
-        fullyAccepted
+        fullyAccepted,
       };
     } catch (err) {
-      console.error('[MOUService/acceptMOU] Exception:', err);
+      console.error("[MOUService/acceptMOU] Exception:", err);
       return {
         success: false,
-        message: 'Failed to accept MOU',
-        error: err.message
+        message: "Failed to accept MOU",
+        error: err.message,
       };
     }
   }
 
-  /**
-   * Generate MOU for an application automatically when brand owner accepts
-   * @param {string} applicationId - Application UUID
-   * @returns {Promise<Object>} - Created MOU or error
-   */
+  // Generate MOU document for an application
   async generateMOUForApplication(applicationId) {
     try {
       if (!applicationId) {
-        return { success: false, message: 'applicationId is required' };
+        return { success: false, message: "applicationId is required" };
       }
 
-      // Fetch application with all related data
       const { data: application, error: appError } = await supabaseAdmin
-        .from('v1_applications')
+        .from("v1_applications")
         .select(`
           *,
           v1_campaigns(
@@ -268,41 +275,57 @@ class MOUService {
             brand_id
           )
         `)
-        .eq('id', applicationId)
+        .eq("id", applicationId)
         .maybeSingle();
 
       if (appError) {
-        console.error('[MOUService/generateMOUForApplication] Application fetch error:', appError);
-        return { success: false, message: 'Database error', error: appError.message };
+        console.error(
+          "[MOUService/generateMOUForApplication] Application fetch error:",
+          appError
+        );
+        return {
+          success: false,
+          message: "Database error",
+          error: appError.message,
+        };
       }
 
       if (!application) {
-        return { success: false, message: 'Application not found' };
+        return { success: false, message: "Application not found" };
       }
 
       // Check if application is in ACCEPTED phase (warn if not, but still proceed if called from accept flow)
-      if (application.phase !== 'ACCEPTED') {
-        console.warn(`[MOUService/generateMOUForApplication] Warning: Application ${applicationId} is not in ACCEPTED phase (current: ${application.phase}). Proceeding with MOU generation anyway.`);
-        // Don't block - allow generation even if phase check fails (might be a timing issue)
+      if (application.phase !== "ACCEPTED") {
+        console.warn(
+          `[MOUService/generateMOUForApplication] Warning: Application ${applicationId} is not in ACCEPTED phase (current: ${application.phase}). Proceeding with MOU generation anyway.`
+        );
       }
 
       const campaign = application.v1_campaigns;
       if (!campaign) {
-        return { success: false, message: 'Campaign not found for this application' };
+        return {
+          success: false,
+          message: "Campaign not found for this application",
+        };
       }
 
-      // Fetch influencer details
-      const { data: influencerUser, error: influencerError } = await supabaseAdmin
-        .from('v1_users')
-        .select('id, name, email, phone_number')
-        .eq('id', application.influencer_id)
-        .eq('is_deleted', false)
-        .maybeSingle();
+      const { data: influencerUser, error: influencerError } =
+        await supabaseAdmin
+          .from("v1_users")
+          .select("id, name, email, phone_number")
+          .eq("id", application.influencer_id)
+          .eq("is_deleted", false)
+          .maybeSingle();
 
       if (influencerError) {
-        console.error('[MOUService/generateMOUForApplication] Influencer fetch error:', influencerError);
-        console.error('[MOUService/generateMOUForApplication] Influencer ID:', application.influencer_id);
-        // Continue with fallback values instead of failing
+        console.error(
+          "[MOUService/generateMOUForApplication] Influencer fetch error:",
+          influencerError
+        );
+        console.error(
+          "[MOUService/generateMOUForApplication] Influencer ID:",
+          application.influencer_id
+        );
       }
 
       if (!influencerUser) {
@@ -311,29 +334,37 @@ class MOUService {
         console.log(`[MOUService/generateMOUForApplication] Found influencer: ${influencerUser.name} (${influencerUser.email})`);
       }
 
-      const { data: influencerProfile, error: influencerProfileError } = await supabaseAdmin
-        .from('v1_influencer_profiles')
-        .select('*')
-        .eq('user_id', application.influencer_id)
-        .eq('is_deleted', false)
-        .maybeSingle();
+      const { data: influencerProfile, error: influencerProfileError } =
+        await supabaseAdmin
+          .from("v1_influencer_profiles")
+          .select("*")
+          .eq("user_id", application.influencer_id)
+          .eq("is_deleted", false)
+          .maybeSingle();
 
       if (influencerProfileError) {
-        console.warn('[MOUService/generateMOUForApplication] Influencer profile fetch error (non-critical):', influencerProfileError.message);
+        console.warn(
+          "[MOUService/generateMOUForApplication] Influencer profile fetch error (non-critical):",
+          influencerProfileError.message
+        );
       }
 
-      // Fetch brand details
       const { data: brandUser, error: brandError } = await supabaseAdmin
-        .from('v1_users')
-        .select('id, name, email, phone_number')
-        .eq('id', campaign.brand_id)
-        .eq('is_deleted', false)
+        .from("v1_users")
+        .select("id, name, email, phone_number")
+        .eq("id", campaign.brand_id)
+        .eq("is_deleted", false)
         .maybeSingle();
 
       if (brandError) {
-        console.error('[MOUService/generateMOUForApplication] Brand fetch error:', brandError);
-        console.error('[MOUService/generateMOUForApplication] Brand ID:', campaign.brand_id);
-        // Continue with fallback values instead of failing
+        console.error(
+          "[MOUService/generateMOUForApplication] Brand fetch error:",
+          brandError
+        );
+        console.error(
+          "[MOUService/generateMOUForApplication] Brand ID:",
+          campaign.brand_id
+        );
       }
 
       if (!brandUser) {
@@ -342,15 +373,19 @@ class MOUService {
         console.log(`[MOUService/generateMOUForApplication] Found brand: ${brandUser.name} (${brandUser.email})`);
       }
 
-      const { data: brandProfile, error: brandProfileError } = await supabaseAdmin
-        .from('v1_brand_profiles')
-        .select('*')
-        .eq('user_id', campaign.brand_id)
-        .eq('is_deleted', false)
-        .maybeSingle();
+      const { data: brandProfile, error: brandProfileError } =
+        await supabaseAdmin
+          .from("v1_brand_profiles")
+          .select("*")
+          .eq("user_id", campaign.brand_id)
+          .eq("is_deleted", false)
+          .maybeSingle();
 
       if (brandProfileError) {
-        console.warn('[MOUService/generateMOUForApplication] Brand profile fetch error (non-critical):', brandProfileError.message);
+        console.warn(
+          "[MOUService/generateMOUForApplication] Brand profile fetch error (non-critical):",
+          brandProfileError.message
+        );
       }
 
       // Get financial details from application
@@ -378,46 +413,47 @@ class MOUService {
         bufferDeadline.setDate(bufferDeadline.getDate() + bufferDays);
       }
 
-      // Format dates
       const formatDate = (date) => {
-        if (!date) return 'Not specified';
-        return new Date(date).toLocaleDateString('en-IN', { 
-          year: 'numeric', 
-          month: 'long', 
-          day: 'numeric' 
+        if (!date) return "Not specified";
+        return new Date(date).toLocaleDateString("en-IN", {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
         });
       };
 
-      // Format currency
       const formatCurrency = (amount) => {
-        return `₹${parseFloat(amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        return `₹${parseFloat(amount || 0).toLocaleString("en-IN", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`;
       };
 
-      // Generate MOU content
       const mouContent = this.generateMOUContent({
         influencer: {
-          name: influencerUser?.name || 'Not specified',
-          email: influencerUser?.email || 'Not specified',
-          phone: influencerUser?.phone_number || 'Not specified',
-          profile: influencerProfile
+          name: influencerUser?.name || "Not specified",
+          email: influencerUser?.email || "Not specified",
+          phone: influencerUser?.phone_number || "Not specified",
+          profile: influencerProfile,
         },
         brand: {
-          name: brandUser?.name || 'Not specified',
-          email: brandUser?.email || 'Not specified',
-          phone: brandUser?.phone_number || 'Not specified',
-          brandName: brandProfile?.brand_name || brandUser?.name || 'Not specified',
-          profile: brandProfile
+          name: brandUser?.name || "Not specified",
+          email: brandUser?.email || "Not specified",
+          phone: brandUser?.phone_number || "Not specified",
+          brandName:
+            brandProfile?.brand_name || brandUser?.name || "Not specified",
+          profile: brandProfile,
         },
         campaign: {
-          title: campaign.title || 'Not specified',
-          description: campaign.description || 'Not specified',
-          bufferDays: bufferDays
+          title: campaign.title || "Not specified",
+          description: campaign.description || "Not specified",
+          bufferDays: bufferDays,
         },
         financials: {
           budget: budget,
           platformFeePercentage: platformFeePercentage,
           platformFeeAmount: platformFeeAmount,
-          agreedAmount: agreedAmount
+          agreedAmount: agreedAmount,
         },
         requiresScript: requiresScript,
         scriptDeadline: scriptDeadline,
@@ -425,29 +461,34 @@ class MOUService {
         bufferDeadline: bufferDeadline,
         bufferDays: bufferDays,
         formatDate: formatDate,
-        formatCurrency: formatCurrency
+        formatCurrency: formatCurrency,
       });
 
-      // Check if MOU already exists for this application
       const { data: existingMous, error: existingError } = await supabaseAdmin
-        .from('v1_mous')
-        .select('template_version')
-        .eq('application_id', applicationId)
-        .order('created_at', { ascending: false })
+        .from("v1_mous")
+        .select("template_version")
+        .eq("application_id", applicationId)
+        .order("created_at", { ascending: false })
         .limit(1);
 
-      if (existingError && !existingError.message?.includes('does not exist')) {
-        console.error('[MOUService/generateMOUForApplication] Existing MOU check error:', existingError);
-        return { success: false, message: 'Database error', error: existingError.message };
+      if (existingError && !existingError.message?.includes("does not exist")) {
+        console.error(
+          "[MOUService/generateMOUForApplication] Existing MOU check error:",
+          existingError
+        );
+        return {
+          success: false,
+          message: "Database error",
+          error: existingError.message,
+        };
       }
 
-      // Determine template version
       let templateVersion = 1;
       if (existingMous && existingMous.length > 0) {
         const latestVersion = existingMous[0].template_version;
-        if (typeof latestVersion === 'number') {
+        if (typeof latestVersion === "number") {
           templateVersion = latestVersion + 1;
-        } else if (typeof latestVersion === 'string') {
+        } else if (typeof latestVersion === "string") {
           const versionMatch = latestVersion.match(/v?(\d+)/);
           if (versionMatch) {
             templateVersion = parseInt(versionMatch[1], 10) + 1;
@@ -459,49 +500,50 @@ class MOUService {
         }
       }
 
-      // Create MOU
       const { data: newMOU, error: createError } = await supabaseAdmin
-        .from('v1_mous')
+        .from("v1_mous")
         .insert({
           application_id: applicationId,
           template_version: templateVersion,
           content: mouContent,
-          status: 'SENT', // Set to SENT so both parties can accept
+          status: "SENT",
           accepted_by_influencer: false,
-          accepted_by_brand: false
+          accepted_by_brand: false,
         })
         .select()
         .single();
 
       if (createError) {
-        console.error('[MOUService/generateMOUForApplication] Create error:', createError);
-        return { 
-          success: false, 
-          message: 'Failed to create MOU',
-          error: createError.message 
+        console.error(
+          "[MOUService/generateMOUForApplication] Create error:",
+          createError
+        );
+        return {
+          success: false,
+          message: "Failed to create MOU",
+          error: createError.message,
         };
       }
 
       return {
         success: true,
-        message: 'MOU generated successfully',
-        data: newMOU
+        message: "MOU generated successfully",
+        data: newMOU,
       };
     } catch (err) {
-      console.error('[MOUService/generateMOUForApplication] Exception:', err);
+      console.error(
+        "[MOUService/generateMOUForApplication] Exception:",
+        err
+      );
       return {
         success: false,
-        message: 'Failed to generate MOU',
-        error: err.message
+        message: "Failed to generate MOU",
+        error: err.message,
       };
     }
   }
 
-  /**
-   * Generate MOU content text
-   * @param {Object} data - MOU data
-   * @returns {string} - MOU content
-   */
+  // Generate MOU content text from data
   generateMOUContent(data) {
     const {
       influencer,
@@ -520,24 +562,24 @@ class MOUService {
     let content = `MEMORANDUM OF UNDERSTANDING\n`;
     content += `================================\n\n`;
     content += `This Memorandum of Understanding (MOU) is entered into between:\n\n`;
-    if(brand){
-    content += `PARTY 1 - BRAND OWNER:\n`;
-    content += `Name: ${brand.name}\n`;
-    content += `Brand Name: ${brand.brandName}\n`;
-    content += `Email: ${brand.email}\n`;
-    content += `Phone: ${brand.phone}\n\n`;
-  }
-  if(influencer){
-    content += `PARTY 2 - INFLUENCER:\n`;
-    content += `Name: ${influencer.name}\n`;
-    content += `Email: ${influencer.email}\n`;
-    content += `Phone: ${influencer.phone}\n\n`;
-  }
-    
-  if(campaign){
-    content += `CAMPAIGN DETAILS:\n`;
-    content += `Campaign Title: ${campaign.title}\n`;
-    if (campaign.description) {
+    if (brand) {
+      content += `PARTY 1 - BRAND OWNER:\n`;
+      content += `Name: ${brand.name}\n`;
+      content += `Brand Name: ${brand.brandName}\n`;
+      content += `Email: ${brand.email}\n`;
+      content += `Phone: ${brand.phone}\n\n`;
+    }
+    if (influencer) {
+      content += `PARTY 2 - INFLUENCER:\n`;
+      content += `Name: ${influencer.name}\n`;
+      content += `Email: ${influencer.email}\n`;
+      content += `Phone: ${influencer.phone}\n\n`;
+    }
+
+    if (campaign) {
+      content += `CAMPAIGN DETAILS:\n`;
+      content += `Campaign Title: ${campaign.title}\n`;
+      if (campaign.description) {
         content += `Campaign Description: ${campaign.description}\n`;
       }
       content += `\n`;
@@ -605,121 +647,110 @@ class MOUService {
     return content;
   }
 
-  /**
-   * Create a new MOU (Admin only)
-   * @param {Object} mouData - MOU data
-   * @param {string} mouData.application_id - Application UUID
-   * @param {string} mouData.content - MOU content
-   * @param {string} mouData.status - MOU status (optional, defaults to DRAFT)
-   * @returns {Promise<Object>} - Created MOU or error
-   */
+  // Create a new MOU (Admin only)
   async createMOU(mouData) {
     try {
-      const { application_id, content, status = 'DRAFT' } = mouData;
+      const { application_id, content, status = "DRAFT" } = mouData;
 
-      // Validate required fields
       if (!application_id || !content) {
-        return { 
-          success: false, 
-          message: 'application_id and content are required' 
+        return {
+          success: false,
+          message: "application_id and content are required",
         };
       }
 
-      // Validate status
-      const validStatuses = ['DRAFT', 'SENT', 'ACTIVE', 'CANCELLED', 'EXPIRED'];
+      const validStatuses = ["DRAFT", "SENT", "ACTIVE", "CANCELLED", "EXPIRED"];
       if (!validStatuses.includes(status)) {
-        return { 
-          success: false, 
-          message: `Invalid status. Must be one of: ${validStatuses.join(', ')}` 
+        return {
+          success: false,
+          message: `Invalid status. Must be one of: ${validStatuses.join(", ")}`,
         };
       }
 
-      // Verify application exists
       const { data: application, error: appError } = await supabaseAdmin
-        .from('v1_applications')
-        .select('id')
-        .eq('id', application_id)
+        .from("v1_applications")
+        .select("id")
+        .eq("id", application_id)
         .maybeSingle();
 
       if (appError) {
-        console.error('[MOUService/createMOU] Application check error:', appError);
-        return { success: false, message: 'Database error' };
+        console.error(
+          "[MOUService/createMOU] Application check error:",
+          appError
+        );
+        return { success: false, message: "Database error" };
       }
 
       if (!application) {
-        return { success: false, message: 'Application not found' };
+        return { success: false, message: "Application not found" };
       }
 
-      // Get the latest MOU for this application to determine next template version
       const { data: existingMous, error: existingError } = await supabaseAdmin
-        .from('v1_mous')
-        .select('template_version')
-        .eq('application_id', application_id)
-        .order('created_at', { ascending: false })
+        .from("v1_mous")
+        .select("template_version")
+        .eq("application_id", application_id)
+        .order("created_at", { ascending: false })
         .limit(1);
 
       if (existingError) {
-        console.error('[MOUService/createMOU] Existing MOU check error:', existingError);
-        return { success: false, message: 'Database error' };
+        console.error(
+          "[MOUService/createMOU] Existing MOU check error:",
+          existingError
+        );
+        return { success: false, message: "Database error" };
       }
 
-      // Determine template version (numeric: 1, 2, 3, etc.)
       let templateVersion = 1;
       if (existingMous && existingMous.length > 0) {
         const latestVersion = existingMous[0].template_version;
-        
-        // Handle both numeric and string versions (for backward compatibility)
-        if (typeof latestVersion === 'number') {
+
+        if (typeof latestVersion === "number") {
           templateVersion = latestVersion + 1;
-        } else if (typeof latestVersion === 'string') {
-          // If it's a string like "v1.0" or "1", extract the number
+        } else if (typeof latestVersion === "string") {
           const versionMatch = latestVersion.match(/v?(\d+)/);
           if (versionMatch) {
             templateVersion = parseInt(versionMatch[1], 10) + 1;
           } else {
-            // If format is unexpected, default to 2
             templateVersion = 2;
           }
         } else {
-          // If it's neither number nor string, default to 2
           templateVersion = 2;
         }
       }
 
-      // Create new MOU
       const { data: newMOU, error: createError } = await supabaseAdmin
-        .from('v1_mous')
+        .from("v1_mous")
         .insert({
           application_id,
           template_version: templateVersion,
           content,
           status,
           accepted_by_influencer: false,
-          accepted_by_brand: false
+          accepted_by_brand: false,
         })
         .select()
         .single();
 
       if (createError) {
-        console.error('[MOUService/createMOU] Create error:', createError);
-        return { 
-          success: false, 
-          message: 'Failed to create MOU',
-          error: createError.message 
+        console.error("[MOUService/createMOU] Create error:", createError);
+        return {
+          success: false,
+          message: "Failed to create MOU",
+          error: createError.message,
         };
       }
 
       return {
         success: true,
-        message: 'MOU created successfully',
-        data: newMOU
+        message: "MOU created successfully",
+        data: newMOU,
       };
     } catch (err) {
-      console.error('[MOUService/createMOU] Exception:', err);
+      console.error("[MOUService/createMOU] Exception:", err);
       return {
         success: false,
-        message: 'Failed to create MOU',
-        error: err.message
+        message: "Failed to create MOU",
+        error: err.message,
       };
     }
   }

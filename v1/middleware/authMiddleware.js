@@ -1,12 +1,13 @@
 const jwt = require("jsonwebtoken");
-const { supabaseAdmin } = require("../db/config");
 
 class AuthMiddleware {
   constructor() {
+    // JWT secret key from environment or default (should be changed in production)
     this.jwtSecret =
       process.env.JWT_SECRET || "your-secret-key-change-in-production";
   }
 
+  // Verify and decode JWT token
   verifyToken(token) {
     try {
       const decoded = jwt.verify(token, this.jwtSecret);
@@ -16,9 +17,14 @@ class AuthMiddleware {
     }
   }
 
+  // Extract token from Authorization header
+  extractToken(authHeader) {
+    return authHeader && authHeader.split(" ")[1];
+  }
+
+  // Middleware: Require authentication token
   authenticateToken = (req, res, next) => {
-    const authHeader = req.headers["authorization"];
-    const token = authHeader && authHeader.split(" ")[1];
+    const token = this.extractToken(req.headers["authorization"]);
 
     if (!token) {
       return res.status(401).json({ error: "Access token required" });
@@ -34,9 +40,9 @@ class AuthMiddleware {
     next();
   };
 
+  // Middleware: Optional authentication (doesn't fail if token is missing or invalid)
   authenticateTokenOptional = (req, res, next) => {
-    const authHeader = req.headers["authorization"];
-    const token = authHeader && authHeader.split(" ")[1];
+    const token = this.extractToken(req.headers["authorization"]);
 
     if (!token) {
       req.user = undefined;
@@ -53,6 +59,7 @@ class AuthMiddleware {
     next();
   };
 
+  // Middleware factory: Require specific role(s)
   requireRole(roles) {
     return (req, res, next) => {
       if (!req.user) {
@@ -65,6 +72,7 @@ class AuthMiddleware {
       if (!allowedRoles.includes(userRole)) {
         return res.status(403).json({ error: "Insufficient permissions" });
       }
+
       next();
     };
   }

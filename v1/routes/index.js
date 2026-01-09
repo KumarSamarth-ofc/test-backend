@@ -1,41 +1,32 @@
 const express = require("express");
 const router = express.Router();
 
-
+// Import route modules
 const authRoutes = require("./auth");
-router.use("/auth", authRoutes);
-
 const profileRoutes = require("./profile");
-router.use("/profile", profileRoutes);
-
 const campaignRoutes = require("./campaigns");
+const applicationRoutes = require("./applications");
+const chatRoutes = require("./chat");
+const userRoutes = require("./users");
+const planRoutes = require("./plans");
+const paymentRoutes = require("./payments");
+const subscriptionRoutes = require("./subscriptions");
+const submissionRoutes = require("./submissions");
+const mouRoutes = require("./mous");
+const adminSettingsRoutes = require("./adminSettings");
+
+// Mount route modules
+router.use("/auth", authRoutes);
+router.use("/profile", profileRoutes);
 router.use("/campaigns", campaignRoutes);
-
-const applicationRoutes = require('./applications');
-router.use('/applications', applicationRoutes);
-
-const chatRoutes = require('./chat');
-router.use('/chat', chatRoutes);
-
-const userRoutes = require('./users');
-router.use('/users', userRoutes);
-
-const planRoutes = require('./plans');
-router.use('/plans', planRoutes);
-
-const paymentRoutes = require('./payments');
-router.use('/payments', paymentRoutes);
-
-const subscriptionRoutes = require('./subscriptions');
-router.use('/subscriptions', subscriptionRoutes);
-
-const submissionRoutes = require('./submissions');
-router.use('/submissions', submissionRoutes);
-
-const mouRoutes = require('./mous');
-router.use('/mous', mouRoutes);
-
-const adminSettingsRoutes = require('./adminSettings');
-router.use('/admin/settings', adminSettingsRoutes);
+router.use("/applications", applicationRoutes);
+router.use("/chat", chatRoutes);
+router.use("/users", userRoutes);
+router.use("/plans", planRoutes);
+router.use("/payments", paymentRoutes);
+router.use("/subscriptions", subscriptionRoutes);
+router.use("/submissions", submissionRoutes);
+router.use("/mous", mouRoutes);
+router.use("/admin/settings", adminSettingsRoutes);
 
 module.exports = router;

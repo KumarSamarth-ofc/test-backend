@@ -1,6 +1,7 @@
 const { supabaseAdmin } = require("../db/config");
 
 class CampaignService {
+  // Validate campaign status
   validateStatus(status) {
     const validStatuses = [
       "DRAFT",
@@ -14,21 +15,25 @@ class CampaignService {
     return validStatuses.includes(status?.toUpperCase());
   }
 
+  // Validate campaign type
   validateType(type) {
     const validTypes = ["NORMAL", "BULK"];
     return validTypes.includes(type?.toUpperCase());
   }
 
+  // Normalize status to uppercase
   normalizeStatus(status) {
     if (!status) return "DRAFT";
     return status.toUpperCase();
   }
 
+  // Normalize type to uppercase
   normalizeType(type) {
     if (!type) return "NORMAL";
     return type.toUpperCase();
   }
 
+  // Normalize influencer tier
   normalizeTier(tier) {
     if (!tier) return null;
     const normalized = String(tier).toUpperCase().trim();
@@ -36,6 +41,7 @@ class CampaignService {
     return validTiers.includes(normalized) ? normalized : null;
   }
 
+  // Verify brand owns the campaign
   async checkBrandOwnership(campaignId, brandId) {
     try {
       const { data, error } = await supabaseAdmin
@@ -64,40 +70,39 @@ class CampaignService {
     }
   }
 
-    async createCampaign(brandId, campaignData) {
-      try {
-        const type = this.normalizeType(campaignData.type);
-        if (!this.validateType(type)) {
-          return {
-            success: false,
-            message: "Invalid campaign type. Must be NORMAL or BULK",
-          };
-        }
-  
-        // Validate status
-        const status = this.normalizeStatus(campaignData.status || "DRAFT");
-        if (!this.validateStatus(status)) {
-          return {
-            success: false,
-            message: "Invalid campaign status",
-          };
-        }
-  
-        // Validate min/max influencers
-        if (
-          campaignData.min_influencers !== undefined &&
-          campaignData.max_influencers !== undefined
-        ) {
-          if (campaignData.min_influencers > campaignData.max_influencers) {
-            return {
-              success: false,
-              message: "min_influencers cannot be greater than max_influencers",
-            };
-          }
-        }
+  // Create a new campaign
+  async createCampaign(brandId, campaignData) {
+    try {
+      const type = this.normalizeType(campaignData.type);
+      if (!this.validateType(type)) {
+        return {
+          success: false,
+          message: "Invalid campaign type. Must be NORMAL or BULK",
+        };
+      }
 
-        // Fetch non-expired admin settings to get commission_percentage
-        let platformFeePercentage = null;
+      const status = this.normalizeStatus(campaignData.status || "DRAFT");
+      if (!this.validateStatus(status)) {
+        return {
+          success: false,
+          message: "Invalid campaign status",
+        };
+      }
+
+      if (
+        campaignData.min_influencers !== undefined &&
+        campaignData.max_influencers !== undefined
+      ) {
+        if (campaignData.min_influencers > campaignData.max_influencers) {
+          return {
+            success: false,
+            message:
+              "min_influencers cannot be greater than max_influencers",
+          };
+        }
+      }
+
+      let platformFeePercentage = null;
         let platformFeeAmount = null;
         let netAmount = null;
         const budget = campaignData.budget ?? null;
@@ -197,10 +202,7 @@ class CampaignService {
       }
     }
 
-  /**
-   * Get all campaigns with filtering and pagination
-   * Influencers can see all campaigns, Brand owners see their own + all
-   */
+  // Get all campaigns with filtering and pagination
   async getCampaigns(filters = {}, pagination = {}) {
     try {
       const { status, type, brand_id, min_budget, max_budget, search } =
@@ -336,10 +338,7 @@ class CampaignService {
     }
   }
 
-  /**
-   * Get single campaign by ID
-   * Includes applications with user data for each application
-   */
+  // Get single campaign by ID with applications
   async getCampaignById(campaignId, userId = null) {
     try {
       // Fetch the campaign
@@ -425,10 +424,7 @@ class CampaignService {
     }
   }
 
-  /**
-   * Get campaigns created by a specific brand owner
-   * Includes applications for each campaign with full influencer details and social accounts
-   */
+  // Get campaigns for a brand owner with full application details
   async getBrandCampaigns(brandId, filters = {}, pagination = {}) {
     try {
       // Add brand_id filter
@@ -574,10 +570,8 @@ class CampaignService {
     }
   }
 
-    /**
-   * Update campaign (Brand Owner only)
-   */
-    async updateCampaign(campaignId, brandId, updateData) {
+  // Update campaign (Brand Owner only)
+  async updateCampaign(campaignId, brandId, updateData) {
       try {
         // Check ownership
         const ownershipCheck = await this.checkBrandOwnership(
@@ -727,9 +721,7 @@ class CampaignService {
       }
     }
 
-  /**
-   * Delete campaign (Brand Owner only)
-   */
+  // Delete campaign (Brand Owner only)
   async deleteCampaign(campaignId, brandId) {
     try {
       // Check ownership

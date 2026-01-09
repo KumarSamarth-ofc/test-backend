@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+
 const PaymentController = require("../controllers/paymentController");
 const authMiddleware = require("../middleware/authMiddleware");
 const { normalizeEnums } = require("../middleware/enumNormalizer");
@@ -8,12 +9,14 @@ const {
   validateVerifyPayment,
 } = require("../validators/paymentValidators");
 
+// Get payment configuration
 router.get(
   "/config",
   authMiddleware.authenticateToken,
   PaymentController.getPaymentConfig
 );
 
+// Create payment order for an application (Brand owner or Admin)
 router.post(
   "/applications/:applicationId",
   authMiddleware.authenticateToken,
@@ -22,6 +25,7 @@ router.post(
   PaymentController.createApplicationPaymentOrder
 );
 
+// Verify payment (Brand owner or Admin)
 router.post(
   "/verify",
   authMiddleware.authenticateToken,
@@ -31,6 +35,7 @@ router.post(
   PaymentController.verifyPayment
 );
 
+// Release payout to influencer (Admin only)
 router.post(
   "/applications/:applicationId/release",
   authMiddleware.authenticateToken,
@@ -39,6 +44,7 @@ router.post(
   PaymentController.releasePayout
 );
 
+// Get payment history for an application
 router.get(
   "/applications/:applicationId",
   authMiddleware.authenticateToken,

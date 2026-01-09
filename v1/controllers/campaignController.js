@@ -1,9 +1,10 @@
 const { validationResult } = require("express-validator");
 const { CampaignService } = require("../services");
 const { supabaseAdmin } = require("../db/config");
+const { uploadImageToStorage, deleteImageFromStorage } = require("../utils/imageUpload");
 
 class CampaignController {
-
+  // Get brand profile ID for a user
   async getBrandProfileId(userId) {
     try {
       const { data: brandProfile, error } = await supabaseAdmin
@@ -28,10 +29,8 @@ class CampaignController {
       return { success: false, error: err.message };
     }
   }
-  /**
-   * Create a new campaign (Brand Owner only)
-   * POST /api/v1/campaigns
-   */
+
+  // Create a new campaign
   async createCampaign(req, res) {
     try {
       const errors = validationResult(req);
@@ -68,9 +67,9 @@ class CampaignController {
 
       const brandId = brandProfileResult.brandId;
 
+      // Handle cover image upload
       let coverImageUrl = null;
       if (req.file) {
-        const { uploadImageToStorage } = require("../utils/imageUpload");
         const { url, error: uploadError } = await uploadImageToStorage(
           req.file.buffer,
           req.file.originalname,
@@ -110,12 +109,15 @@ class CampaignController {
       return res.status(500).json({
         success: false,
         message: "Internal server error",
-        error: process.env.NODE_ENV === 'development' ? err.message : undefined,
-        stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+        error:
+          process.env.NODE_ENV === "development" ? err.message : undefined,
+        stack:
+          process.env.NODE_ENV === "development" ? err.stack : undefined,
       });
     }
   }
 
+  // Get all campaigns with filters
   async getCampaigns(req, res) {
     try {
       const errors = validationResult(req);
@@ -139,6 +141,7 @@ class CampaignController {
         search: req.query.search,
       };
 
+      // Remove undefined filters
       Object.keys(filters).forEach(
         (key) => filters[key] === undefined && delete filters[key]
       );
@@ -172,6 +175,7 @@ class CampaignController {
     }
   }
 
+  // Get campaigns for the authenticated brand owner
   async getMyCampaigns(req, res) {
     try {
       const errors = validationResult(req);
@@ -208,7 +212,6 @@ class CampaignController {
 
       const brandId = brandProfileResult.brandId;
 
-      // Extract filters from query params
       const filters = {
         status: req.query.status,
         type: req.query.type,
@@ -259,6 +262,7 @@ class CampaignController {
     }
   }
 
+  // Get a single campaign by ID
   async getCampaign(req, res) {
     try {
       const campaignId = req.params.id;
@@ -288,6 +292,7 @@ class CampaignController {
     }
   }
 
+  // Update a campaign
   async updateCampaign(req, res) {
     try {
       const errors = validationResult(req);
@@ -325,14 +330,18 @@ class CampaignController {
 
       const brandId = brandProfileResult.brandId;
 
+      // Handle cover image update
       let coverImageUrl = undefined;
       if (req.file) {
-        const { uploadImageToStorage, deleteImageFromStorage } = require("../utils/imageUpload");
-        
-        const currentCampaignResult = await CampaignService.getCampaignById(campaignId, req.user.id);
-        const currentCoverImageUrl = currentCampaignResult.success && currentCampaignResult.campaign?.cover_image_url
-          ? currentCampaignResult.campaign.cover_image_url
-          : null;
+        const currentCampaignResult = await CampaignService.getCampaignById(
+          campaignId,
+          req.user.id
+        );
+        const currentCoverImageUrl =
+          currentCampaignResult.success &&
+          currentCampaignResult.campaign?.cover_image_url
+            ? currentCampaignResult.campaign.cover_image_url
+            : null;
 
         const { url, error: uploadError } = await uploadImageToStorage(
           req.file.buffer,
@@ -347,6 +356,7 @@ class CampaignController {
         }
         coverImageUrl = url;
 
+        // Delete old image if it's not a placeholder
         const placeholderUrl = "https://via.placeholder.com/800x400?text=Campaign+Image";
         if (currentCoverImageUrl && currentCoverImageUrl !== placeholderUrl) {
           await deleteImageFromStorage(currentCoverImageUrl);
@@ -389,6 +399,7 @@ class CampaignController {
     }
   }
 
+  // Delete a campaign
   async deleteCampaign(req, res) {
     try {
       const userId = req.user.id;
@@ -417,7 +428,6 @@ class CampaignController {
       }
 
       const brandId = brandProfileResult.brandId;
-
       const result = await CampaignService.deleteCampaign(campaignId, brandId);
 
       if (result.success) {
@@ -445,15 +455,6 @@ class CampaignController {
       });
     }
   }
-  
 }
 
-const campaignController = new CampaignController();
-campaignController.createCampaign = campaignController.createCampaign.bind(campaignController);
-campaignController.getCampaigns = campaignController.getCampaigns.bind(campaignController);
-campaignController.getMyCampaigns = campaignController.getMyCampaigns.bind(campaignController);
-campaignController.getCampaign = campaignController.getCampaign.bind(campaignController);
-campaignController.updateCampaign = campaignController.updateCampaign.bind(campaignController);
-campaignController.deleteCampaign = campaignController.deleteCampaign.bind(campaignController);
-
-module.exports = campaignController;
+module.exports = new CampaignController();

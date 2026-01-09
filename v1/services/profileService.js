@@ -2,6 +2,7 @@ const { supabaseAdmin } = require("../db/config");
 const { uploadImageToStorage, deleteImageFromStorage } = require("../utils/imageUpload");
 
 class ProfileService {
+  // Normalize gender to standard format
   normalizeGender(gender) {
     if (!gender) return null;
 
@@ -20,6 +21,7 @@ class ProfileService {
     return null;
   }
 
+  // Normalize influencer tier
   normalizeTier(tier) {
     if (!tier) return null;
   
@@ -39,6 +41,7 @@ class ProfileService {
     return null;
   }
 
+  // Normalize social platform name
   normalizePlatform(platformName) {
     if (!platformName) return null;
 
@@ -57,6 +60,7 @@ class ProfileService {
     return null;
   }
 
+  // Upsert social platform accounts for influencer
   async upsertSocialPlatforms(userId, platforms) {
     try {
       if (!Array.isArray(platforms) || platforms.length === 0) {
@@ -181,11 +185,7 @@ class ProfileService {
     }
   }
 
-  /**
-   * Update influencer profile
-   * Accepts all user-editable fields from v1_users and v1_influencer_profiles
-   * Handles image uploads for profile_photo_url
-   */
+  // Update influencer profile with image upload support
   async updateInfluencerProfile(userId, profileData) {
     try {
       // 1) Handle profile image - file upload takes priority over direct URL
@@ -552,11 +552,7 @@ class ProfileService {
     }
   }
 
-  /**
-   * Update brand profile
-   * Accepts all user-editable fields from v1_users and v1_brand_profiles
-   * Handles image uploads for brand_logo_url
-   */
+  // Update brand profile with logo upload support
   async updateBrandProfile(userId, profileData) {
     try {
       // 1) Handle brand logo - file upload takes priority over direct URL
@@ -849,10 +845,7 @@ class ProfileService {
     }
   }
 
-  /**
-   * Create initial influencer profile during user registration
-   * (Used internally by authService during registration)
-   */
+  // Create initial influencer profile during registration
   async createInfluencerProfile(user, userData) {
     try {
       const primaryLanguage =
@@ -908,10 +901,7 @@ class ProfileService {
     }
   }
 
-  /**
-   * Create initial brand profile during user registration
-   * (Used internally by authService during registration)
-   */
+  // Create initial brand profile during registration
   async createBrandProfile(user, userData) {
     try {
       const placeholderLogoUrl =

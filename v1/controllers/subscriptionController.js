@@ -2,6 +2,7 @@ const { validationResult } = require("express-validator");
 const SubscriptionService = require("../services/subscriptionService");
 
 class SubscriptionController {
+  // Create a new subscription
   async createSubscription(req, res) {
     try {
       const errors = validationResult(req);
@@ -23,8 +24,7 @@ class SubscriptionController {
 
       if (!result.success) {
         const statusCode =
-          result.message === "Plan not found" ||
-          result.message === "User not found"
+          result.message === "Plan not found" || result.message === "User not found"
             ? 404
             : result.message === "User already has an active subscription" ||
               result.message === "Plan is not active"
@@ -56,6 +56,7 @@ class SubscriptionController {
     }
   }
 
+  // Get subscription status for current user
   async getSubscriptionStatus(req, res) {
     try {
       const userId = req.user.id;
@@ -90,4 +91,3 @@ class SubscriptionController {
 }
 
 module.exports = new SubscriptionController();
-

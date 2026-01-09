@@ -1,8 +1,10 @@
 const express = require("express");
 const router = express.Router();
+
 const AdminSettingsController = require("../controllers/adminSettingsController");
 const authMiddleware = require("../middleware/authMiddleware");
 
+// Get active admin settings (Admin only)
 router.get(
   "/",
   authMiddleware.authenticateToken,
@@ -10,6 +12,7 @@ router.get(
   AdminSettingsController.getAdminSettings
 );
 
+// Create new admin settings (Admin only)
 router.post(
   "/",
   authMiddleware.authenticateToken,
@@ -18,4 +21,3 @@ router.post(
 );
 
 module.exports = router;
-

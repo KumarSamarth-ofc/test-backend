@@ -1,6 +1,7 @@
 const { supabaseAdmin } = require("../db/config");
 
 class AdminSettingsController {
+  // Get active admin settings
   async getAdminSettings(req, res) {
     try {
       const { data, error } = await supabaseAdmin
@@ -40,14 +41,12 @@ class AdminSettingsController {
     }
   }
 
+  // Create new admin settings (expires previous ones)
   async createAdminSettings(req, res) {
     try {
       const { commission_percentage } = req.body;
 
-      if (
-        commission_percentage === undefined ||
-        commission_percentage === null
-      ) {
+      if (commission_percentage === undefined || commission_percentage === null) {
         return res.status(400).json({
           success: false,
           message: "commission_percentage is required",
@@ -68,6 +67,7 @@ class AdminSettingsController {
       const adminUserId = req.user.id;
       const now = new Date().toISOString();
 
+      // Expire existing settings
       const { error: updateError } = await supabaseAdmin
         .from("v1_admin_settings")
         .update({
@@ -88,6 +88,7 @@ class AdminSettingsController {
         });
       }
 
+      // Create new settings
       const { data, error: insertError } = await supabaseAdmin
         .from("v1_admin_settings")
         .insert({
@@ -130,4 +131,3 @@ class AdminSettingsController {
 }
 
 module.exports = new AdminSettingsController();
-

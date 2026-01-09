@@ -1,39 +1,44 @@
-const { body, param } = require('express-validator');
+const { body, param } = require("express-validator");
 
+// Validate get latest MOU
 const validateGetLatestMOU = [
-  param('applicationId')
+  param("applicationId")
     .notEmpty()
-    .withMessage('Application ID is required')
+    .withMessage("Application ID is required")
     .isUUID()
-    .withMessage('Application ID must be a valid UUID'),
+    .withMessage("Application ID must be a valid UUID"),
 ];
 
+// Validate accept MOU
 const validateAcceptMOU = [
-  param('id')
+  param("id")
     .notEmpty()
-    .withMessage('MOU ID is required')
+    .withMessage("MOU ID is required")
     .isUUID()
-    .withMessage('MOU ID must be a valid UUID'),
+    .withMessage("MOU ID must be a valid UUID"),
 ];
 
+// Validate create MOU
 const validateCreateMOU = [
-  body('application_id')
+  body("application_id")
     .notEmpty()
-    .withMessage('application_id is required')
+    .withMessage("application_id is required")
     .isUUID()
-    .withMessage('application_id must be a valid UUID'),
-  body('content')
+    .withMessage("application_id must be a valid UUID"),
+  body("content")
     .notEmpty()
-    .withMessage('content is required')
+    .withMessage("content is required")
     .isString()
-    .withMessage('content must be a string')
+    .withMessage("content must be a string")
     .trim()
     .isLength({ min: 1 })
-    .withMessage('content cannot be empty'),
-  body('status')
+    .withMessage("content cannot be empty"),
+  body("status")
     .optional()
-    .isIn(['DRAFT', 'SENT', 'ACTIVE', 'CANCELLED', 'EXPIRED'])
-    .withMessage('status must be one of: DRAFT, SENT, ACTIVE, CANCELLED, EXPIRED'),
+    .isIn(["DRAFT", "SENT", "ACTIVE", "CANCELLED", "EXPIRED"])
+    .withMessage(
+      "status must be one of: DRAFT, SENT, ACTIVE, CANCELLED, EXPIRED"
+    ),
 ];
 
 module.exports = {
@@ -41,4 +46,3 @@ module.exports = {
   validateAcceptMOU,
   validateCreateMOU,
 };
-
