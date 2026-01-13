@@ -474,28 +474,6 @@ class NotificationService {
     }
   }
 
-  async notifyPayoutReleased(applicationId, influencerId, amount) {
-    try {
-      const { data: application } = await supabaseAdmin
-        .from('v1_applications')
-        .select('id, v1_campaigns(title)')
-        .eq('id', applicationId)
-        .single();
-
-      const notificationData = {
-        type: 'PAYOUT_RELEASED',
-        title: 'Payout Released! 💵',
-        body: `₹${amount} released for "${application?.v1_campaigns?.title || 'campaign'}"`,
-        clickAction: `/wallet`,
-        data: { applicationId, influencerId, amount },
-      };
-
-      return await this.sendAndStoreNotification(influencerId, notificationData);
-    } catch (error) {
-      console.error('[v1/Notification] Payout released error:', error);
-      return { success: false, error: error.message };
-    }
-  }
 }
 
 module.exports = new NotificationService();

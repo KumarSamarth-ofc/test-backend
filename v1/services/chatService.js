@@ -167,7 +167,7 @@ const ChatService = {
     // If multiple chats exist, this indicates a data integrity issue
     const { data: chat, error: chatError } = await supabaseAdmin
       .from('v1_chats')
-      .select('id, status, applications_id')
+      .select('id, status, application_id')
       .eq('application_id', applicationId)
       .single();
 
