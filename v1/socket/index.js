@@ -1,6 +1,6 @@
 const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
-const { ChatService } = require('../services');
+const { ChatService, NotificationService } = require('../services');
 const { supabaseAdmin } = require('../db/config');
 
 // Rate limiting: Track message counts per user
@@ -36,6 +36,9 @@ const initSocket = (server) => {
     maxHttpBufferSize: 1e8 // 100MB for file uploads
   });
 
+  // Attach io to notification service
+  NotificationService.setSocketIO(io);
+
   // Authentication middleware
   io.use(async (socket, next) => {
     try {
@@ -58,6 +61,7 @@ const initSocket = (server) => {
 
   io.on('connection', (socket) => {
     console.log(`User connected: ${socket.user.id}`);
+    NotificationService.registerOnlineUser(socket.user.id, socket.id);
     
     // Track user's current room
     socket.currentRoom = null;
@@ -313,6 +317,7 @@ const initSocket = (server) => {
     // Disconnect handler
     socket.on('disconnect', (reason) => {
       console.log(`User ${socket.user.id} disconnected: ${reason}`);
+      NotificationService.unregisterOnlineUser(socket.user.id, socket.id);
       
       if (socket.currentRoom) {
         socket.to(socket.currentRoom).emit('user_left', {
