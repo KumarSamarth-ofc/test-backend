@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require("../db/config");
+const { uploadPortfolioMediaToStorage, deletePortfolioMediaFromStorage } = require("../utils/imageUpload");
 
 /**
  * Portfolio Service
@@ -8,7 +9,7 @@ class PortfolioService {
   /**
    * Create a new portfolio item
    * @param {string} userId - User ID of the influencer
-   * @param {Object} portfolioData - Portfolio item data
+   * @param {Object} portfolioData - Portfolio item data (can include file uploads)
    * @returns {Promise<Object>} - Created portfolio item or error
    */
   async createPortfolioItem(userId, portfolioData) {
@@ -22,12 +23,89 @@ class PortfolioService {
         };
       }
 
-      // Validate media_url
-      if (!portfolioData.media_url || typeof portfolioData.media_url !== "string" || portfolioData.media_url.trim().length === 0) {
+      // Handle file upload - file upload takes priority over direct URL
+      let mediaUrl = null;
+      if (portfolioData.media_file) {
+        // File upload - upload to storage
+        const { url, error: uploadError } = await uploadPortfolioMediaToStorage(
+          portfolioData.media_file.buffer,
+          portfolioData.media_file.originalname,
+          portfolioData.media_file.mimetype
+        );
+
+        if (uploadError || !url) {
+          console.error(
+            "[v1/PortfolioService/createPortfolioItem] Media upload error:",
+            uploadError
+          );
+          return {
+            success: false,
+            message: uploadError || "Failed to upload media file",
+          };
+        }
+
+        mediaUrl = url;
+
+        // Validate uploaded file type matches media_type
+        const isVideo = portfolioData.media_file.mimetype.startsWith('video/');
+        const isImage = portfolioData.media_file.mimetype.startsWith('image/');
+        
+        if (mediaType === "VIDEO" && !isVideo) {
+          // Delete uploaded file if type mismatch
+          await deletePortfolioMediaFromStorage(mediaUrl);
+          return {
+            success: false,
+            message: "Uploaded file must be a video for VIDEO media_type",
+          };
+        }
+        
+        if (mediaType === "IMAGE" && !isImage) {
+          // Delete uploaded file if type mismatch
+          await deletePortfolioMediaFromStorage(mediaUrl);
+          return {
+            success: false,
+            message: "Uploaded file must be an image for IMAGE media_type",
+          };
+        }
+      } else if (portfolioData.media_url !== undefined) {
+        // Direct URL provided (no file upload)
+        if (!portfolioData.media_url || typeof portfolioData.media_url !== "string" || portfolioData.media_url.trim().length === 0) {
+          return {
+            success: false,
+            message: "media_url is required and must be a non-empty string",
+          };
+        }
+        mediaUrl = portfolioData.media_url.trim();
+      } else {
+        // Neither file nor URL provided
         return {
           success: false,
-          message: "media_url is required and must be a non-empty string",
+          message: "Either media_file or media_url must be provided",
         };
+      }
+
+      // Handle thumbnail upload
+      let thumbnailUrl = null;
+      if (portfolioData.thumbnail_file) {
+        // Thumbnail file upload - upload to storage
+        const { url, error: uploadError } = await uploadPortfolioMediaToStorage(
+          portfolioData.thumbnail_file.buffer,
+          portfolioData.thumbnail_file.originalname,
+          portfolioData.thumbnail_file.mimetype
+        );
+
+        if (uploadError || !url) {
+          console.error(
+            "[v1/PortfolioService/createPortfolioItem] Thumbnail upload error:",
+            uploadError
+          );
+          // Don't fail the entire request if thumbnail upload fails, just log it
+          console.warn("Thumbnail upload failed, continuing without thumbnail");
+        } else {
+          thumbnailUrl = url;
+        }
+      } else if (portfolioData.thumbnail_url !== undefined && portfolioData.thumbnail_url !== null) {
+        thumbnailUrl = portfolioData.thumbnail_url.trim() || null;
       }
 
       // Validate duration_seconds for VIDEO
@@ -60,8 +138,8 @@ class PortfolioService {
       const portfolioItem = {
         user_id: userId,
         media_type: mediaType,
-        media_url: portfolioData.media_url.trim(),
-        thumbnail_url: portfolioData.thumbnail_url?.trim() || null,
+        media_url: mediaUrl,
+        thumbnail_url: thumbnailUrl,
         duration_seconds: durationSeconds,
         description: portfolioData.description?.trim() || null,
         is_deleted: false,

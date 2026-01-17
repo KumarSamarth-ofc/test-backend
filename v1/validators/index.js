@@ -12,6 +12,7 @@ const paymentValidators = require("./paymentValidators");
 const mouValidators = require("./mouValidators");
 const fcmValidators = require("./fcmValidators");
 const portfolioValidators = require("./portfolioValidators");
+const panValidators = require("./panValidators");
 
 module.exports = {
   // OTP Authentication validators
@@ -32,4 +33,6 @@ module.exports = {
   ...fcmValidators,
   // Portfolio Management validators
   ...portfolioValidators,
+  // PAN Verification validators
+  ...panValidators,
 };

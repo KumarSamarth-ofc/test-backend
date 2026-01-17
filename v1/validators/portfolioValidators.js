@@ -20,13 +20,34 @@ const validateCreatePortfolio = [
       return true;
     }),
   body("media_url")
-    .notEmpty()
-    .withMessage("media_url is required")
-    .isString()
-    .isLength({ min: 1 })
-    .withMessage("media_url must be a non-empty string")
-    .isURL()
-    .withMessage("media_url must be a valid URL"),
+    .optional()
+    .custom((value, { req }) => {
+      // If media_file is provided, media_url is optional
+      // If media_file is not provided, media_url is required
+      const hasFile = req.files && req.files.media_file && req.files.media_file.length > 0;
+      const hasFileInBody = req.body.media_file !== undefined;
+      
+      if (!hasFile && !hasFileInBody) {
+        // No file provided, so media_url is required
+        if (!value || typeof value !== "string" || value.trim().length === 0) {
+          throw new Error("media_url is required when media_file is not provided");
+        }
+        // Validate URL format
+        try {
+          new URL(value);
+        } catch {
+          throw new Error("media_url must be a valid URL");
+        }
+      } else if (value !== undefined && value !== null && value !== "") {
+        // File is provided but media_url is also provided - validate URL format if provided
+        try {
+          new URL(value);
+        } catch {
+          throw new Error("media_url must be a valid URL");
+        }
+      }
+      return true;
+    }),
   body("thumbnail_url")
     .optional()
     .isString()

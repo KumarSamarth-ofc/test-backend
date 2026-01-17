@@ -12,4 +12,5 @@ module.exports = {
   PaymentService: require("./paymentService"),
   MOUService: require("./mouService"),
   PortfolioService: require("./portfolioService"),
+  PanVerificationService: require("./panVerificationService"),
 };

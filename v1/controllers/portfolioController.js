@@ -21,7 +21,15 @@ class PortfolioController {
       }
 
       const userId = req.user.id;
-      const result = await PortfolioService.createPortfolioItem(userId, req.body);
+      
+      // Prepare portfolio data - include file uploads if present
+      const portfolioData = {
+        ...req.body,
+        media_file: req.files?.media_file?.[0] || null,
+        thumbnail_file: req.files?.thumbnail_file?.[0] || null,
+      };
+      
+      const result = await PortfolioService.createPortfolioItem(userId, portfolioData);
 
       if (!result.success) {
         return res.status(result.statusCode || 400).json({
