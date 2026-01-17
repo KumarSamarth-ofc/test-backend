@@ -255,6 +255,45 @@ class FCMService {
       console.error('❌ [v1/FCM] Remove invalid token error:', error);
     }
   }
+
+  async cleanupInactiveTokens(daysInactive = 30) {
+    try {
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - daysInactive);
+
+      // First, get count of tokens to be deleted
+      const { count, error: countError } = await supabaseAdmin
+        .from('v1_fcm_tokens')
+        .select('*', { count: 'exact', head: true })
+        .eq('is_active', false)
+        .lt('last_used_at', cutoffDate.toISOString());
+
+      if (countError) {
+        console.error('❌ [v1/FCM] Cleanup count failed:', countError);
+        return { success: false, error: countError.message };
+      }
+
+      // Delete the inactive tokens
+      const { error } = await supabaseAdmin
+        .from('v1_fcm_tokens')
+        .delete()
+        .eq('is_active', false)
+        .lt('last_used_at', cutoffDate.toISOString());
+
+      if (error) {
+        console.error('❌ [v1/FCM] Cleanup failed:', error);
+        return { success: false, error: error.message };
+      }
+
+      const deletedCount = count || 0;
+      console.log(`✅ [v1/FCM] Cleaned up ${deletedCount} inactive tokens older than ${daysInactive} days`);
+
+      return { success: true, deleted: deletedCount };
+    } catch (error) {
+      console.error('❌ [v1/FCM] Cleanup error:', error);
+      return { success: false, error: error.message };
+    }
+  }
 }
 
 module.exports = new FCMService();

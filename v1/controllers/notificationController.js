@@ -181,6 +181,130 @@ class NotificationController {
       res.status(500).json({ success: false, message: 'Internal server error' });
     }
   }
+
+  async getFCMTokens(req, res) {
+    try {
+      const userId = req.user.id;
+      const result = await fcmService.getUserTokens(userId);
+
+      if (result.success) {
+        return res.json({
+          success: true,
+          tokens: result.tokens || [],
+          count: result.tokens?.length || 0,
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: 'Failed to get FCM tokens',
+        error: result.error,
+      });
+    } catch (error) {
+      console.error('[v1/NotificationController] getFCMTokens error:', error);
+      res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  async sendTestNotification(req, res) {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const userId = req.user.id;
+      const { title, body, data, clickAction, badge } = req.body;
+
+      const notification = {
+        title: title || 'Test Notification',
+        body: body || 'This is a test notification from Stoory',
+        data: data || { type: 'test' },
+        clickAction: clickAction || '/',
+        badge: badge || 1,
+      };
+
+      const result = await fcmService.sendNotificationToUser(userId, notification);
+
+      if (result.success) {
+        return res.json({
+          success: true,
+          message: 'Test notification sent',
+          sent: result.sent,
+          failed: result.failed,
+          details: result.details,
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: 'Failed to send test notification',
+        error: result.error,
+      });
+    } catch (error) {
+      console.error('[v1/NotificationController] sendTestNotification error:', error);
+      res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  async getFCMStatus(req, res) {
+    try {
+      const status = {
+        initialized: fcmService.initialized,
+        message: fcmService.initialized
+          ? 'FCM service is initialized and ready'
+          : 'FCM service is not initialized. Check Firebase credentials.',
+      };
+
+      // Optionally get user's token count
+      if (req.user) {
+        const tokensResult = await fcmService.getUserTokens(req.user.id);
+        if (tokensResult.success) {
+          status.userTokens = tokensResult.tokens?.length || 0;
+        }
+      }
+
+      return res.json({
+        success: true,
+        ...status,
+      });
+    } catch (error) {
+      console.error('[v1/NotificationController] getFCMStatus error:', error);
+      res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  async cleanupInactiveTokens(req, res) {
+    try {
+      // Check if user is admin
+      if (req.user.role !== 'ADMIN') {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. Admin role required.',
+        });
+      }
+
+      const daysInactive = parseInt(req.body.daysInactive, 10) || 30;
+      const result = await fcmService.cleanupInactiveTokens(daysInactive);
+
+      if (result.success) {
+        return res.json({
+          success: true,
+          message: 'Inactive tokens cleaned up successfully',
+          deleted: result.deleted,
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: 'Failed to cleanup inactive tokens',
+        error: result.error,
+      });
+    } catch (error) {
+      console.error('[v1/NotificationController] cleanupInactiveTokens error:', error);
+      res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
 }
 
 module.exports = new NotificationController();

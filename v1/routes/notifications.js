@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const notificationController = require('../controllers/notificationController');
 const authMiddleware = require('../middleware/authMiddleware');
-const { validateRegisterToken, validateUnregisterToken } = require('../validators');
+const { validateRegisterToken, validateUnregisterToken, validateTestNotification } = require('../validators');
 
 // Get notifications
 router.get('/', authMiddleware.authenticateToken, notificationController.getNotifications.bind(notificationController));
@@ -38,6 +38,36 @@ router.post(
   authMiddleware.authenticateToken,
   validateUnregisterToken,
   notificationController.unregisterFCMToken.bind(notificationController)
+);
+
+// Get FCM Tokens
+router.get(
+  '/fcm/tokens',
+  authMiddleware.authenticateToken,
+  notificationController.getFCMTokens.bind(notificationController)
+);
+
+// Send Test Notification
+router.post(
+  '/fcm/test',
+  authMiddleware.authenticateToken,
+  validateTestNotification,
+  notificationController.sendTestNotification.bind(notificationController)
+);
+
+// FCM Status
+router.get(
+  '/fcm/status',
+  authMiddleware.authenticateToken,
+  notificationController.getFCMStatus.bind(notificationController)
+);
+
+// Cleanup Inactive Tokens (Admin Only)
+router.post(
+  '/fcm/cleanup',
+  authMiddleware.authenticateToken,
+  authMiddleware.requireRole('ADMIN'),
+  notificationController.cleanupInactiveTokens.bind(notificationController)
 );
 
 module.exports = router;
