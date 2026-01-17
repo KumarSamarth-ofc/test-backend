@@ -4,6 +4,8 @@ module.exports = {
   ApplicationService: require("./applicationService"),
   AuthService: require("./authService"),
   ChatService: require("./chatService"),
+  NotificationService: require("./notificationService"),
+  FCMService: require("./fcmService"),
   UserService: require("./userService"),
   ProfileService: require("./profileService"),
   SubmissionService: require("./submissionService"),

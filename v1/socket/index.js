@@ -1,11 +1,23 @@
 const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
-const { ChatService } = require('../services');
+const { ChatService, NotificationService } = require('../services');
+const { supabaseAdmin } = require('../db/config');
 
 // Rate limiting: Track message counts per user
 const messageRateLimits = new Map();
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
 const MAX_MESSAGES_PER_WINDOW = 30; // Max 30 messages per minute
+
+// Cleanup rate limiting map periodically to prevent memory leaks
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, limits] of messageRateLimits.entries()) {
+    // Remove entries that are past their reset time
+    if (now > limits.resetTime) {
+      messageRateLimits.delete(userId);
+    }
+  }
+}, RATE_LIMIT_WINDOW * 2); // Cleanup every 2 minutes
 
 const initSocket = (server) => {
   const io = socketIo(server, {
@@ -23,6 +35,9 @@ const initSocket = (server) => {
     pingInterval: 25000,
     maxHttpBufferSize: 1e8 // 100MB for file uploads
   });
+
+  // Attach io to notification service
+  NotificationService.setSocketIO(io);
 
   // Authentication middleware
   io.use(async (socket, next) => {
@@ -46,15 +61,11 @@ const initSocket = (server) => {
 
   io.on('connection', (socket) => {
     console.log(`User connected: ${socket.user.id}`);
+    NotificationService.registerOnlineUser(socket.user.id, socket.id);
     
     // Track user's current room
     socket.currentRoom = null;
     socket.userId = socket.user.id;
-
-    // Cleanup rate limit on disconnect
-    socket.on('disconnect', () => {
-      messageRateLimits.delete(socket.userId);
-    });
 
     // Join chat room
     socket.on('join_chat', async ({ applicationId }) => {
@@ -228,6 +239,69 @@ const initSocket = (server) => {
       }
     });
 
+    // Mark message as read
+    socket.on('mark_read', async ({ messageId }, callback) => {
+      try {
+        if (!messageId) {
+          return socket.emit('error', { 
+            message: 'messageId is required' 
+          });
+        }
+
+        // Get the message first to find the chat room (before marking as read)
+        const { data: message, error: messageError } = await supabaseAdmin
+          .from('v1_chat_messages')
+          .select('chat_id, v1_chats(application_id)')
+          .eq('id', messageId)
+          .single();
+
+        if (messageError || !message) {
+          return socket.emit('error', { 
+            message: 'Message not found' 
+          });
+        }
+
+        // Mark message as read
+        const readReceipt = await ChatService.markMessageAsRead(
+          messageId,
+          socket.user.id
+        );
+
+        // Broadcast read receipt to room if we have the application ID
+        if (message.v1_chats && message.v1_chats.application_id) {
+          const applicationId = message.v1_chats.application_id;
+          const roomName = `app_${applicationId}`;
+
+          // Broadcast read receipt to room
+          io.to(roomName).emit('message_read', {
+            messageId,
+            userId: socket.user.id,
+            readAt: readReceipt.read_at || new Date().toISOString(),
+            timestamp: new Date().toISOString()
+          });
+        }
+
+        // Acknowledge to sender
+        if (callback) {
+          callback({ 
+            success: true, 
+            readReceipt 
+          });
+        }
+      } catch (error) {
+        console.error('Mark read error:', error);
+        socket.emit('error', { 
+          message: error.message || 'Failed to mark message as read' 
+        });
+        if (callback) {
+          callback({ 
+            success: false, 
+            error: error.message 
+          });
+        }
+      }
+    });
+
     // Leave room
     socket.on('leave_chat', () => {
       if (socket.currentRoom) {
@@ -243,6 +317,7 @@ const initSocket = (server) => {
     // Disconnect handler
     socket.on('disconnect', (reason) => {
       console.log(`User ${socket.user.id} disconnected: ${reason}`);
+      NotificationService.unregisterOnlineUser(socket.user.id, socket.id);
       
       if (socket.currentRoom) {
         socket.to(socket.currentRoom).emit('user_left', {

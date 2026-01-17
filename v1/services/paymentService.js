@@ -35,6 +35,24 @@ class PaymentService {
   }
 
   /**
+   * Convert rupees to paise (only for Razorpay API)
+   * @param {number} rupees - Amount in rupees
+   * @returns {number} Amount in paise
+   */
+  rupeesToPaise(rupees) {
+    return Math.round(parseFloat(rupees) * 100);
+  }
+
+  /**
+   * Convert paise to rupees (only from Razorpay API responses)
+   * @param {number} paise - Amount in paise
+   * @returns {number} Amount in rupees
+   */
+  paiseToRupees(paise) {
+    return parseFloat((paise / 100).toFixed(2));
+  }
+
+  /**
    * Convert Razorpay order object amounts from paise to rupees
    */
   convertRazorpayOrderToRupees(razorpayOrder) {
@@ -42,29 +60,38 @@ class PaymentService {
     
     return {
       ...razorpayOrder,
-      amount: razorpayOrder.amount ? razorpayOrder.amount / 100 : 0,
-      amount_paid: razorpayOrder.amount_paid ? razorpayOrder.amount_paid / 100 : 0,
-      amount_due: razorpayOrder.amount_due ? razorpayOrder.amount_due / 100 : 0,
+      amount: razorpayOrder.amount ? this.paiseToRupees(razorpayOrder.amount) : 0,
+      amount_paid: razorpayOrder.amount_paid ? this.paiseToRupees(razorpayOrder.amount_paid) : 0,
+      amount_due: razorpayOrder.amount_due ? this.paiseToRupees(razorpayOrder.amount_due) : 0,
     };
   }
 
   /**
    * Calculate commission and breakdown (all amounts in rupees)
+   * @param {number} amount - Total amount to calculate commission for
+   * @param {number} platformFeePercentage - Optional platform fee percentage from campaign/application
    */
-  async calculateCommissionBreakdown(amount) {
+  async calculateCommissionBreakdown(amount, platformFeePercentage = null) {
     try {
-      // Get current admin settings (non-expired)
-      const { data: adminSettings, error: commError } = await supabaseAdmin
-        .from("v1_admin_settings")
-        .select("*")
-        .eq("is_expired", false)
-        .maybeSingle();
-
-      if (commError || !adminSettings) {
-        console.warn("⚠️ No admin settings found, using default 10%");
-        var commissionPercentage = 10.0;
+      let commissionPercentage;
+      
+      if (platformFeePercentage !== null && platformFeePercentage !== undefined) {
+        // Use platform_fee_percentage from campaign/application
+        commissionPercentage = parseFloat(platformFeePercentage);
       } else {
-        var commissionPercentage = adminSettings.commission_percentage;
+        // Fallback: Get current admin settings (non-expired) - for backward compatibility
+        const { data: adminSettings, error: commError } = await supabaseAdmin
+          .from("v1_admin_settings")
+          .select("*")
+          .eq("is_expired", false)
+          .maybeSingle();
+
+        if (commError || !adminSettings) {
+          console.warn("⚠️ No admin settings found, using default 10%");
+          commissionPercentage = 10.0;
+        } else {
+          commissionPercentage = adminSettings.commission_percentage;
+        }
       }
 
       // All calculations in rupees
@@ -97,7 +124,7 @@ class PaymentService {
         };
       }
 
-      // Get application with campaign and influencer details
+      // Get application with campaign details including budget and platform_fee_percentage
       const { data: application, error: applicationError } = await supabaseAdmin
         .from("v1_applications")
         .select(`
@@ -105,7 +132,9 @@ class PaymentService {
           v1_campaigns!inner(
             id,
             brand_id,
-            title
+            title,
+            budget,
+            platform_fee_percentage
           )
         `)
         .eq("id", applicationId)
@@ -148,11 +177,50 @@ class PaymentService {
         };
       }
 
-      // Check if agreed_amount exists
-      if (!application.agreed_amount || application.agreed_amount <= 0) {
+      // Validate that campaign budget equals application budget_amount
+      const campaignBudget = application.v1_campaigns.budget;
+      const applicationBudgetAmount = application.budget_amount;
+      
+      if (campaignBudget === null || campaignBudget === undefined) {
         return {
           success: false,
-          message: "Application does not have a valid agreed amount",
+          message: "Campaign does not have a valid budget",
+        };
+      }
+
+      if (applicationBudgetAmount === null || applicationBudgetAmount === undefined) {
+        return {
+          success: false,
+          message: "Application does not have a valid budget amount",
+        };
+      }
+
+      // Validate budget matches (allow small floating point differences)
+      if (Math.abs(campaignBudget - applicationBudgetAmount) > 0.01) {
+        return {
+          success: false,
+          message: `Campaign budget (₹${campaignBudget}) does not match application budget amount (₹${applicationBudgetAmount}). Please contact support.`,
+        };
+      }
+
+      // Determine payment amount: use budget from campaign or budget_amount from application
+      // Both should be equal after validation above, but prefer campaign budget as source of truth
+      const paymentAmount = campaignBudget || applicationBudgetAmount;
+
+      if (!paymentAmount || paymentAmount <= 0) {
+        return {
+          success: false,
+          message: "Invalid payment amount. Budget must be greater than 0",
+        };
+      }
+
+      // Get platform_fee_percentage from application (which came from campaign)
+      const platformFeePercentage = application.platform_fee_percentage ?? application.v1_campaigns.platform_fee_percentage;
+
+      if (platformFeePercentage === null || platformFeePercentage === undefined) {
+        return {
+          success: false,
+          message: "Application does not have a valid platform fee percentage",
         };
       }
 
@@ -179,8 +247,8 @@ class PaymentService {
         };
       }
 
-      // Calculate commission breakdown using agreed_amount (in rupees)
-      const breakdown = await this.calculateCommissionBreakdown(application.agreed_amount);
+      // Calculate commission breakdown using payment amount (budget) and platform_fee_percentage from application
+      const breakdown = await this.calculateCommissionBreakdown(paymentAmount, platformFeePercentage);
 
       // Razorpay receipt must be <= 40 chars
       const rawReceipt = `app_${applicationId.substring(0, 20)}_${Date.now()}`;
@@ -223,7 +291,8 @@ class PaymentService {
             payer_id: userId,
             payer_role: user.role,
             payment_type: "application_payment",
-            agreed_amount: application.agreed_amount,
+            budget_amount: paymentAmount, // Store the budget amount paid
+            agreed_amount: application.agreed_amount, // Keep for reference
             commission_percentage: breakdown.commission_percentage,
             commission_amount: breakdown.commission_amount,
             net_amount: breakdown.net_amount,
@@ -349,19 +418,30 @@ class PaymentService {
       }
 
       // Verify application exists and is ACCEPTED, then transition phase after payment
+      let application = null;
       if (orderApplicationId) {
-        const { data: application, error: applicationError } = await supabaseAdmin
+        const { data: appData, error: applicationError } = await supabaseAdmin
           .from("v1_applications")
-          .select("id, phase, campaign_id")
+          .select(`
+            id, 
+            phase, 
+            campaign_id,
+            v1_campaigns!inner(
+              id,
+              brand_id
+            )
+          `)
           .eq("id", orderApplicationId)
           .single();
 
-        if (applicationError || !application) {
+        if (applicationError || !appData) {
           return {
             success: false,
             message: "Application not found",
           };
         }
+
+        application = appData;
 
         if (application.phase !== "ACCEPTED") {
           return {
@@ -422,6 +502,61 @@ class PaymentService {
         };
       }
 
+      // Insert transaction record into v1_transactions after payment verification
+      if (application && application.v1_campaigns) {
+        try {
+          const brandOwnerId = application.v1_campaigns.brand_id;
+          
+          // Get admin user ID (first admin user found, or use system admin)
+          const { data: adminUser } = await supabaseAdmin
+            .from("v1_users")
+            .select("id")
+            .eq("role", "ADMIN")
+            .eq("is_deleted", false)
+            .limit(1)
+            .maybeSingle();
+
+          // If no admin user found, use system admin ID
+          const adminUserId = adminUser?.id || process.env.SYSTEM_ADMIN_USER_ID || "00000000-0000-0000-0000-000000000000";
+
+          // Calculate amounts from payment order metadata
+          const grossAmount = paymentOrder.amount || paymentOrder.metadata?.budget_amount || 0;
+          const platformFee = paymentOrder.metadata?.commission_amount || 0;
+          const netAmount = paymentOrder.metadata?.net_amount || (grossAmount - platformFee);
+
+          // Insert transaction record
+          const { error: transactionError } = await supabaseAdmin
+            .from("v1_transactions")
+            .insert({
+              application_id: orderApplicationId,
+              type: "BRAND_PAYMENT",
+              from_entity: brandOwnerId,
+              to_entity: adminUserId,
+              gross_amount: grossAmount,
+              platform_fee: platformFee,
+              net_amount: netAmount,
+              status: "COMPLETED",
+            });
+
+          if (transactionError) {
+            console.error(
+              "[v1/PaymentService/verifyPayment] Transaction insert error:",
+              transactionError
+            );
+            // Don't fail payment verification if transaction record fails, but log it
+          }
+        } catch (txnErr) {
+          console.error(
+            "[v1/PaymentService/verifyPayment] Transaction creation exception:",
+            txnErr
+          );
+          // Don't fail payment verification if transaction record fails
+        }
+      }
+
+      // Chat creation is now handled via endpoint only: POST /api/v1/chat/:applicationId
+      // Chat should be created explicitly by calling the endpoint after payment verification
+
       return {
         success: true,
         payment_order: updatedOrder,
@@ -432,256 +567,6 @@ class PaymentService {
       return {
         success: false,
         message: "Failed to verify payment",
-        error: err.message,
-      };
-    }
-  }
-
-  /**
-   * Release payout to influencer (Admin only)
-   * Admin releases payment to influencer after keeping commission
-   */
-  async releasePayoutToInfluencer(applicationId, adminUserId) {
-    try {
-      // Get verified payment order for this application
-      const { data: paymentOrder, error: paymentsError } = await supabaseAdmin
-        .from("v1_payment_orders")
-        .select("*")
-        .eq("application_id", applicationId)
-        .eq("status", "VERIFIED")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (paymentsError) {
-        console.error(
-          "[v1/PaymentService/releasePayoutToInfluencer] Database error:",
-          paymentsError
-        );
-        return {
-          success: false,
-          message: "Failed to fetch payments",
-          error: paymentsError.message,
-        };
-      }
-
-      if (!paymentOrder) {
-        return {
-          success: false,
-          message: "No verified payment found for this application",
-        };
-      }
-
-      // Normalize status to UPPERCASE (in case of legacy lowercase values)
-      paymentOrder.status = this.normalizeStatus(paymentOrder.status) || paymentOrder.status;
-
-      // Check if payout already exists
-      const { data: existingPayout, error: payoutCheckError } = await supabaseAdmin
-        .from("v1_payouts")
-        .select("id, status")
-        .eq("application_id", applicationId)
-        .maybeSingle();
-
-      if (payoutCheckError && payoutCheckError.code !== "PGRST116") {
-        console.error(
-          "[v1/PaymentService/releasePayoutToInfluencer] Payout check error:",
-          payoutCheckError
-        );
-        return {
-          success: false,
-          message: "Failed to check existing payouts",
-          error: payoutCheckError.message,
-        };
-      }
-
-      if (existingPayout) {
-        if (existingPayout.status === "RELEASED") {
-          return {
-            success: false,
-            message: "Payout already released for this application",
-          };
-        }
-        if (existingPayout.status === "PENDING") {
-          return {
-            success: false,
-            message: "Payout already exists in PENDING status",
-          };
-        }
-      }
-
-      // Get application details
-      const { data: application, error: applicationError } = await supabaseAdmin
-        .from("v1_applications")
-        .select("id, influencer_id, phase")
-        .eq("id", applicationId)
-        .single();
-
-      if (applicationError || !application) {
-        return {
-          success: false,
-          message: "Application not found",
-        };
-      }
-
-      if (application.phase !== "COMPLETED") {
-        return {
-          success: false,
-          message: "Application must be completed before releasing payout",
-        };
-      }
-
-      // Get influencer wallet
-      const { data: wallet, error: walletError } = await supabaseAdmin
-        .from("v1_wallets")
-        .select("*")
-        .eq("user_id", application.influencer_id)
-        .maybeSingle();
-
-      if (walletError) {
-        console.error(
-          "[v1/PaymentService/releasePayoutToInfluencer] Wallet error:",
-          walletError
-        );
-        return {
-          success: false,
-          message: "Failed to fetch influencer wallet",
-          error: walletError.message,
-        };
-      }
-
-      // If wallet doesn't exist, create one
-      let influencerWallet = wallet;
-      if (!wallet) {
-        const { data: newWallet, error: createWalletError } = await supabaseAdmin
-          .from("v1_wallets")
-          .insert({
-            user_id: application.influencer_id,
-            balance: 0.0,
-          })
-          .select()
-          .single();
-
-        if (createWalletError) {
-          return {
-            success: false,
-            message: "Failed to create wallet",
-            error: createWalletError.message,
-          };
-        }
-        influencerWallet = newWallet;
-      }
-
-      // Calculate amount to release (net amount after commission, in rupees)
-      const netAmount = paymentOrder.metadata?.net_amount || paymentOrder.amount - (paymentOrder.metadata?.commission_amount || 0);
-      const currentBalance = influencerWallet.balance || 0;
-      const newBalance = currentBalance + netAmount;
-
-      // Create payout record first (status: PENDING)
-      const { data: payout, error: payoutError } = await supabaseAdmin
-        .from("v1_payouts")
-        .insert({
-          application_id: applicationId,
-          influencer_id: application.influencer_id,
-          amount: netAmount, // Store in rupees
-          status: "PENDING",
-          released_by_admin_id: adminUserId,
-        })
-        .select()
-        .single();
-
-      if (payoutError) {
-        console.error(
-          "[v1/PaymentService/releasePayoutToInfluencer] Payout creation error:",
-          payoutError
-        );
-        return {
-          success: false,
-          message: "Failed to create payout record",
-          error: payoutError.message,
-        };
-      }
-
-      // Update wallet (balance is in rupees)
-      const { error: updateWalletError } = await supabaseAdmin
-        .from("v1_wallets")
-        .update({
-          balance: newBalance,
-        })
-        .eq("id", influencerWallet.id);
-
-      if (updateWalletError) {
-        console.error(
-          "[v1/PaymentService/releasePayoutToInfluencer] Wallet update error:",
-          updateWalletError
-        );
-        // Update payout status to FAILED if wallet update fails
-        await supabaseAdmin
-          .from("v1_payouts")
-          .update({ status: "FAILED" })
-          .eq("id", payout.id);
-        return {
-          success: false,
-          message: "Failed to update wallet",
-          error: updateWalletError.message,
-        };
-      }
-
-      // Create transaction record (amount in rupees)
-      const { error: transactionError } = await supabaseAdmin
-        .from("v1_transactions")
-        .insert({
-          wallet_id: influencerWallet.id,
-          user_id: application.influencer_id,
-          amount: netAmount,
-          type: "credit",
-          status: "completed",
-          razorpay_payment_id: paymentOrder.razorpay_payment_id,
-          razorpay_order_id: paymentOrder.razorpay_order_id,
-          campaign_id: paymentOrder.metadata?.campaign_id,
-          notes: `Payout released for application ${applicationId}`,
-          balance_after: newBalance,
-        });
-
-      if (transactionError) {
-        console.error(
-          "[v1/PaymentService/releasePayoutToInfluencer] Transaction error:",
-          transactionError
-        );
-        // Don't fail if transaction record fails, payment is already processed
-      }
-
-      // Update payout status to RELEASED
-      const { data: updatedPayout, error: updatePayoutError } = await supabaseAdmin
-        .from("v1_payouts")
-        .update({
-          status: "RELEASED",
-          released_at: new Date().toISOString(),
-        })
-        .eq("id", payout.id)
-        .select()
-        .single();
-
-      if (updatePayoutError) {
-        console.error(
-          "[v1/PaymentService/releasePayoutToInfluencer] Payout update error:",
-          updatePayoutError
-        );
-        // Don't fail if payout status update fails, wallet is already updated
-      }
-
-      return {
-        success: true,
-        message: "Payout released to influencer successfully",
-        payout_amount: netAmount,
-        commission_amount: paymentOrder.metadata?.commission_amount || 0,
-        new_wallet_balance: newBalance,
-        payout: updatedPayout || payout,
-      };
-    } catch (err) {
-      console.error("[v1/PaymentService/releasePayoutToInfluencer] Exception:", err);
-      return {
-        success: false,
-        message: "Failed to release payout",
         error: err.message,
       };
     }
@@ -747,6 +632,508 @@ class PaymentService {
       return {
         success: false,
         message: "Failed to fetch payments",
+        error: err.message,
+      };
+    }
+  }
+
+  /**
+   * Create payment order for subscription
+   * Brand owner pays admin for subscription
+   * @param {string} userId - User ID
+   * @param {string} planId - Plan ID
+   * @param {string} couponCode - Optional coupon code
+   * @returns {Promise<Object>} Result with Razorpay order and payment order
+   */
+  async createSubscriptionPaymentOrder(userId, planId, couponCode = null) {
+    try {
+      if (!razorpay) {
+        return {
+          success: false,
+          message: "Payment service is not configured",
+        };
+      }
+
+      // Validate inputs
+      if (!userId || !planId) {
+        return {
+          success: false,
+          message: "userId and planId are required",
+        };
+      }
+
+      // Check if user exists
+      const { data: user, error: userError } = await supabaseAdmin
+        .from("v1_users")
+        .select("id, role")
+        .eq("id", userId)
+        .single();
+
+      if (userError || !user) {
+        return {
+          success: false,
+          message: "User not found",
+        };
+      }
+
+      // Only BRAND_OWNER can subscribe
+      if (user.role !== "BRAND_OWNER") {
+        return {
+          success: false,
+          message: "Only brand owners can create subscriptions",
+        };
+      }
+
+      // Get plan details
+      const { data: plan, error: planError } = await supabaseAdmin
+        .from("v1_plans")
+        .select("*")
+        .eq("id", planId)
+        .eq("is_active", true)
+        .single();
+
+      if (planError || !plan) {
+        return {
+          success: false,
+          message: "Plan not found or not active",
+        };
+      }
+
+      // All calculations in RUPEES
+      let finalAmountRupees = plan.price;
+      let discountAmountRupees = 0;
+      let couponData = null;
+
+      // Validate and apply coupon if provided (all in rupees)
+      if (couponCode) {
+        const CouponService = require("./couponService");
+        const couponValidation = await CouponService.validateCoupon(
+          couponCode,
+          userId,
+          plan.price // Pass in rupees
+        );
+
+        if (!couponValidation.success || !couponValidation.valid) {
+          return {
+            success: false,
+            message: couponValidation.message || "Invalid coupon code",
+          };
+        }
+
+        discountAmountRupees = couponValidation.discount_amount;
+        finalAmountRupees = couponValidation.final_amount;
+        couponData = {
+          coupon_id: couponValidation.coupon.id,
+          coupon_code: couponValidation.coupon.code,
+          discount_amount: discountAmountRupees,
+          original_amount: plan.price,
+          final_amount: finalAmountRupees,
+        };
+      }
+
+      // Check if user already has an active subscription
+      const { data: existingSubscriptions, error: existingError } =
+        await supabaseAdmin
+          .from("v1_subscriptions")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("status", "ACTIVE");
+
+      if (existingError) {
+        console.error(
+          "[v1/PaymentService/createSubscriptionPaymentOrder] Error checking existing subscription:",
+          existingError
+        );
+        return {
+          success: false,
+          message: "Failed to check existing subscriptions",
+          error: existingError.message,
+        };
+      }
+
+      if (existingSubscriptions && existingSubscriptions.length > 0) {
+        return {
+          success: false,
+          message: "User already has an active subscription",
+        };
+      }
+
+      // Check for existing pending payment order for this subscription
+      // Query payment orders with subscription payment type in metadata
+      const { data: existingPayments, error: existingPaymentError } =
+        await supabaseAdmin
+          .from("v1_payment_orders")
+          .select("id, status, metadata")
+          .is("application_id", null); // Subscription payments don't have application_id
+
+      let existingPayment = null;
+      if (existingPayments && !existingPaymentError) {
+        existingPayment = existingPayments.find(
+          (p) =>
+            p.metadata?.payment_type === "subscription_payment" &&
+            p.metadata?.plan_id === planId &&
+            p.metadata?.user_id === userId
+        );
+      }
+
+      if (existingPayment) {
+        const normalizedStatus =
+          this.normalizeStatus(existingPayment.status) ||
+          existingPayment.status;
+        if (normalizedStatus === "VERIFIED") {
+          return {
+            success: false,
+            message: "Payment already completed for this subscription",
+          };
+        }
+        return {
+          success: false,
+          message: "Payment order already exists for this subscription",
+        };
+      }
+
+      // Handle free subscriptions (amount = 0 rupees)
+      if (finalAmountRupees === 0) {
+        const SubscriptionService = require("./subscriptionService");
+        const subscriptionResult = await SubscriptionService.createSubscription(
+          userId,
+          planId,
+          false
+        );
+
+        if (!subscriptionResult.success) {
+          return {
+            success: false,
+            message: "Failed to create free subscription",
+            error: subscriptionResult.message,
+          };
+        }
+
+        // Record coupon usage if coupon was applied
+        if (couponData) {
+          const CouponService = require("./couponService");
+          await CouponService.applyCoupon(
+            couponData.coupon_id,
+            userId,
+            subscriptionResult.subscription.id,
+            couponData.original_amount, // All in rupees
+            couponData.discount_amount, // All in rupees
+            couponData.final_amount // All in rupees
+          );
+        }
+
+        return {
+          success: true,
+          order: null,
+          payment_order: null,
+          plan: plan,
+          subscription: subscriptionResult.subscription,
+          coupon: couponData,
+          message: "Free subscription created successfully",
+        };
+      }
+
+      // ONLY HERE: Convert to paise for Razorpay API (Razorpay requirement)
+      const amountInPaise = this.rupeesToPaise(finalAmountRupees);
+
+      if (amountInPaise <= 0) {
+        return {
+          success: false,
+          message: "Invalid final amount after discount",
+        };
+      }
+
+      // Razorpay receipt must be <= 40 chars
+      const rawReceipt = `sub_${planId.substring(0, 15)}_${Date.now()}`;
+      const safeReceipt = rawReceipt.substring(0, 40);
+
+      // Create Razorpay order (amount in paise - Razorpay API requirement)
+      const orderOptions = {
+        amount: amountInPaise, // Only this goes to Razorpay in paise
+        currency: "INR",
+        receipt: safeReceipt,
+        notes: {
+          user_id: userId,
+          plan_id: planId,
+          payment_type: "subscription_payment",
+          plan_name: plan.name,
+          billing_cycle: plan.billing_cycle,
+          ...(couponData && {
+            coupon_id: couponData.coupon_id,
+            coupon_code: couponData.coupon_code,
+            original_amount: couponData.original_amount.toString(), // Store as string in notes
+            discount_amount: couponData.discount_amount.toString(),
+          }),
+        },
+      };
+
+      const razorpayOrder = await razorpay.orders.create(orderOptions);
+
+      // Store payment order in database (ALL AMOUNTS IN RUPEES)
+      const { data: paymentOrder, error: orderError } = await supabaseAdmin
+        .from("v1_payment_orders")
+        .insert({
+          application_id: null, // Subscription payments don't have application_id
+          amount: finalAmountRupees, // Stored in RUPEES
+          currency: "INR",
+          status: "CREATED",
+          razorpay_order_id: razorpayOrder.id,
+          metadata: {
+            user_id: userId,
+            plan_id: planId,
+            payer_id: userId,
+            payer_role: user.role,
+            payment_type: "subscription_payment",
+            plan_name: plan.name,
+            billing_cycle: plan.billing_cycle,
+            price: plan.price, // In rupees
+            ...(couponData && {
+              coupon_id: couponData.coupon_id,
+              coupon_code: couponData.coupon_code,
+              original_amount: couponData.original_amount, // In rupees
+              discount_amount: couponData.discount_amount, // In rupees
+            }),
+          },
+        })
+        .select()
+        .single();
+
+      if (orderError) {
+        console.error(
+          "[v1/PaymentService/createSubscriptionPaymentOrder] Database error:",
+          orderError
+        );
+        return {
+          success: false,
+          message: "Failed to create payment order",
+          error: orderError.message,
+        };
+      }
+
+      // Convert Razorpay response from paise to rupees for our response
+      const orderInRupees = {
+        ...razorpayOrder,
+        amount: this.paiseToRupees(razorpayOrder.amount),
+        amount_paid: razorpayOrder.amount_paid ? this.paiseToRupees(razorpayOrder.amount_paid) : 0,
+        amount_due: razorpayOrder.amount_due ? this.paiseToRupees(razorpayOrder.amount_due) : 0,
+      };
+
+      return {
+        success: true,
+        order: orderInRupees, // All amounts converted to rupees
+        payment_order: paymentOrder, // Already in rupees
+        plan: plan,
+        coupon: couponData, // All amounts in rupees
+        message: "Subscription payment order created successfully",
+      };
+    } catch (err) {
+      console.error(
+        "[v1/PaymentService/createSubscriptionPaymentOrder] Exception:",
+        err
+      );
+      return {
+        success: false,
+        message: "Failed to create subscription payment order",
+        error: err.message,
+      };
+    }
+  }
+
+  /**
+   * Verify subscription payment and create subscription
+   * Brand owner pays admin for subscription
+   * @param {Object} paymentData - Payment verification data
+   * @returns {Promise<Object>} Result with subscription
+   */
+  async verifySubscriptionPayment(paymentData) {
+    try {
+      const {
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature,
+        plan_id,
+      } = paymentData;
+
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return {
+          success: false,
+          message: "Missing required payment information",
+        };
+      }
+
+      // Verify payment signature
+      const text = `${razorpay_order_id}|${razorpay_payment_id}`;
+      const expectedSignature = crypto
+        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+        .update(text)
+        .digest("hex");
+
+      if (razorpay_signature !== expectedSignature) {
+        return {
+          success: false,
+          message: "Invalid payment signature",
+        };
+      }
+
+      // Get payment order
+      const { data: paymentOrder, error: orderError } = await supabaseAdmin
+        .from("v1_payment_orders")
+        .select("*")
+        .eq("razorpay_order_id", razorpay_order_id)
+        .single();
+
+      if (orderError || !paymentOrder) {
+        return {
+          success: false,
+          message: "Payment order not found",
+        };
+      }
+
+      // Check if it's a subscription payment
+      if (
+        !paymentOrder.metadata ||
+        paymentOrder.metadata.payment_type !== "subscription_payment"
+      ) {
+        return {
+          success: false,
+          message: "Invalid payment order type",
+        };
+      }
+
+      // Normalize status
+      paymentOrder.status =
+        this.normalizeStatus(paymentOrder.status) || paymentOrder.status;
+
+      // Check if payment already verified
+      if (paymentOrder.status === "VERIFIED") {
+        return {
+          success: false,
+          message: "Payment already verified",
+        };
+      }
+
+      // Check for duplicate payment
+      const { data: existingPayment } = await supabaseAdmin
+        .from("v1_payment_orders")
+        .select("id")
+        .eq("razorpay_payment_id", razorpay_payment_id)
+        .maybeSingle();
+
+      if (existingPayment && existingPayment.id !== paymentOrder.id) {
+        return {
+          success: false,
+          message: "Payment already processed",
+        };
+      }
+
+      // Get plan_id from payment order metadata
+      const orderPlanId = paymentOrder.metadata.plan_id;
+      const userId = paymentOrder.metadata.user_id;
+
+      // Validate plan_id matches if provided
+      if (plan_id && plan_id !== orderPlanId) {
+        return {
+          success: false,
+          message: "Plan ID mismatch with payment order",
+        };
+      }
+
+      // Update payment order status
+      const { error: updateError } = await supabaseAdmin
+        .from("v1_payment_orders")
+        .update({
+          status: "VERIFIED",
+          razorpay_payment_id: razorpay_payment_id,
+          razorpay_signature: razorpay_signature,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", paymentOrder.id);
+
+      if (updateError) {
+        console.error(
+          "[v1/PaymentService/verifySubscriptionPayment] Update error:",
+          updateError
+        );
+        return {
+          success: false,
+          message: "Failed to update payment order",
+          error: updateError.message,
+        };
+      }
+
+      // Create subscription using SubscriptionService
+      const SubscriptionService = require("./subscriptionService");
+      const subscriptionResult = await SubscriptionService.createSubscription(
+        userId,
+        orderPlanId,
+        false // is_auto_renew - can be made configurable
+      );
+
+      if (!subscriptionResult.success) {
+        // Payment is verified but subscription creation failed
+        // This is a critical error - payment is done but subscription not created
+        console.error(
+          "[v1/PaymentService/verifySubscriptionPayment] Subscription creation failed after payment:",
+          subscriptionResult
+        );
+        return {
+          success: false,
+          message:
+            "Payment verified but subscription creation failed. Please contact support.",
+          error: subscriptionResult.message,
+        };
+      }
+
+      // Record coupon usage if coupon was applied
+      const couponData = paymentOrder.metadata?.coupon_id
+        ? {
+            coupon_id: paymentOrder.metadata.coupon_id,
+            coupon_code: paymentOrder.metadata.coupon_code,
+            original_amount: paymentOrder.metadata.original_amount || paymentOrder.metadata.price,
+            discount_amount: paymentOrder.metadata.discount_amount || 0,
+            final_amount: paymentOrder.amount,
+          }
+        : null;
+
+      if (couponData) {
+        const CouponService = require("./couponService");
+        const couponResult = await CouponService.applyCoupon(
+          couponData.coupon_id,
+          userId,
+          subscriptionResult.subscription.id,
+          couponData.original_amount, // All in rupees
+          couponData.discount_amount, // All in rupees
+          couponData.final_amount // All in rupees
+        );
+
+        if (!couponResult.success) {
+          console.error(
+            "[v1/PaymentService/verifySubscriptionPayment] Failed to record coupon usage:",
+            couponResult
+          );
+          // Don't fail the payment if coupon recording fails, but log it
+        }
+      }
+
+      return {
+        success: true,
+        message: "Payment verified and subscription created successfully",
+        payment_order: {
+          ...paymentOrder,
+          status: "VERIFIED",
+          razorpay_payment_id: razorpay_payment_id,
+        },
+        subscription: subscriptionResult.subscription,
+        coupon: couponData,
+      };
+    } catch (err) {
+      console.error(
+        "[v1/PaymentService/verifySubscriptionPayment] Exception:",
+        err
+      );
+      return {
+        success: false,
+        message: "Failed to verify subscription payment",
         error: err.message,
       };
     }

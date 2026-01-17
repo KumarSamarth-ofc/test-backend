@@ -152,79 +152,6 @@ class PaymentController {
   }
 
   /**
-   * Release payout to influencer (Admin only)
-   * POST /api/v1/payments/applications/:applicationId/release
-   */
-  async releasePayout(req, res) {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-      }
-
-      const applicationId = req.params.applicationId;
-      const userId = req.user.id;
-
-      // Verify user is admin
-      const { supabaseAdmin } = require("../db/config");
-      const { data: user, error: userError } = await supabaseAdmin
-        .from("v1_users")
-        .select("id, role")
-        .eq("id", userId)
-        .single();
-
-      if (userError || !user) {
-        return res.status(404).json({
-          success: false,
-          message: "User not found",
-        });
-      }
-
-      if (user.role !== "ADMIN") {
-        return res.status(403).json({
-          success: false,
-          message: "Only admin can release payouts",
-        });
-      }
-
-      const result = await PaymentService.releasePayoutToInfluencer(applicationId, userId);
-
-      if (!result.success) {
-        const statusCode =
-          result.message === "Application not found" ||
-          result.message === "No verified payment found for this application"
-            ? 404
-            : result.message === "Payout already released for this application" ||
-              result.message === "Payout already exists in PENDING status" ||
-              result.message === "Application must be completed before releasing payout"
-            ? 400
-            : 500;
-        return res.status(statusCode).json({
-          success: false,
-          message: result.message || "Failed to release payout",
-          error: result.error,
-        });
-      }
-
-      return res.status(200).json({
-        success: true,
-        message: result.message || "Payout released successfully",
-        payout_amount: result.payout_amount,
-        commission_amount: result.commission_amount,
-        new_wallet_balance: result.new_wallet_balance,
-        payout: result.payout,
-      });
-    } catch (err) {
-      console.error("[v1/PaymentController/releasePayout] Exception:", err);
-      return res.status(500).json({
-        success: false,
-        message: "Internal server error",
-        error: err.message,
-      });
-    }
-  }
-
-  /**
    * Get payments for an application
    * GET /api/v1/payments/applications/:applicationId
    */
@@ -301,6 +228,96 @@ class PaymentController {
       });
     } catch (err) {
       console.error("[v1/PaymentController/getApplicationPayments] Exception:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: err.message,
+      });
+    }
+  }
+
+  /**
+   * Get transactions for a brand owner
+   * GET /api/v1/payments/transactions
+   */
+  async getBrandTransactions(req, res) {
+    try {
+      const userId = req.user.id;
+      const { type, status, limit = 50, offset = 0 } = req.query;
+
+      // Verify user is a brand owner
+      const { supabaseAdmin } = require("../db/config");
+      const { data: user, error: userError } = await supabaseAdmin
+        .from("v1_users")
+        .select("id, role")
+        .eq("id", userId)
+        .single();
+
+      if (userError || !user) {
+        return res.status(404).json({
+          success: false,
+          message: "User not found",
+        });
+      }
+
+      // Check if user is brand owner or admin
+      if (user.role !== "BRAND_OWNER" && user.role !== "ADMIN") {
+        return res.status(403).json({
+          success: false,
+          message: "Only brand owners and admins can view transactions",
+        });
+      }
+
+      // Build query
+      let query = supabaseAdmin
+        .from("v1_transactions")
+        .select(`
+          *,
+          v1_applications(
+            id,
+            phase,
+            v1_campaigns(
+              id,
+              title,
+              brand_id
+            )
+          )
+        `)
+        .eq("from_entity", userId) // Brand owner is the from_entity
+        .order("created_at", { ascending: false })
+        .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+
+      // Apply filters
+      if (type) {
+        query = query.eq("type", type);
+      }
+      if (status) {
+        query = query.eq("status", status);
+      }
+
+      const { data: transactions, error, count } = await query;
+
+      if (error) {
+        console.error("[v1/PaymentController/getBrandTransactions] Database error:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch transactions",
+          error: error.message,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Transactions fetched successfully",
+        transactions: transactions || [],
+        pagination: {
+          limit: parseInt(limit),
+          offset: parseInt(offset),
+          count: transactions?.length || 0,
+        },
+      });
+    } catch (err) {
+      console.error("[v1/PaymentController/getBrandTransactions] Exception:", err);
       return res.status(500).json({
         success: false,
         message: "Internal server error",

@@ -33,6 +33,10 @@ router.use('/plans', planRoutes); // → /api/v1/plans/*
 const paymentRoutes = require('./payments');
 router.use('/payments', paymentRoutes); // → /api/v1/payments/*
 
+// Mount v1 notification routes
+const notificationRoutes = require('./notifications');
+router.use('/notifications', notificationRoutes); // → /api/v1/notifications/*
+
 // Mount v1 subscription routes
 const subscriptionRoutes = require('./subscriptions');
 router.use('/subscriptions', subscriptionRoutes); // → /api/v1/subscriptions/*
@@ -48,5 +52,9 @@ router.use('/mous', mouRoutes); // → /api/v1/mous/*
 // Mount v1 admin settings routes
 const adminSettingsRoutes = require('./adminSettings');
 router.use('/admin/settings', adminSettingsRoutes); // → /api/v1/admin/settings/*
+
+// Mount v1 coupon routes
+const couponRoutes = require('./coupons');
+router.use('/coupons', couponRoutes); // → /api/v1/coupons/*
 
 module.exports = router;
