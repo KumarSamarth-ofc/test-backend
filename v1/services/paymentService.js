@@ -35,6 +35,24 @@ class PaymentService {
   }
 
   /**
+   * Convert rupees to paise (only for Razorpay API)
+   * @param {number} rupees - Amount in rupees
+   * @returns {number} Amount in paise
+   */
+  rupeesToPaise(rupees) {
+    return Math.round(parseFloat(rupees) * 100);
+  }
+
+  /**
+   * Convert paise to rupees (only from Razorpay API responses)
+   * @param {number} paise - Amount in paise
+   * @returns {number} Amount in rupees
+   */
+  paiseToRupees(paise) {
+    return parseFloat((paise / 100).toFixed(2));
+  }
+
+  /**
    * Convert Razorpay order object amounts from paise to rupees
    */
   convertRazorpayOrderToRupees(razorpayOrder) {
@@ -42,9 +60,9 @@ class PaymentService {
     
     return {
       ...razorpayOrder,
-      amount: razorpayOrder.amount ? razorpayOrder.amount / 100 : 0,
-      amount_paid: razorpayOrder.amount_paid ? razorpayOrder.amount_paid / 100 : 0,
-      amount_due: razorpayOrder.amount_due ? razorpayOrder.amount_due / 100 : 0,
+      amount: razorpayOrder.amount ? this.paiseToRupees(razorpayOrder.amount) : 0,
+      amount_paid: razorpayOrder.amount_paid ? this.paiseToRupees(razorpayOrder.amount_paid) : 0,
+      amount_due: razorpayOrder.amount_due ? this.paiseToRupees(razorpayOrder.amount_due) : 0,
     };
   }
 
@@ -624,9 +642,10 @@ class PaymentService {
    * Brand owner pays admin for subscription
    * @param {string} userId - User ID
    * @param {string} planId - Plan ID
+   * @param {string} couponCode - Optional coupon code
    * @returns {Promise<Object>} Result with Razorpay order and payment order
    */
-  async createSubscriptionPaymentOrder(userId, planId) {
+  async createSubscriptionPaymentOrder(userId, planId, couponCode = null) {
     try {
       if (!razorpay) {
         return {
@@ -677,6 +696,38 @@ class PaymentService {
         return {
           success: false,
           message: "Plan not found or not active",
+        };
+      }
+
+      // All calculations in RUPEES
+      let finalAmountRupees = plan.price;
+      let discountAmountRupees = 0;
+      let couponData = null;
+
+      // Validate and apply coupon if provided (all in rupees)
+      if (couponCode) {
+        const CouponService = require("./couponService");
+        const couponValidation = await CouponService.validateCoupon(
+          couponCode,
+          userId,
+          plan.price // Pass in rupees
+        );
+
+        if (!couponValidation.success || !couponValidation.valid) {
+          return {
+            success: false,
+            message: couponValidation.message || "Invalid coupon code",
+          };
+        }
+
+        discountAmountRupees = couponValidation.discount_amount;
+        finalAmountRupees = couponValidation.final_amount;
+        couponData = {
+          coupon_id: couponValidation.coupon.id,
+          coupon_code: couponValidation.coupon.code,
+          discount_amount: discountAmountRupees,
+          original_amount: plan.price,
+          final_amount: finalAmountRupees,
         };
       }
 
@@ -741,13 +792,54 @@ class PaymentService {
         };
       }
 
-      // Convert price to paise for Razorpay
-      const amountInPaise = Math.round(plan.price * 100);
+      // Handle free subscriptions (amount = 0 rupees)
+      if (finalAmountRupees === 0) {
+        const SubscriptionService = require("./subscriptionService");
+        const subscriptionResult = await SubscriptionService.createSubscription(
+          userId,
+          planId,
+          false
+        );
+
+        if (!subscriptionResult.success) {
+          return {
+            success: false,
+            message: "Failed to create free subscription",
+            error: subscriptionResult.message,
+          };
+        }
+
+        // Record coupon usage if coupon was applied
+        if (couponData) {
+          const CouponService = require("./couponService");
+          await CouponService.applyCoupon(
+            couponData.coupon_id,
+            userId,
+            subscriptionResult.subscription.id,
+            couponData.original_amount, // All in rupees
+            couponData.discount_amount, // All in rupees
+            couponData.final_amount // All in rupees
+          );
+        }
+
+        return {
+          success: true,
+          order: null,
+          payment_order: null,
+          plan: plan,
+          subscription: subscriptionResult.subscription,
+          coupon: couponData,
+          message: "Free subscription created successfully",
+        };
+      }
+
+      // ONLY HERE: Convert to paise for Razorpay API (Razorpay requirement)
+      const amountInPaise = this.rupeesToPaise(finalAmountRupees);
 
       if (amountInPaise <= 0) {
         return {
           success: false,
-          message: "Invalid plan price",
+          message: "Invalid final amount after discount",
         };
       }
 
@@ -755,9 +847,9 @@ class PaymentService {
       const rawReceipt = `sub_${planId.substring(0, 15)}_${Date.now()}`;
       const safeReceipt = rawReceipt.substring(0, 40);
 
-      // Create Razorpay order
+      // Create Razorpay order (amount in paise - Razorpay API requirement)
       const orderOptions = {
-        amount: amountInPaise,
+        amount: amountInPaise, // Only this goes to Razorpay in paise
         currency: "INR",
         receipt: safeReceipt,
         notes: {
@@ -766,17 +858,23 @@ class PaymentService {
           payment_type: "subscription_payment",
           plan_name: plan.name,
           billing_cycle: plan.billing_cycle,
+          ...(couponData && {
+            coupon_id: couponData.coupon_id,
+            coupon_code: couponData.coupon_code,
+            original_amount: couponData.original_amount.toString(), // Store as string in notes
+            discount_amount: couponData.discount_amount.toString(),
+          }),
         },
       };
 
       const razorpayOrder = await razorpay.orders.create(orderOptions);
 
-      // Store payment order in database (amount in rupees)
+      // Store payment order in database (ALL AMOUNTS IN RUPEES)
       const { data: paymentOrder, error: orderError } = await supabaseAdmin
         .from("v1_payment_orders")
         .insert({
           application_id: null, // Subscription payments don't have application_id
-          amount: plan.price,
+          amount: finalAmountRupees, // Stored in RUPEES
           currency: "INR",
           status: "CREATED",
           razorpay_order_id: razorpayOrder.id,
@@ -788,7 +886,13 @@ class PaymentService {
             payment_type: "subscription_payment",
             plan_name: plan.name,
             billing_cycle: plan.billing_cycle,
-            price: plan.price,
+            price: plan.price, // In rupees
+            ...(couponData && {
+              coupon_id: couponData.coupon_id,
+              coupon_code: couponData.coupon_code,
+              original_amount: couponData.original_amount, // In rupees
+              discount_amount: couponData.discount_amount, // In rupees
+            }),
           },
         })
         .select()
@@ -806,14 +910,20 @@ class PaymentService {
         };
       }
 
-      // Convert Razorpay order amounts from paise to rupees
-      const orderInRupees = this.convertRazorpayOrderToRupees(razorpayOrder);
+      // Convert Razorpay response from paise to rupees for our response
+      const orderInRupees = {
+        ...razorpayOrder,
+        amount: this.paiseToRupees(razorpayOrder.amount),
+        amount_paid: razorpayOrder.amount_paid ? this.paiseToRupees(razorpayOrder.amount_paid) : 0,
+        amount_due: razorpayOrder.amount_due ? this.paiseToRupees(razorpayOrder.amount_due) : 0,
+      };
 
       return {
         success: true,
-        order: orderInRupees,
-        payment_order: paymentOrder,
+        order: orderInRupees, // All amounts converted to rupees
+        payment_order: paymentOrder, // Already in rupees
         plan: plan,
+        coupon: couponData, // All amounts in rupees
         message: "Subscription payment order created successfully",
       };
     } catch (err) {
@@ -974,6 +1084,37 @@ class PaymentService {
         };
       }
 
+      // Record coupon usage if coupon was applied
+      const couponData = paymentOrder.metadata?.coupon_id
+        ? {
+            coupon_id: paymentOrder.metadata.coupon_id,
+            coupon_code: paymentOrder.metadata.coupon_code,
+            original_amount: paymentOrder.metadata.original_amount || paymentOrder.metadata.price,
+            discount_amount: paymentOrder.metadata.discount_amount || 0,
+            final_amount: paymentOrder.amount,
+          }
+        : null;
+
+      if (couponData) {
+        const CouponService = require("./couponService");
+        const couponResult = await CouponService.applyCoupon(
+          couponData.coupon_id,
+          userId,
+          subscriptionResult.subscription.id,
+          couponData.original_amount, // All in rupees
+          couponData.discount_amount, // All in rupees
+          couponData.final_amount // All in rupees
+        );
+
+        if (!couponResult.success) {
+          console.error(
+            "[v1/PaymentService/verifySubscriptionPayment] Failed to record coupon usage:",
+            couponResult
+          );
+          // Don't fail the payment if coupon recording fails, but log it
+        }
+      }
+
       return {
         success: true,
         message: "Payment verified and subscription created successfully",
@@ -983,6 +1124,7 @@ class PaymentService {
           razorpay_payment_id: razorpay_payment_id,
         },
         subscription: subscriptionResult.subscription,
+        coupon: couponData,
       };
     } catch (err) {
       console.error(

@@ -53,4 +53,8 @@ router.use('/mous', mouRoutes); // → /api/v1/mous/*
 const adminSettingsRoutes = require('./adminSettings');
 router.use('/admin/settings', adminSettingsRoutes); // → /api/v1/admin/settings/*
 
+// Mount v1 coupon routes
+const couponRoutes = require('./coupons');
+router.use('/coupons', couponRoutes); // → /api/v1/coupons/*
+
 module.exports = router;

@@ -24,6 +24,14 @@ const validateSubscriptionPaymentOrder = [
     .withMessage("plan_id is required")
     .isUUID()
     .withMessage("plan_id must be a valid UUID"),
+
+  body("coupon_code")
+    .optional()
+    .isString()
+    .withMessage("coupon_code must be a string")
+    .trim()
+    .isLength({ min: 1, max: 50 })
+    .withMessage("coupon_code must be between 1 and 50 characters"),
 ];
 
 const validateVerifySubscriptionPayment = [
@@ -49,6 +57,11 @@ const validateVerifySubscriptionPayment = [
     .optional()
     .isUUID()
     .withMessage("plan_id must be a valid UUID"),
+  body("coupon_code")
+    .optional()
+    .isString()
+    .withMessage("coupon_code must be a string")
+    .trim(),
 ];
 
 module.exports = {

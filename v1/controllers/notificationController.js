@@ -1,5 +1,7 @@
+const { validationResult } = require('express-validator');
 const NotificationService = require('../services/notificationService');
 const { supabaseAdmin } = require('../db/config');
+const fcmService = require('../services/fcmService');
 
 class NotificationController {
   async getNotifications(req, res) {
@@ -115,6 +117,67 @@ class NotificationController {
       res.json({ success: true, message: 'Notification retry initiated', data: retryResult });
     } catch (error) {
       console.error('[v1/NotificationController] retryNotification error:', error);
+      res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  async registerFCMToken(req, res) {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const userId = req.user.id;
+      const { token, device_type = 'unknown', device_id } = req.body;
+
+      const result = await fcmService.registerToken(userId, token, device_type, device_id);
+
+      if (result.success) {
+        return res.json({
+          success: true,
+          message: 'FCM token registered successfully',
+          data: result.data,
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: 'Failed to register FCM token',
+        error: result.error,
+      });
+    } catch (error) {
+      console.error('[v1/NotificationController] registerFCMToken error:', error);
+      res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  async unregisterFCMToken(req, res) {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const userId = req.user.id;
+      const { token } = req.body;
+
+      const result = await fcmService.unregisterToken(userId, token);
+
+      if (result.success) {
+        return res.json({
+          success: true,
+          message: 'FCM token unregistered successfully',
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: 'Failed to unregister FCM token',
+        error: result.error,
+      });
+    } catch (error) {
+      console.error('[v1/NotificationController] unregisterFCMToken error:', error);
       res.status(500).json({ success: false, message: 'Internal server error' });
     }
   }

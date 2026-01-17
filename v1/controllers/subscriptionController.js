@@ -113,12 +113,13 @@ class SubscriptionController {
       }
 
       const userId = req.user.id;
-      const { plan_id } = req.body;
+      const { plan_id, coupon_code } = req.body;
 
       const PaymentService = require("../services/paymentService");
       const result = await PaymentService.createSubscriptionPaymentOrder(
         userId,
-        plan_id
+        plan_id,
+        coupon_code || null
       );
 
       if (!result.success) {
@@ -131,7 +132,9 @@ class SubscriptionController {
             : result.message === "User already has an active subscription" ||
               result.message === "Payment already completed for this subscription" ||
               result.message === "Payment order already exists for this subscription" ||
-              result.message === "Only brand owners can create subscriptions"
+              result.message === "Only brand owners can create subscriptions" ||
+              result.message.includes("Invalid coupon") ||
+              result.message.includes("Coupon")
             ? 400
             : 500;
 
@@ -148,6 +151,8 @@ class SubscriptionController {
         order: result.order,
         payment_order: result.payment_order,
         plan: result.plan,
+        coupon: result.coupon,
+        subscription: result.subscription, // For free subscriptions
       });
     } catch (err) {
       console.error(
@@ -215,6 +220,7 @@ class SubscriptionController {
           "Payment verified and subscription created successfully",
         payment_order: result.payment_order,
         subscription: result.subscription,
+        coupon: result.coupon,
       });
     } catch (err) {
       console.error(
