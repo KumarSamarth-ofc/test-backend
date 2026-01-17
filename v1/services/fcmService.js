@@ -220,7 +220,7 @@ class FCMService {
 
     for (let i = 0; i < tokens.length; i++) {
       try {
-        await admin.messaging().send({
+        await this.app.messaging().send({
           token: tokens[i],
           ...message,
         });
