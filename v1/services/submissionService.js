@@ -586,7 +586,8 @@ class SubmissionService {
                     application_id: application.id,
                     influencer_id: applicationDetails.influencer_id,
                     amount: payoutAmount,
-                    status: 'PENDING'
+                    status: 'PENDING',
+                    created_at: new Date().toISOString()
                   });
 
                 if (payoutError) {

@@ -23,12 +23,20 @@ router.get(
   PayoutController.getApplicationPayouts
 );
 
-// Release payout to influencer (Admin only)
+// Create payment order for payout (Admin only) - Must come before /:payoutId route
 router.post(
-  '/:payoutId/release',
+  '/:payoutId/pay',
   authMiddleware.authenticateToken,
   authMiddleware.requireRole('ADMIN'),
-  PayoutController.releasePayout
+  PayoutController.createPayoutPaymentOrder
+);
+
+// Verify payout payment (Admin only)
+router.post(
+  '/pay/verify',
+  authMiddleware.authenticateToken,
+  authMiddleware.requireRole('ADMIN'),
+  PayoutController.verifyPayoutPayment
 );
 
 // Get payout status - Must come last as it matches any string

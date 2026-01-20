@@ -2,11 +2,11 @@ const PayoutService = require('../services/payoutService');
 
 class PayoutController {
   /**
-   * Release payout to influencer (Admin only)
-   * UPI ID is automatically fetched from v1_users table
-   * POST /api/v1/payouts/:payoutId/release
+   * Create payment order for payout (Admin only)
+   * Admin creates Razorpay order to pay for the payout
+   * POST /api/v1/payouts/:payoutId/pay
    */
-  async releasePayout(req, res) {
+  async createPayoutPaymentOrder(req, res) {
     try {
       const { payoutId } = req.params;
       const adminId = req.user.id;
@@ -14,11 +14,11 @@ class PayoutController {
       if (req.user.role !== 'ADMIN') {
         return res.status(403).json({
           success: false,
-          message: 'Only admins can release payouts',
+          message: 'Only admins can pay payouts',
         });
       }
 
-      const result = await PayoutService.releasePayout(payoutId, adminId);
+      const result = await PayoutService.createPayoutPaymentOrder(payoutId, adminId);
 
       if (!result.success) {
         return res.status(400).json(result);
@@ -26,10 +26,42 @@ class PayoutController {
 
       res.json(result);
     } catch (err) {
-      console.error('[PayoutController/releasePayout] Exception:', err);
+      console.error('[PayoutController/createPayoutPaymentOrder] Exception:', err);
       res.status(500).json({
         success: false,
-        message: err.message || 'Failed to release payout',
+        message: err.message || 'Failed to create payout payment order',
+      });
+    }
+  }
+
+  /**
+   * Verify payout payment (Admin only)
+   * Admin verifies the Razorpay payment after completing checkout
+   * POST /api/v1/payouts/pay/verify
+   */
+  async verifyPayoutPayment(req, res) {
+    try {
+      const adminId = req.user.id;
+
+      if (req.user.role !== 'ADMIN') {
+        return res.status(403).json({
+          success: false,
+          message: 'Only admins can verify payout payments',
+        });
+      }
+
+      const result = await PayoutService.verifyPayoutPayment(req.body, adminId);
+
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      res.json(result);
+    } catch (err) {
+      console.error('[PayoutController/verifyPayoutPayment] Exception:', err);
+      res.status(500).json({
+        success: false,
+        message: err.message || 'Failed to verify payout payment',
       });
     }
   }

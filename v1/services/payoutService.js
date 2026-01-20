@@ -1,5 +1,6 @@
 const { supabaseAdmin } = require('../db/config');
 const Razorpay = require('razorpay');
+const crypto = require('crypto');
 
 // Initialize Razorpay
 let razorpay = null;
@@ -13,6 +14,18 @@ if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
 }
 
 class PayoutService {
+  /**
+   * Normalize date value to ISO string
+   */
+  toISO(dateVal) {
+    if (!dateVal) return null;
+    try {
+      return new Date(dateVal).toISOString();
+    } catch (e) {
+      return null;
+    }
+  }
+
   /**
    * Convert rupees to paise (for Razorpay API)
    */
@@ -28,12 +41,12 @@ class PayoutService {
   }
 
   /**
-   * Release payout to influencer using Razorpay (Admin only)
-   * UPI ID is automatically fetched from v1_users table
+   * Create Razorpay payment order for payout (Admin pays for payout)
+   * Similar to application payments - admin creates order and pays via Razorpay checkout
    * @param {string} payoutId - Payout ID
    * @param {string} adminId - Admin user ID
    */
-  async releasePayout(payoutId, adminId) {
+  async createPayoutPaymentOrder(payoutId, adminId) {
     try {
       if (!razorpay) {
         return {
@@ -50,8 +63,6 @@ class PayoutService {
           v1_applications!inner(
             id,
             phase,
-            agreed_amount,
-            platform_fee_amount,
             influencer_id
           )
         `)
@@ -69,7 +80,7 @@ class PayoutService {
       if (payout.v1_applications.phase !== 'COMPLETED') {
         return {
           success: false,
-          message: 'Application must be completed before releasing payout',
+          message: 'Application must be completed before paying payout',
         };
       }
 
@@ -81,225 +92,312 @@ class PayoutService {
         };
       }
 
-      // Allow retrying failed payouts - just log a warning
-      if (payout.status === 'FAILED') {
-        console.warn('[PayoutService/releasePayout] Retrying payout that previously failed:', payoutId);
+      // Validate payout amount
+      const amountRupees = payout.amount;
+      if (!amountRupees || amountRupees <= 0) {
+        return {
+          success: false,
+          message: 'Invalid payout amount',
+        };
       }
 
-      // Get influencer user details including UPI ID
-      const { data: influencerUser, error: userError } = await supabaseAdmin
-        .from('v1_users')
-        .select('id, name, email, phone_number, upi_id')
-        .eq('id', payout.influencer_id)
+      // Check if payment order already exists for this payout
+      const { data: existingOrder } = await supabaseAdmin
+        .from('v1_payment_orders')
+        .select('id, status')
+        .eq('metadata->>payout_id', payoutId)
         .maybeSingle();
 
-      if (userError) {
-        console.error('[PayoutService/releasePayout] User fetch error:', userError);
+      if (existingOrder) {
+        const normalizedStatus = (existingOrder.status || '').toUpperCase();
+        if (normalizedStatus === 'VERIFIED') {
+          return {
+            success: false,
+            message: 'Payout payment already completed',
+          };
+        }
         return {
           success: false,
-          message: 'Failed to fetch influencer details',
-          error: userError.message,
+          message: 'Payout payment order already exists',
         };
       }
 
-      if (!influencerUser) {
-        return {
-          success: false,
-          message: 'Influencer not found',
-        };
-      }
+      // Convert to paise ONLY for Razorpay API (Razorpay requires amounts in paise)
+      const amountInPaise = this.rupeesToPaise(amountRupees);
 
-      // Check if UPI ID exists
-      if (!influencerUser.upi_id) {
-        return {
-          success: false,
-          message: 'Influencer UPI ID not found. Please ask the influencer to add their UPI ID in their profile.',
-        };
-      }
+      // Razorpay receipt must be <= 40 chars
+      const rawReceipt = `pout_${payoutId.substring(0, 20)}_${Date.now()}`;
+      const safeReceipt = rawReceipt.substring(0, 40);
 
-      // Prepare Razorpay payout request using UPI via Fund Account
-      const amountInPaise = this.rupeesToPaise(payout.amount);
-
-      // Validate required env for payouts
-      if (!process.env.RAZORPAY_ACCOUNT_NUMBER) {
-        return {
-          success: false,
-          message: 'Payment service is not configured (missing RAZORPAY_ACCOUNT_NUMBER)',
-        };
-      }
-
-      // Create Razorpay Contact (required for fund account)
-      let contact;
-      try {
-        contact = await razorpay.contacts.create({
-          name: influencerUser.name || 'Influencer',
-          email: influencerUser.email || undefined,
-          contact: influencerUser.phone_number || undefined,
-          type: 'employee',
-          reference_id: payout.influencer_id,
-          notes: {
-            influencer_id: payout.influencer_id,
-            application_id: payout.application_id,
-            payout_id: payout.id,
-          },
-        });
-      } catch (razorpayError) {
-        console.error('[PayoutService/releasePayout] Razorpay contact error:', razorpayError);
-        return {
-          success: false,
-          message: razorpayError.error?.description || 'Failed to create Razorpay contact',
-          error: razorpayError.error,
-        };
-      }
-
-      // Create Razorpay Fund Account (VPA)
-      let fundAccount;
-      try {
-        fundAccount = await razorpay.fundAccount.create({
-          contact_id: contact.id,
-          account_type: 'vpa',
-          vpa: {
-            address: influencerUser.upi_id,
-          },
-        });
-      } catch (razorpayError) {
-        console.error('[PayoutService/releasePayout] Razorpay fund account error:', razorpayError);
-        const errorMessage = razorpayError.error?.description || razorpayError.message || 'Failed to create Razorpay fund account';
-        return {
-          success: false,
-          message: errorMessage,
-          error: razorpayError.error || razorpayError,
-          contact_id: contact.id,
-        };
-      }
-
-      const payoutRequest = {
-        account_number: process.env.RAZORPAY_ACCOUNT_NUMBER, // Your Razorpay account number
-        fund_account_id: fundAccount.id,
-        amount: amountInPaise,
+      // Create Razorpay order (amount in paise - Razorpay API requirement)
+      const orderOptions = {
+        amount: amountInPaise, // Razorpay API requires paise
         currency: 'INR',
-        mode: 'UPI', // UPI mode for instant payout
-        purpose: 'payout',
-        queue_if_low_balance: true,
-        reference_id: `payout_${payout.id}_${Date.now()}`,
-        narration: `Payout for application ${payout.application_id}`,
+        receipt: safeReceipt,
         notes: {
-          application_id: payout.application_id,
+          payout_id: payoutId,
           influencer_id: payout.influencer_id,
-          payout_id: payout.id,
-          released_by: adminId,
+          application_id: payout.application_id,
+          payer_id: adminId,
+          payment_type: 'payout_payment',
         },
       };
 
-      // Create Razorpay payout
-      let razorpayPayout;
-      try {
-        razorpayPayout = await razorpay.payouts.create(payoutRequest);
-      } catch (razorpayError) {
-        console.error('[PayoutService/releasePayout] Razorpay payout creation error:', razorpayError);
-        console.error('[PayoutService/releasePayout] Payout request:', JSON.stringify(payoutRequest, null, 2));
-        
-        // Update payout status to FAILED
-        await supabaseAdmin
-          .from('v1_payouts')
-          .update({
-            status: 'FAILED',
-          })
-          .eq('id', payoutId);
+      const razorpayOrder = await razorpay.orders.create(orderOptions);
 
-        // Return detailed error information
-        const errorMessage = razorpayError.error?.description || razorpayError.message || 'Failed to create Razorpay payout';
-        const errorDetails = razorpayError.error || razorpayError;
+      // Store payment order in database (amount in RUPEES - not paise)
+      const { data: paymentOrder, error: orderError } = await supabaseAdmin
+        .from('v1_payment_orders')
+        .insert({
+          application_id: payout.application_id, // Can be null for payout payments
+          amount: amountRupees, // Stored in RUPEES
+          currency: 'INR',
+          status: 'CREATED',
+          razorpay_order_id: razorpayOrder.id,
+          metadata: {
+            payout_id: payoutId,
+            influencer_id: payout.influencer_id,
+            payer_id: adminId,
+            payment_type: 'payout_payment',
+          },
+        })
+        .select()
+        .single();
 
+      if (orderError) {
+        console.error('[PayoutService/createPayoutPaymentOrder] Database error:', orderError);
         return {
           success: false,
-          message: errorMessage,
-          error: errorDetails,
-          details: {
-            payout_request: payoutRequest,
-            contact_id: contact?.id,
-            fund_account_id: fundAccount?.id,
-          },
+          message: 'Failed to create payout payment order',
+          error: orderError.message,
         };
       }
 
-      // Update payout in database
-      const { data: updatedPayout, error: updateError } = await supabaseAdmin
+      // Convert Razorpay order amounts from paise to rupees for response
+      const orderInRupees = {
+        ...razorpayOrder,
+        amount: this.paiseToRupees(razorpayOrder.amount),
+        amount_paid: razorpayOrder.amount_paid ? this.paiseToRupees(razorpayOrder.amount_paid) : 0,
+        amount_due: razorpayOrder.amount_due ? this.paiseToRupees(razorpayOrder.amount_due) : 0,
+      };
+
+      return {
+        success: true,
+        order: orderInRupees,
+        payment_order: {
+          ...paymentOrder,
+          created_at: this.toISO(paymentOrder.created_at),
+          updated_at: this.toISO(paymentOrder.updated_at),
+        },
+        message: 'Payout payment order created successfully',
+      };
+    } catch (err) {
+      console.error('[PayoutService/createPayoutPaymentOrder] Exception:', err);
+      return {
+        success: false,
+        message: 'Failed to create payout payment order',
+        error: err.message,
+      };
+    }
+  }
+
+  /**
+   * Verify payout payment and mark payout as released
+   * @param {Object} paymentData - Payment verification data
+   * @param {string} adminId - Admin user ID
+   */
+  async verifyPayoutPayment(paymentData, adminId) {
+    try {
+      const {
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature,
+        payout_id,
+      } = paymentData;
+
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return {
+          success: false,
+          message: 'Missing required payment information',
+        };
+      }
+
+      // Verify payment signature
+      const text = `${razorpay_order_id}|${razorpay_payment_id}`;
+      const expectedSignature = crypto
+        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(text)
+        .digest('hex');
+
+      if (razorpay_signature !== expectedSignature) {
+        return {
+          success: false,
+          message: 'Invalid payment signature',
+        };
+      }
+
+      // Get payment order
+      const { data: paymentOrder, error: orderError } = await supabaseAdmin
+        .from('v1_payment_orders')
+        .select('*')
+        .eq('razorpay_order_id', razorpay_order_id)
+        .maybeSingle();
+
+      if (orderError || !paymentOrder) {
+        return {
+          success: false,
+          message: 'Payment order not found',
+        };
+      }
+
+      // Check if it's a payout payment
+      if (!paymentOrder.metadata || paymentOrder.metadata.payment_type !== 'payout_payment') {
+        return {
+          success: false,
+          message: 'Invalid payment order type',
+        };
+      }
+
+      // Normalize status
+      const normalizedStatus = (paymentOrder.status || '').toUpperCase();
+
+      // Check if payment already verified
+      if (normalizedStatus === 'VERIFIED') {
+        return {
+          success: false,
+          message: 'Payment already verified',
+        };
+      }
+
+      // Check for duplicate payment
+      const { data: existingPayment } = await supabaseAdmin
+        .from('v1_payment_orders')
+        .select('id')
+        .eq('razorpay_payment_id', razorpay_payment_id)
+        .maybeSingle();
+
+      if (existingPayment && existingPayment.id !== paymentOrder.id) {
+        return {
+          success: false,
+          message: 'Payment already processed',
+        };
+      }
+
+      // Get payout_id from payment order metadata
+      const orderPayoutId = paymentOrder.metadata.payout_id;
+
+      // Validate payout_id matches if provided
+      if (payout_id && payout_id !== orderPayoutId) {
+        return {
+          success: false,
+          message: 'Payout ID mismatch with payment order',
+        };
+      }
+
+      // Get payout details
+      const { data: payout, error: payoutError } = await supabaseAdmin
+        .from('v1_payouts')
+        .select('*')
+        .eq('id', orderPayoutId)
+        .maybeSingle();
+
+      if (payoutError || !payout) {
+        return {
+          success: false,
+          message: 'Payout not found',
+        };
+      }
+
+      // Check if payout is already released
+      if (payout.status === 'RELEASED') {
+        return {
+          success: false,
+          message: 'Payout already released',
+        };
+      }
+
+      // Update payment order status
+      const { error: updatePaymentError } = await supabaseAdmin
+        .from('v1_payment_orders')
+        .update({
+          status: 'VERIFIED',
+          razorpay_payment_id: razorpay_payment_id,
+          razorpay_signature: razorpay_signature,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', paymentOrder.id);
+
+      if (updatePaymentError) {
+        console.error('[PayoutService/verifyPayoutPayment] Payment order update error:', updatePaymentError);
+        return {
+          success: false,
+          message: 'Failed to update payment order',
+          error: updatePaymentError.message,
+        };
+      }
+
+      // Update payout status to RELEASED
+      const { data: updatedPayout, error: payoutUpdateError } = await supabaseAdmin
         .from('v1_payouts')
         .update({
           status: 'RELEASED',
           released_by_admin_id: adminId,
           released_at: new Date().toISOString(),
         })
-        .eq('id', payoutId)
+        .eq('id', payout.id)
         .select()
         .single();
 
-      if (updateError) {
-        console.error('[PayoutService/releasePayout] Update error:', updateError);
+      if (payoutUpdateError) {
+        console.error('[PayoutService/verifyPayoutPayment] Payout update error:', payoutUpdateError);
         return {
           success: false,
-          message: 'Failed to update payout status',
-          error: updateError.message,
+          message: 'Payment verified but failed to update payout',
+          error: payoutUpdateError.message,
         };
       }
 
-      // Create transaction record
+      // Create transaction record (all amounts in RUPEES)
       try {
-        // Get admin user ID
-        const { data: adminUser } = await supabaseAdmin
-          .from('v1_users')
-          .select('id')
-          .eq('id', adminId)
-          .eq('role', 'ADMIN')
-          .maybeSingle();
-
-        const adminUserId = adminUser?.id || adminId;
-
-        // Get application to find brand_id for transaction
-        const { data: application } = await supabaseAdmin
-          .from('v1_applications')
-          .select(`
-            id,
-            campaign_id,
-            v1_campaigns!inner(brand_id)
-          `)
-          .eq('id', payout.application_id)
-          .maybeSingle();
-
-        if (application) {
-          await supabaseAdmin
-            .from('v1_transactions')
-            .insert({
-              application_id: payout.application_id,
-              type: 'INFLUENCER_PAYOUT',
-              from_entity: adminUserId,
-              to_entity: payout.influencer_id,
-              gross_amount: payout.amount,
-              platform_fee: 0, // No fee on payout
-              net_amount: payout.amount,
-              status: 'COMPLETED',
-            });
-        }
+        await supabaseAdmin
+          .from('v1_transactions')
+          .insert({
+            application_id: payout.application_id,
+            type: 'INFLUENCER_PAYOUT',
+            from_entity: adminId,
+            to_entity: payout.influencer_id,
+            gross_amount: payout.amount, // In RUPEES
+            platform_fee: 0, // In RUPEES
+            net_amount: payout.amount, // In RUPEES
+            status: 'COMPLETED',
+          });
       } catch (txnError) {
-        console.error('[PayoutService/releasePayout] Transaction creation error:', txnError);
-        // Don't fail payout if transaction creation fails
+        console.error('[PayoutService/verifyPayoutPayment] Transaction creation error:', txnError);
+        // Don't fail verification if transaction creation fails
       }
 
       return {
         success: true,
-        message: 'Payout released successfully',
-        payout: updatedPayout,
-        razorpay_payout: {
-          ...razorpayPayout,
-          amount: this.paiseToRupees(razorpayPayout.amount),
+        message: 'Payout payment verified and released successfully',
+        payout: {
+          ...updatedPayout,
+          created_at: this.toISO(updatedPayout.created_at),
+          released_at: this.toISO(updatedPayout.released_at),
+          updated_at: this.toISO(updatedPayout.updated_at),
+        },
+        payment_order: {
+          ...paymentOrder,
+          status: 'VERIFIED',
+          razorpay_payment_id: razorpay_payment_id,
+          created_at: this.toISO(paymentOrder.created_at),
+          updated_at: this.toISO(new Date().toISOString()),
         },
       };
     } catch (err) {
-      console.error('[PayoutService/releasePayout] Exception:', err);
+      console.error('[PayoutService/verifyPayoutPayment] Exception:', err);
       return {
         success: false,
-        message: 'Failed to release payout',
+        message: 'Failed to verify payout payment',
         error: err.message,
       };
     }
@@ -379,7 +477,12 @@ class PayoutService {
 
       return {
         success: true,
-        payout: payout,
+        payout: {
+          ...payout,
+          created_at: this.toISO(payout.created_at),
+          released_at: payout.released_at ? this.toISO(payout.released_at) : null,
+          updated_at: payout.updated_at ? this.toISO(payout.updated_at) : null,
+        },
         razorpay_status: razorpayStatus,
       };
     } catch (err) {
@@ -439,6 +542,13 @@ class PayoutService {
             });
           }
         }
+        
+        // Format dates for all payouts
+        payouts.forEach(payout => {
+          payout.created_at = this.toISO(payout.created_at);
+          payout.released_at = payout.released_at ? this.toISO(payout.released_at) : null;
+          payout.updated_at = payout.updated_at ? this.toISO(payout.updated_at) : null;
+        });
       }
 
       return {
@@ -516,6 +626,13 @@ class PayoutService {
             });
           }
         }
+        
+        // Format dates for all payouts
+        payouts.forEach(payout => {
+          payout.created_at = this.toISO(payout.created_at);
+          payout.released_at = payout.released_at ? this.toISO(payout.released_at) : null;
+          payout.updated_at = payout.updated_at ? this.toISO(payout.updated_at) : null;
+        });
       }
 
       return {
