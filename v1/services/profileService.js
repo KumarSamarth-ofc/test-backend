@@ -969,6 +969,213 @@ class ProfileService {
       return { success: false, error: err.message };
     }
   }
+
+  /**
+   * Get profile completion steps and progress
+   * @param {string} userId - User ID
+   * @returns {Promise<Object>} - Completion steps data
+   */
+  async getProfileCompletionSteps(userId) {
+    try {
+      // Fetch user data
+      const { data: user, error: userError } = await supabaseAdmin
+        .from("v1_users")
+        .select("*")
+        .eq("id", userId)
+        .eq("is_deleted", false)
+        .single();
+
+      if (userError || !user) {
+        return {
+          success: false,
+          message: "User not found",
+        };
+      }
+
+      const role = user.role;
+      const completedSteps = [];
+      const pendingSteps = [];
+      let nextStep = null;
+
+      if (role === "INFLUENCER") {
+        // Fetch influencer profile
+        const { data: profile } = await supabaseAdmin
+          .from("v1_influencer_profiles")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("is_deleted", false)
+          .maybeSingle();
+
+        // Check each step
+        if (user.role) {
+          completedSteps.push("role_selection");
+        } else {
+          pendingSteps.push("role_selection");
+        }
+
+        if (profile?.gender) {
+          completedSteps.push("gender_selection");
+        } else {
+          pendingSteps.push("gender_selection");
+        }
+
+        if (user.email && user.phone_number) {
+          completedSteps.push("register");
+        } else {
+          pendingSteps.push("register");
+        }
+
+        if (user.email_verified) {
+          completedSteps.push("otp");
+        } else {
+          pendingSteps.push("otp");
+        }
+
+        // Check if profile_photo_url exists and is not placeholder
+        const placeholderUrl = "https://via.placeholder.com/400x400?text=Profile+Image";
+        if (profile?.profile_photo_url && profile.profile_photo_url !== placeholderUrl) {
+          completedSteps.push("image_upload");
+        } else {
+          pendingSteps.push("image_upload");
+        }
+
+        if (profile?.pan_number && profile.pan_verified === true) {
+          completedSteps.push("kyc_pan");
+        } else {
+          pendingSteps.push("kyc_pan");
+        }
+
+        // Check social media accounts
+        const { data: socialAccounts } = await supabaseAdmin
+          .from("v1_influencer_social_accounts")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("is_deleted", false)
+          .limit(1);
+
+        if (socialAccounts && socialAccounts.length > 0) {
+          completedSteps.push("social_media");
+        } else {
+          pendingSteps.push("social_media");
+        }
+
+        // Check portfolio items
+        const { data: portfolioItems } = await supabaseAdmin
+          .from("v1_influencer_portfolio")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("is_deleted", false)
+          .limit(1);
+
+        if (portfolioItems && portfolioItems.length > 0) {
+          completedSteps.push("portfolio");
+        } else {
+          pendingSteps.push("portfolio");
+        }
+
+        // Brand package - check if influencer has set pricing (min_value and max_value)
+        // This indicates they've completed their package/pricing setup
+        if (profile?.min_value !== null && profile?.min_value !== undefined &&
+            profile?.max_value !== null && profile?.max_value !== undefined) {
+          completedSteps.push("brand_package");
+        } else {
+          pendingSteps.push("brand_package");
+        }
+
+        // Find next step (first pending step)
+        nextStep = pendingSteps.length > 0 ? pendingSteps[0] : null;
+
+      } else if (role === "BRAND_OWNER") {
+        // Fetch brand profile
+        const { data: profile } = await supabaseAdmin
+          .from("v1_brand_profiles")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("is_deleted", false)
+          .maybeSingle();
+
+        // Check each step
+        if (user.role) {
+          completedSteps.push("role_selection");
+        } else {
+          pendingSteps.push("role_selection");
+        }
+
+        if (profile?.gender) {
+          completedSteps.push("gender_selection");
+        } else {
+          pendingSteps.push("gender_selection");
+        }
+
+        if (user.email && user.phone_number) {
+          completedSteps.push("register");
+        } else {
+          pendingSteps.push("register");
+        }
+
+        if (user.email_verified) {
+          completedSteps.push("otp");
+        } else {
+          pendingSteps.push("otp");
+        }
+
+        // Check brand business details
+        const placeholderUrl = "https://via.placeholder.com/400x400?text=Brand+Logo";
+        if (
+          profile?.brand_name &&
+          profile.brand_logo_url &&
+          profile.brand_logo_url !== placeholderUrl
+        ) {
+          completedSteps.push("brand_business_details");
+        } else {
+          pendingSteps.push("brand_business_details");
+        }
+
+        // Find next step
+        nextStep = pendingSteps.length > 0 ? pendingSteps[0] : null;
+      } else {
+        return {
+          success: false,
+          message: "Profile completion not supported for this role",
+        };
+      }
+
+      // Calculate progress percentage
+      const totalSteps = completedSteps.length + pendingSteps.length;
+      const progressPercentage = totalSteps > 0
+        ? Math.round((completedSteps.length / totalSteps) * 100)
+        : 0;
+
+      // Update profile_completion_pct in database
+      const profileTable = role === "INFLUENCER" 
+        ? "v1_influencer_profiles" 
+        : "v1_brand_profiles";
+      
+      await supabaseAdmin
+        .from(profileTable)
+        .update({ profile_completion_pct: progressPercentage })
+        .eq("user_id", userId)
+        .eq("is_deleted", false);
+
+      return {
+        success: true,
+        data: {
+          role: role.toLowerCase(),
+          is_complete: pendingSteps.length === 0,
+          progress_percentage: progressPercentage,
+          completed_steps: completedSteps,
+          pending_steps: pendingSteps,
+          next_step: nextStep,
+        },
+      };
+    } catch (err) {
+      console.error("[v1/getProfileCompletionSteps] Exception:", err);
+      return {
+        success: false,
+        message: err.message || "Internal server error",
+      };
+    }
+  }
 }
 
 module.exports = new ProfileService();
