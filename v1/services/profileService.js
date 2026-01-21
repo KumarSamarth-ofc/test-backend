@@ -1006,46 +1006,71 @@ class ProfileService {
           .eq("is_deleted", false)
           .maybeSingle();
 
-        // Check each step
-        if (user.role) {
+        // 1. Role Selection - v1_users.role
+        if (user.role && user.role === "INFLUENCER") {
           completedSteps.push("role_selection");
         } else {
           pendingSteps.push("role_selection");
         }
 
+        // 2. Gender Selection - v1_influencer_profiles.gender
         if (profile?.gender) {
           completedSteps.push("gender_selection");
         } else {
           pendingSteps.push("gender_selection");
         }
 
-        if (user.email && user.phone_number) {
-          completedSteps.push("register");
+        // 3. User Details - v1_users.name, email, phone_number
+        if (user.name && user.email && user.phone_number) {
+          completedSteps.push("user_details");
         } else {
-          pendingSteps.push("register");
+          pendingSteps.push("user_details");
         }
 
-        if (user.email_verified) {
-          completedSteps.push("otp");
+        // 4. Email Verification - v1_users.email_verified
+        if (user.email_verified === true) {
+          completedSteps.push("email_verification");
         } else {
-          pendingSteps.push("otp");
+          pendingSteps.push("email_verification");
         }
 
-        // Check if profile_photo_url exists and is not placeholder
-        const placeholderUrl = "https://via.placeholder.com/400x400?text=Profile+Image";
-        if (profile?.profile_photo_url && profile.profile_photo_url !== placeholderUrl) {
+        // 5. Date of Birth - v1_users.dob
+        if (user.dob) {
+          completedSteps.push("date_of_birth");
+        } else {
+          pendingSteps.push("date_of_birth");
+        }
+
+        // 6. Image Upload - v1_influencer_profiles.profile_photo_url (not placeholder)
+        const placeholderImageUrl = "https://via.placeholder.com/400x400?text=Profile+Image";
+        if (profile?.profile_photo_url && profile.profile_photo_url !== placeholderImageUrl) {
           completedSteps.push("image_upload");
         } else {
           pendingSteps.push("image_upload");
         }
 
+        // 7. KYC PAN - v1_influencer_profiles.pan_number AND pan_verified = true
         if (profile?.pan_number && profile.pan_verified === true) {
           completedSteps.push("kyc_pan");
         } else {
           pendingSteps.push("kyc_pan");
         }
 
-        // Check social media accounts
+        // 8. UPI ID - v1_users.upi_id
+        if (user.upi_id) {
+          completedSteps.push("upi");
+        } else {
+          pendingSteps.push("upi");
+        }
+
+        // 9. Profile Details - v1_influencer_profiles.bio
+        if (profile?.bio && profile.bio.trim().length > 0) {
+          completedSteps.push("profile_details");
+        } else {
+          pendingSteps.push("profile_details");
+        }
+
+        // 10. Social Media - At least one entry in v1_influencer_social_accounts
         const { data: socialAccounts } = await supabaseAdmin
           .from("v1_influencer_social_accounts")
           .select("id")
@@ -1059,7 +1084,7 @@ class ProfileService {
           pendingSteps.push("social_media");
         }
 
-        // Check portfolio items
+        // 11. Portfolio - At least one entry in v1_influencer_portfolio
         const { data: portfolioItems } = await supabaseAdmin
           .from("v1_influencer_portfolio")
           .select("id")
@@ -1071,15 +1096,6 @@ class ProfileService {
           completedSteps.push("portfolio");
         } else {
           pendingSteps.push("portfolio");
-        }
-
-        // Brand package - check if influencer has set pricing (min_value and max_value)
-        // This indicates they've completed their package/pricing setup
-        if (profile?.min_value !== null && profile?.min_value !== undefined &&
-            profile?.max_value !== null && profile?.max_value !== undefined) {
-          completedSteps.push("brand_package");
-        } else {
-          pendingSteps.push("brand_package");
         }
 
         // Find next step (first pending step)
@@ -1094,41 +1110,72 @@ class ProfileService {
           .eq("is_deleted", false)
           .maybeSingle();
 
-        // Check each step
-        if (user.role) {
+        // 1. Role Selection - v1_users.role
+        if (user.role && user.role === "BRAND_OWNER") {
           completedSteps.push("role_selection");
         } else {
           pendingSteps.push("role_selection");
         }
 
+        // 2. Gender Selection - v1_brand_profiles.gender
         if (profile?.gender) {
           completedSteps.push("gender_selection");
         } else {
           pendingSteps.push("gender_selection");
         }
 
-        if (user.email && user.phone_number) {
-          completedSteps.push("register");
+        // 3. User Details - v1_users.name, email, phone_number
+        if (user.name && user.email && user.phone_number) {
+          completedSteps.push("user_details");
         } else {
-          pendingSteps.push("register");
+          pendingSteps.push("user_details");
         }
 
-        if (user.email_verified) {
-          completedSteps.push("otp");
+        // 4. Email Verification - v1_users.email_verified
+        if (user.email_verified === true) {
+          completedSteps.push("email_verification");
         } else {
-          pendingSteps.push("otp");
+          pendingSteps.push("email_verification");
         }
 
-        // Check brand business details
-        const placeholderUrl = "https://via.placeholder.com/400x400?text=Brand+Logo";
+        // 5. Date of Birth - v1_users.dob
+        if (user.dob) {
+          completedSteps.push("date_of_birth");
+        } else {
+          pendingSteps.push("date_of_birth");
+        }
+
+        // 6. KYC PAN - v1_brand_profiles.pan_number AND pan_verified = true
+        if (profile?.pan_number && profile.pan_verified === true) {
+          completedSteps.push("kyc_pan");
+        } else {
+          pendingSteps.push("kyc_pan");
+        }
+
+        // 7. UPI ID - v1_users.upi_id
+        if (user.upi_id) {
+          completedSteps.push("upi");
+        } else {
+          pendingSteps.push("upi");
+        }
+
+        // 8. Brand Business Details - v1_brand_profiles.brand_name AND brand_logo_url (not placeholder)
+        const placeholderLogoUrl = "https://via.placeholder.com/400x400?text=Brand+Logo";
         if (
           profile?.brand_name &&
           profile.brand_logo_url &&
-          profile.brand_logo_url !== placeholderUrl
+          profile.brand_logo_url !== placeholderLogoUrl
         ) {
           completedSteps.push("brand_business_details");
         } else {
           pendingSteps.push("brand_business_details");
+        }
+
+        // 9. Brand Details - v1_brand_profiles.brand_description
+        if (profile?.brand_description && profile.brand_description.trim().length > 0) {
+          completedSteps.push("brand_details");
+        } else {
+          pendingSteps.push("brand_details");
         }
 
         // Find next step
