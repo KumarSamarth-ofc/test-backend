@@ -32,24 +32,26 @@ class PanVerificationService {
 
         if (existingPAN) {
           // Check if this exact PAN is already verified
-          if (
-            existingPAN.pan_verified &&
-            existingPAN.pan_number === normalizedPAN
-          ) {
-            return {
-              success: true,
-              message: "PAN already verified",
-              result: {
-                user_full_name: existingPAN.pan_holder_name,
-                pan_status: "VALID",
-                status: "VALID",
-                already_verified: true,
-                verified_at: existingPAN.pan_verified_at,
-              },
-              verified: true,
+        if (
+          existingPAN.pan_verified &&
+          existingPAN.pan_number === normalizedPAN
+        ) {
+          return {
+            success: true,
+            message: "PAN already verified",
+            result: {
+              pan_number: existingPAN.pan_number,
+              pan_status: "VALID",
+              status: "VALID",
+              user_full_name: existingPAN.pan_holder_name,
               already_verified: true,
-            };
-          }
+              verified_at: existingPAN.pan_verified_at,
+            },
+            verified: true,
+            already_verified: true,
+            ...(existingPAN.pan_holder_name ? { holder_name: existingPAN.pan_holder_name } : {}),
+          };
+        }
 
           // Check if user has a different PAN that's already verified
           if (
@@ -127,7 +129,6 @@ class PanVerificationService {
         return {
           success: false,
           message: errorMessage,
-          vendor_error: data,
           error_type: "verification_failed",
         };
       }
@@ -247,24 +248,7 @@ class PanVerificationService {
         verified: isValid,
         ...(holderName ? { holder_name: holderName } : {}),
         ...(responseCode ? { response_code: responseCode } : {}),
-        ...(userId && isValid ? { saved_to_profile: true } : {}),
-        ...(isValid && !userId ? { 
-          message: "PAN verified successfully. Authentication required to save to profile.",
-          saved_to_profile: false 
-        } : {}),
-        ...(isValid && userId && !userRole ? { 
-          message: "PAN verified successfully. User role required to save to profile.",
-          saved_to_profile: false 
-        } : {}),
       };
-
-      // If result is empty, include raw data for debugging
-      if (Object.keys(resultObj).length === 0) {
-        responsePayload.debug = {
-          raw_response: data,
-          message: "Zoop API returned empty result. Check raw_response for details.",
-        };
-      }
 
       return responsePayload;
     } catch (error) {
@@ -301,7 +285,6 @@ class PanVerificationService {
       return {
         success: false,
         message,
-        vendor_error: vendorError,
         error_type: "api_error",
         http_status: httpStatus === 200 ? 500 : httpStatus,
       };
@@ -339,6 +322,7 @@ class PanVerificationService {
 
   /**
    * Update PAN verification status in database
+   * Saves: pan_number, pan_verified, pan_verified_at, pan_holder_name
    */
   async updatePANVerificationStatus(userId, userRole, pan, holderName) {
     try {
@@ -513,7 +497,6 @@ class PanVerificationService {
           success: false,
           message: `Failed to save PAN verification: ${updateError.message || "Database error"}. Please try again.`,
           error_type: "database_error",
-          error_details: process.env.NODE_ENV === "development" ? updateError : undefined,
         };
       }
 
@@ -535,7 +518,9 @@ class PanVerificationService {
         pan_number: updatedProfile?.pan_number,
         pan_verified: updatedProfile?.pan_verified,
         pan_verified_at: updatedProfile?.pan_verified_at,
+        pan_holder_name: updatedProfile?.pan_holder_name,
         userId,
+        userRole,
       });
 
       return { success: true, profile: updatedProfile };

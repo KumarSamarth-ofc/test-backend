@@ -374,9 +374,8 @@ class AuthController {
 
   /**
    * Verify PAN using Zoop
-   * Works with or without authentication
-   * If authenticated: checks if already verified, saves verification status to profile
-   * If not authenticated: just returns verification result
+   * Requires authentication
+   * Checks if already verified, saves verification status to profile
    */
   async verifyPAN(req, res) {
     try {
@@ -386,16 +385,19 @@ class AuthController {
       }
 
       const panInput = req.body?.pan || req.body?.pan_number;
-      const userId = req.user?.id; // Optional: from authMiddleware
-      const userRole = req.user?.role; // Optional: from authMiddleware
+      
+      // Extract userId and userRole from authenticated token (required - set by authMiddleware)
+      // Token payload structure: { id, phone, role }
+      // Since authenticateToken middleware is used, req.user is guaranteed to exist
+      if (!req.user || !req.user.id || !req.user.role) {
+        return res.status(401).json({
+          success: false,
+          message: "Authentication required. Invalid or missing user information.",
+        });
+      }
 
-      // Debug logging for authentication status
-      console.log("[v1/verifyPAN] Authentication check:", {
-        hasUser: !!req.user,
-        userId: userId || "not provided",
-        userRole: userRole || "not provided",
-        pan: panInput,
-      });
+      const userId = req.user.id;
+      const userRole = req.user.role;
 
       if (!panInput) {
         return res.status(400).json({
@@ -430,7 +432,6 @@ class AuthController {
           success: false,
           message: result.message,
           error_type: result.error_type,
-          ...(result.vendor_error ? { vendor_error: result.vendor_error } : {}),
         });
       }
 
