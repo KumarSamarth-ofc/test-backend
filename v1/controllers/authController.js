@@ -389,6 +389,14 @@ class AuthController {
       const userId = req.user?.id; // Optional: from authMiddleware
       const userRole = req.user?.role; // Optional: from authMiddleware
 
+      // Debug logging for authentication status
+      console.log("[v1/verifyPAN] Authentication check:", {
+        hasUser: !!req.user,
+        userId: userId || "not provided",
+        userRole: userRole || "not provided",
+        pan: panInput,
+      });
+
       if (!panInput) {
         return res.status(400).json({
           success: false,

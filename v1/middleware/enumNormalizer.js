@@ -14,6 +14,10 @@ function normalizeEnums(req, res, next) {
       const validGenders = ["MALE", "FEMALE", "OTHER"];
       if (validGenders.includes(normalized)) {
         req.body.gender = normalized;
+      } else {
+        // Still normalize to uppercase even if not in valid list
+        // The service will handle validation and return null if invalid
+        req.body.gender = normalized;
       }
     }
 

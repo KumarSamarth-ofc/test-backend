@@ -251,7 +251,7 @@ class ProfileService {
         }
       }
 
-      // 2) Update v1_users table (editable fields: name, email, phone_number, dob)
+      // 2) Update v1_users table (editable fields: name, email, phone_number, dob, upi_id)
       const userUpdate = {};
       if (profileData.name !== undefined) {
         const nameValue = profileData.name !== null && profileData.name !== undefined
@@ -283,9 +283,35 @@ class ProfileService {
           : null;
       }
       if (profileData.dob !== undefined) {
-        userUpdate.dob = profileData.dob !== null && profileData.dob !== undefined
-          ? profileData.dob
-          : null;
+        // Handle dob - accept ISO8601 date strings or null, always save in ISO format
+        if (profileData.dob !== null && profileData.dob !== undefined && profileData.dob !== "") {
+          // Validate it's a valid date string and normalize to ISO format
+          const dobDate = new Date(profileData.dob);
+          if (!isNaN(dobDate.getTime())) {
+            // Always convert to ISO format to ensure consistency
+            // This handles both date-only (YYYY-MM-DD) and full ISO (YYYY-MM-DDTHH:mm:ss.sssZ) formats
+            userUpdate.dob = dobDate.toISOString();
+          } else {
+            // Invalid date format, skip update
+            console.warn("[v1/updateInfluencerProfile] Invalid dob format:", profileData.dob);
+          }
+        } else {
+          userUpdate.dob = null;
+        }
+      }
+      if (profileData.upi_id !== undefined) {
+        // Handle upi_id - validate format and save
+        if (profileData.upi_id !== null && profileData.upi_id !== undefined && profileData.upi_id !== "") {
+          const upiIdValue = String(profileData.upi_id).trim();
+          // Validate UPI ID format: username@provider
+          if (/^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+$/.test(upiIdValue)) {
+            userUpdate.upi_id = upiIdValue;
+          } else {
+            return { success: false, message: "Invalid UPI ID format. Must be in format: username@provider" };
+          }
+        } else {
+          userUpdate.upi_id = null;
+        }
       }
 
       if (Object.keys(userUpdate).length > 0) {
@@ -406,7 +432,11 @@ class ProfileService {
 
       // Handle gender
       if (profileData.gender !== undefined) {
-        profileUpdate.gender = this.normalizeGender(profileData.gender);
+        const normalizedGender = this.normalizeGender(profileData.gender);
+        // Only add to update if normalization succeeded (not null)
+        if (normalizedGender !== null) {
+          profileUpdate.gender = normalizedGender;
+        }
       }
 
       // Handle tier
@@ -622,7 +652,7 @@ class ProfileService {
         }
       }
 
-      // 2) Update v1_users table (editable fields: name, email, phone_number, dob)
+      // 2) Update v1_users table (editable fields: name, email, phone_number, dob, upi_id)
       const userUpdate = {};
       if (profileData.name !== undefined) {
         const nameValue = profileData.name !== null && profileData.name !== undefined
@@ -654,9 +684,35 @@ class ProfileService {
           : null;
       }
       if (profileData.dob !== undefined) {
-        userUpdate.dob = profileData.dob !== null && profileData.dob !== undefined
-          ? profileData.dob
-          : null;
+        // Handle dob - accept ISO8601 date strings or null, always save in ISO format
+        if (profileData.dob !== null && profileData.dob !== undefined && profileData.dob !== "") {
+          // Validate it's a valid date string and normalize to ISO format
+          const dobDate = new Date(profileData.dob);
+          if (!isNaN(dobDate.getTime())) {
+            // Always convert to ISO format to ensure consistency
+            // This handles both date-only (YYYY-MM-DD) and full ISO (YYYY-MM-DDTHH:mm:ss.sssZ) formats
+            userUpdate.dob = dobDate.toISOString();
+          } else {
+            // Invalid date format, skip update
+            console.warn("[v1/updateBrandProfile] Invalid dob format:", profileData.dob);
+          }
+        } else {
+          userUpdate.dob = null;
+        }
+      }
+      if (profileData.upi_id !== undefined) {
+        // Handle upi_id - validate format and save
+        if (profileData.upi_id !== null && profileData.upi_id !== undefined && profileData.upi_id !== "") {
+          const upiIdValue = String(profileData.upi_id).trim();
+          // Validate UPI ID format: username@provider
+          if (/^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+$/.test(upiIdValue)) {
+            userUpdate.upi_id = upiIdValue;
+          } else {
+            return { success: false, message: "Invalid UPI ID format. Must be in format: username@provider" };
+          }
+        } else {
+          userUpdate.upi_id = null;
+        }
       }
 
       if (Object.keys(userUpdate).length > 0) {
@@ -762,7 +818,11 @@ class ProfileService {
 
       // Update gender if provided
       if (profileData.gender !== undefined) {
-        profileUpdate.gender = this.normalizeGender(profileData.gender);
+        const normalizedGender = this.normalizeGender(profileData.gender);
+        // Only add to update if normalization succeeded (not null)
+        if (normalizedGender !== null) {
+          profileUpdate.gender = normalizedGender;
+        }
       }
 
       // Update brand_logo_url if provided (required field - NOT NULL in schema)
