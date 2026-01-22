@@ -272,10 +272,32 @@ class CampaignController {
         (key) => filters[key] === undefined && delete filters[key]
       );
 
-      // Extract pagination
+      // Extract pagination with validation and limits
+      const page = req.query.page ? parseInt(req.query.page) : 1;
+      const limit = req.query.limit ? parseInt(req.query.limit) : 20;
+      
+      // Validate and enforce pagination limits
+      if (isNaN(page) || page < 1) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid page number. Must be >= 1",
+        });
+      }
+      
+      if (isNaN(limit) || limit < 1) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid limit. Must be >= 1",
+        });
+      }
+      
+      // Enforce maximum limit to prevent performance issues
+      const MAX_LIMIT = 100;
+      const validatedLimit = Math.min(limit, MAX_LIMIT);
+      
       const pagination = {
-        page: req.query.page ? parseInt(req.query.page) : 1,
-        limit: req.query.limit ? parseInt(req.query.limit) : 20,
+        page,
+        limit: validatedLimit,
       };
 
       const result = await CampaignService.getBrandCampaigns(
@@ -287,7 +309,12 @@ class CampaignController {
       if (result.success) {
         return res.json({
           success: true,
+          message: "Campaigns fetched successfully",
           campaigns: result.campaigns,
+          count_total_campaigns: result.count_total_campaigns,
+          count_live_campaigns: result.count_live_campaigns,
+          count_active_campaigns: result.count_active_campaigns,
+          count_completed_campaigns: result.count_completed_campaigns,
           pagination: result.pagination,
         });
       }

@@ -519,142 +519,141 @@ class CampaignService {
 
   /**
    * Get campaigns created by a specific brand owner
-   * Includes applications for each campaign with full influencer details and social accounts
+   * Returns simplified campaign list with counts by status and pagination
    */
   async getBrandCampaigns(brandId, filters = {}, pagination = {}) {
     try {
-      // Add brand_id filter
-      const brandFilters = { ...filters, brand_id: brandId };
-      const result = await this.getCampaigns(brandFilters, pagination);
-      
-      if (!result.success || !result.campaigns || result.campaigns.length === 0) {
-        return result;
-      }
+      const { status, type, min_budget, max_budget, search } = filters;
+      const { page = 1, limit = 20 } = pagination;
 
-      // Get all campaign IDs
-      const campaignIds = result.campaigns.map(campaign => campaign.id);
+      // Validate pagination parameters
+      const validatedPage = Math.max(1, parseInt(page) || 1);
+      const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20)); // Max 100 items per page
+      const offset = (validatedPage - 1) * validatedLimit;
 
-      if (campaignIds.length === 0) {
-        return {
-          success: true,
-          campaigns: result.campaigns,
-          pagination: result.pagination,
-        };
-      }
-
-      // Fetch all applications for these campaigns
-      const { data: applications, error: applicationsError } = await supabaseAdmin
-        .from("v1_applications")
-        .select("*")
-        .in("campaign_id", campaignIds)
+      // Build base query for campaigns with count
+      let query = supabaseAdmin
+        .from("v1_campaigns")
+        .select("id, title, cover_image_url, type, budget, status, language, created_at", { count: "exact" })
+        .eq("brand_id", brandId)
         .order("created_at", { ascending: false });
 
-      if (applicationsError) {
-        console.error("[v1/getBrandCampaigns] Applications fetch error:", applicationsError);
-        // Continue without applications if there's an error
-      }
-
-      // If we have applications, fetch influencer data for each unique influencer
-      let influencerMap = {};
-      let influencerProfileMap = {};
-      let socialAccountsMap = {};
-      
-      if (applications && applications.length > 0) {
-        const influencerIds = [...new Set(applications.map(app => app.influencer_id).filter(Boolean))];
-        
-        if (influencerIds.length > 0) {
-          // Fetch full influencer user data
-          const { data: influencers, error: influencersError } = await supabaseAdmin
-            .from("v1_users")
-           .select("id, name, email, phone_number, role, created_at, updated_at, is_deleted")
-            .in("id", influencerIds)
-            .eq("is_deleted", false);
-
-          if (influencersError) {
-            console.error("[v1/getBrandCampaigns] Influencers fetch error:", influencersError);
-          } else if (influencers) {
-            // Create a map for quick lookup
-            influencers.forEach(influencer => {
-              influencerMap[influencer.id] = influencer;
-            });
-          }
-
-          // Fetch influencer profiles
-          const { data: influencerProfiles, error: influencerProfilesError } = await supabaseAdmin
-            .from("v1_influencer_profiles")
-            .select("*")
-            .in("user_id", influencerIds)
-            .eq("is_deleted", false);
-
-          if (influencerProfilesError) {
-            console.error("[v1/getBrandCampaigns] Influencer profiles fetch error:", influencerProfilesError);
-          } else if (influencerProfiles) {
-            // Create a map for quick lookup
-            influencerProfiles.forEach(profile => {
-              influencerProfileMap[profile.user_id] = profile;
-            });
-          }
-
-          // Fetch social accounts for all influencers
-          const { data: socialAccounts, error: socialAccountsError } = await supabaseAdmin
-            .from("v1_influencer_social_accounts")
-            .select("*")
-            .in("user_id", influencerIds)
-            .eq("is_deleted", false)
-            .order("created_at", { ascending: false });
-
-          if (socialAccountsError) {
-            console.error("[v1/getBrandCampaigns] Social accounts fetch error:", socialAccountsError);
-          } else if (socialAccounts) {
-            // Group social accounts by user_id
-            socialAccounts.forEach(account => {
-              if (!socialAccountsMap[account.user_id]) {
-                socialAccountsMap[account.user_id] = [];
-              }
-              socialAccountsMap[account.user_id].push(account);
-            });
-          }
+      // Apply filters
+      if (status) {
+        const normalizedStatus = this.normalizeStatus(status);
+        if (this.validateStatus(normalizedStatus)) {
+          query = query.eq("status", normalizedStatus);
         }
       }
 
-      // Group applications by campaign_id and attach influencer data
-      const applicationsByCampaign = {};
-      if (applications && applications.length > 0) {
-        applications.forEach(application => {
-          const campaignId = application.campaign_id;
-          if (!applicationsByCampaign[campaignId]) {
-            applicationsByCampaign[campaignId] = [];
-          }
-          
-          const influencerId = application.influencer_id;
-          const influencer = influencerMap[influencerId] || null;
-          const influencerProfile = influencerProfileMap[influencerId] || null;
-          const socialAccounts = socialAccountsMap[influencerId] || [];
-          
-          // Attach influencer data, profile, and social accounts to application
-          const applicationWithInfluencer = {
-            ...application,
-            influencer: influencer ? {
-              ...influencer,
-              profile: influencerProfile,
-              social_accounts: socialAccounts
-            } : null
-          };
-          
-          applicationsByCampaign[campaignId].push(applicationWithInfluencer);
-        });
+      if (type) {
+        const normalizedType = this.normalizeType(type);
+        if (this.validateType(normalizedType)) {
+          query = query.eq("type", normalizedType);
+        }
       }
 
-      // Attach applications to each campaign
-      const campaignsWithApplications = result.campaigns.map(campaign => ({
-        ...campaign,
-        applications: applicationsByCampaign[campaign.id] || []
+      if (min_budget !== undefined) {
+        query = query.gte("budget", min_budget);
+      }
+
+      if (max_budget !== undefined) {
+        query = query.lte("budget", max_budget);
+      }
+
+      if (search) {
+        query = query.ilike("title", `%${search}%`);
+      }
+
+      // Apply pagination
+      query = query.range(offset, offset + validatedLimit - 1);
+
+      // Fetch campaigns and get counts in parallel for better performance
+      const [campaignsResult, ...countResults] = await Promise.all([
+        query,
+        // Get total count (unfiltered)
+        supabaseAdmin
+          .from("v1_campaigns")
+          .select("*", { count: "exact", head: true })
+          .eq("brand_id", brandId),
+        // Get live campaigns count
+        supabaseAdmin
+          .from("v1_campaigns")
+          .select("*", { count: "exact", head: true })
+          .eq("brand_id", brandId)
+          .eq("status", "LIVE"),
+        // Get active campaigns count
+        supabaseAdmin
+          .from("v1_campaigns")
+          .select("*", { count: "exact", head: true })
+          .eq("brand_id", brandId)
+          .eq("status", "ACTIVE"),
+        // Get completed campaigns count
+        supabaseAdmin
+          .from("v1_campaigns")
+          .select("*", { count: "exact", head: true })
+          .eq("brand_id", brandId)
+          .eq("status", "COMPLETED"),
+      ]);
+
+      const { data: campaigns, error: campaignsError, count: totalCount } = campaignsResult;
+
+      if (campaignsError) {
+        console.error("[v1/getBrandCampaigns] Database error:", campaignsError);
+        return {
+          success: false,
+          message: "Failed to fetch campaigns",
+          error: campaignsError.message,
+        };
+      }
+
+      // Extract count results
+      const [
+        { count: count_total_campaigns, error: totalCountError },
+        { count: count_live_campaigns, error: liveCountError },
+        { count: count_active_campaigns, error: activeCountError },
+        { count: count_completed_campaigns, error: completedCountError },
+      ] = countResults;
+
+      // Log count errors but don't fail the request
+      if (totalCountError) {
+        console.error("[v1/getBrandCampaigns] Total count error:", totalCountError);
+      }
+      if (liveCountError) {
+        console.error("[v1/getBrandCampaigns] Live count error:", liveCountError);
+      }
+      if (activeCountError) {
+        console.error("[v1/getBrandCampaigns] Active count error:", activeCountError);
+      }
+      if (completedCountError) {
+        console.error("[v1/getBrandCampaigns] Completed count error:", completedCountError);
+      }
+
+      // Format campaigns - ensure language is returned as array or null
+      const formattedCampaigns = (campaigns || []).map(campaign => ({
+        id: campaign.id,
+        title: campaign.title,
+        cover_image_url: campaign.cover_image_url,
+        type: campaign.type,
+        budget: campaign.budget,
+        status: campaign.status,
+        language: campaign.language ? (Array.isArray(campaign.language) ? campaign.language : [campaign.language]) : null,
+        created_at: campaign.created_at
       }));
 
       return {
         success: true,
-        campaigns: campaignsWithApplications,
-        pagination: result.pagination,
+        campaigns: formattedCampaigns,
+        count_total_campaigns: count_total_campaigns || 0,
+        count_live_campaigns: count_live_campaigns || 0,
+        count_active_campaigns: count_active_campaigns || 0,
+        count_completed_campaigns: count_completed_campaigns || 0,
+        pagination: {
+          page: validatedPage,
+          limit: validatedLimit,
+          total: totalCount || 0,
+          totalPages: Math.ceil((totalCount || 0) / validatedLimit),
+        },
       };
     } catch (err) {
       console.error("[v1/getBrandCampaigns] Exception:", err);
