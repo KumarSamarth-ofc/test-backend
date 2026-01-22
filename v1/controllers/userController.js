@@ -49,18 +49,11 @@ class UserController {
 
       // If id is "all", return all influencers with pagination
       if (id === "all") {
-        // Extract pagination with validation and limits
-        const page = req.query.page ? parseInt(req.query.page) : 1;
-        const limit = req.query.limit ? parseInt(req.query.limit) : 20;
+        // Extract pagination with validation and limits - Using offset + limit for infinite scroll
+        const limit = Math.min(parseInt(req.query.limit) || 20, 100); // Max 100
+        const offset = parseInt(req.query.offset) || 0;
         
-        // Validate and enforce pagination limits
-        if (isNaN(page) || page < 1) {
-          return res.status(400).json({
-            success: false,
-            message: "Invalid page number. Must be >= 1",
-          });
-        }
-
+        // Validate pagination
         if (isNaN(limit) || limit < 1) {
           return res.status(400).json({
             success: false,
@@ -68,12 +61,16 @@ class UserController {
           });
         }
 
-        // Enforce maximum limit
-        const validatedLimit = Math.min(100, limit);
+        if (isNaN(offset) || offset < 0) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid offset. Must be >= 0",
+          });
+        }
 
         const pagination = {
-          page,
-          limit: validatedLimit,
+          limit,
+          offset,
         };
 
         const result = await UserService.getAllInfluencers(pagination);

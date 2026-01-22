@@ -13,13 +13,32 @@ class TransactionController {
     try {
       const userId = req.user.id;
       const userRole = req.user.role;
-      const { type, status, limit, offset } = req.query;
+      
+      // Standardized pagination - Default limit 20, max 100
+      const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+      const offset = parseInt(req.query.offset) || 0;
+      const { type, status } = req.query;
+
+      // Validate pagination
+      if (isNaN(limit) || limit < 1) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid limit. Must be >= 1",
+        });
+      }
+
+      if (isNaN(offset) || offset < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid offset. Must be >= 0",
+        });
+      }
 
       const result = await TransactionService.getMyTransactions(userId, userRole, {
         type,
         status,
-        limit: limit || 50,
-        offset: offset || 0,
+        limit,
+        offset,
       });
 
       if (!result.success) {

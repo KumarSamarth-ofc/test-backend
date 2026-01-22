@@ -15,7 +15,10 @@ class TransactionService {
    */
   async getMyTransactions(userId, userRole, filters = {}) {
     try {
-      const { type, status, limit = 50, offset = 0 } = filters;
+      // Standardized pagination - Default limit 20, max 100
+      const { type, status } = filters;
+      const limit = Math.min(parseInt(filters.limit) || 20, 100);
+      const offset = Math.max(0, parseInt(filters.offset) || 0);
 
       // Build base query
       let query = supabaseAdmin
@@ -33,7 +36,7 @@ class TransactionService {
           )
         `)
         .order("created_at", { ascending: false })
-        .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+        .range(offset, offset + limit - 1);
 
       // Apply role-based filtering
       if (userRole === "ADMIN") {
@@ -84,7 +87,46 @@ class TransactionService {
         query = query.eq("status", status);
       }
 
-      const { data: transactions, error, count } = await query;
+      // Get total count separately for accurate pagination
+      let countQuery = supabaseAdmin
+        .from("v1_transactions")
+        .select("*", { count: "exact", head: true });
+
+      // Apply same role-based filtering for count
+      if (userRole === "ADMIN") {
+        // No additional filter
+      } else if (userRole === "BRAND_OWNER") {
+        const { data: adminUsers } = await supabaseAdmin
+          .from("v1_users")
+          .select("id")
+          .eq("role", "ADMIN")
+          .eq("is_deleted", false);
+        const adminIds = adminUsers?.map(u => u.id) || [];
+        const allFromEntities = [userId, ...adminIds];
+        countQuery = countQuery.in("from_entity", allFromEntities);
+      } else if (userRole === "INFLUENCER") {
+        const { data: adminUsers } = await supabaseAdmin
+          .from("v1_users")
+          .select("id")
+          .eq("role", "ADMIN")
+          .eq("is_deleted", false);
+        const adminIds = adminUsers?.map(u => u.id) || [];
+        const allToEntities = [userId, ...adminIds];
+        countQuery = countQuery.in("to_entity", allToEntities);
+      }
+
+      // Apply filters to count query
+      if (type) {
+        countQuery = countQuery.eq("type", type);
+      }
+      if (status) {
+        countQuery = countQuery.eq("status", status);
+      }
+
+      const [{ data: transactions, error }, { count: totalCount }] = await Promise.all([
+        query,
+        countQuery
+      ]);
 
       if (error) {
         console.error("[TransactionService/getMyTransactions] Database error:", error);
@@ -210,6 +252,8 @@ class TransactionService {
         return formatted;
       });
 
+      const hasMore = (offset + limit) < (totalCount || 0);
+
       return {
         success: true,
         message: "Transactions fetched successfully",
@@ -220,9 +264,11 @@ class TransactionService {
           net_amount: parseFloat(netAmount.toFixed(2)),
         },
         pagination: {
-          limit: parseInt(limit),
-          offset: parseInt(offset),
+          limit,
+          offset,
           count: formattedTransactions.length,
+          total: totalCount || 0,
+          hasMore,
         },
       };
     } catch (err) {

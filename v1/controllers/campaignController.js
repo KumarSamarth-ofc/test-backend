@@ -160,18 +160,11 @@ class CampaignController {
         (key) => filters[key] === undefined && delete filters[key]
       );
 
-      // Extract pagination with validation and limits
-      const page = req.query.page ? parseInt(req.query.page) : 1;
-      const limit = req.query.limit ? parseInt(req.query.limit) : 20;
+      // Extract pagination with validation and limits - Using offset + limit for infinite scroll
+      const limit = Math.min(parseInt(req.query.limit) || 20, 100); // Max 100
+      const offset = parseInt(req.query.offset) || 0;
       
-      // Validate and enforce pagination limits
-      if (isNaN(page) || page < 1) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid page number. Must be >= 1",
-        });
-      }
-      
+      // Validate pagination
       if (isNaN(limit) || limit < 1) {
         return res.status(400).json({
           success: false,
@@ -179,13 +172,16 @@ class CampaignController {
         });
       }
       
-      // Enforce maximum limit to prevent performance issues
-      const MAX_LIMIT = 100;
-      const validatedLimit = Math.min(limit, MAX_LIMIT);
-      
+      if (isNaN(offset) || offset < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid offset. Must be >= 0",
+        });
+      }
+
       const pagination = {
-        page,
-        limit: validatedLimit,
+        limit,
+        offset,
       };
 
       const result = await CampaignService.getCampaigns(filters, pagination);
@@ -272,18 +268,11 @@ class CampaignController {
         (key) => filters[key] === undefined && delete filters[key]
       );
 
-      // Extract pagination with validation and limits
-      const page = req.query.page ? parseInt(req.query.page) : 1;
-      const limit = req.query.limit ? parseInt(req.query.limit) : 20;
+      // Extract pagination with validation and limits - Using offset + limit for infinite scroll
+      const limit = Math.min(parseInt(req.query.limit) || 20, 100); // Max 100
+      const offset = parseInt(req.query.offset) || 0;
       
-      // Validate and enforce pagination limits
-      if (isNaN(page) || page < 1) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid page number. Must be >= 1",
-        });
-      }
-      
+      // Validate pagination
       if (isNaN(limit) || limit < 1) {
         return res.status(400).json({
           success: false,
@@ -291,13 +280,16 @@ class CampaignController {
         });
       }
       
-      // Enforce maximum limit to prevent performance issues
-      const MAX_LIMIT = 100;
-      const validatedLimit = Math.min(limit, MAX_LIMIT);
-      
+      if (isNaN(offset) || offset < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid offset. Must be >= 0",
+        });
+      }
+
       const pagination = {
-        page,
-        limit: validatedLimit,
+        limit,
+        offset,
       };
 
       const result = await CampaignService.getBrandCampaigns(

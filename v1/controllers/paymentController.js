@@ -306,7 +306,26 @@ class PaymentController {
   async getBrandTransactions(req, res) {
     try {
       const userId = req.user.id;
-      const { type, status, limit = 50, offset = 0 } = req.query;
+      
+      // Standardized pagination - Default limit 20, max 100
+      const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+      const offset = parseInt(req.query.offset) || 0;
+      const { type, status } = req.query;
+
+      // Validate pagination
+      if (isNaN(limit) || limit < 1) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid limit. Must be >= 1",
+        });
+      }
+
+      if (isNaN(offset) || offset < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid offset. Must be >= 0",
+        });
+      }
 
       // Verify user is a brand owner
       const { supabaseAdmin } = require("../db/config");
@@ -331,7 +350,7 @@ class PaymentController {
         });
       }
 
-      // Build query
+      // Build query with count for total
       let query = supabaseAdmin
         .from("v1_transactions")
         .select(`
@@ -345,10 +364,10 @@ class PaymentController {
               brand_id
             )
           )
-        `)
+        `, { count: 'exact' })
         .eq("from_entity", userId) // Brand owner is the from_entity
         .order("created_at", { ascending: false })
-        .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+        .range(offset, offset + limit - 1);
 
       // Apply filters
       if (type) {
@@ -383,14 +402,18 @@ class PaymentController {
         return formatted;
       });
 
+      const hasMore = (offset + limit) < (count || 0);
+
       return res.status(200).json({
         success: true,
         message: "Transactions fetched successfully",
         transactions: formattedTransactions,
         pagination: {
-          limit: parseInt(limit),
-          offset: parseInt(offset),
+          limit,
+          offset,
           count: formattedTransactions.length,
+          total: count || 0,
+          hasMore,
         },
       });
     } catch (err) {

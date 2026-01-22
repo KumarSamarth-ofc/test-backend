@@ -211,12 +211,12 @@ class UserService {
    */
   async getAllInfluencers(pagination = {}) {
     try {
-      const { page = 1, limit = 20 } = pagination;
+      // Accept offset + limit for infinite scroll support
+      const { limit = 20, offset = 0 } = pagination;
       
       // Validate pagination parameters
-      const validatedPage = Math.max(1, parseInt(page) || 1);
-      const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20)); // Max 100 items per page
-      const offset = (validatedPage - 1) * validatedLimit;
+      const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20)); // Max 100 items
+      const validatedOffset = Math.max(0, parseInt(offset) || 0);
 
       // Get all influencer users with pagination
       const { data: influencers, error: influencersError, count } = await supabaseAdmin
@@ -225,7 +225,7 @@ class UserService {
         .eq("role", "INFLUENCER")
         .eq("is_deleted", false)
         .order("created_at", { ascending: false })
-        .range(offset, offset + validatedLimit - 1);
+        .range(validatedOffset, validatedOffset + validatedLimit - 1);
 
       if (influencersError) {
         console.error(
@@ -244,10 +244,11 @@ class UserService {
           success: true,
           influencers: [],
           pagination: {
-            page: validatedPage,
             limit: validatedLimit,
+            offset: validatedOffset,
+            count: 0,
             total: 0,
-            totalPages: 0,
+            hasMore: false,
           },
         };
       }
@@ -321,14 +322,17 @@ class UserService {
         };
       });
 
+      const hasMore = (validatedOffset + validatedLimit) < (count || 0);
+
       return {
         success: true,
         influencers: influencersWithProfiles,
         pagination: {
-          page: validatedPage,
           limit: validatedLimit,
+          offset: validatedOffset,
+          count: influencersWithProfiles.length,
           total: count || 0,
-          totalPages: Math.ceil((count || 0) / validatedLimit),
+          hasMore,
         },
       };
     } catch (err) {

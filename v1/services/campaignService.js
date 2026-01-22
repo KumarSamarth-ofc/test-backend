@@ -236,12 +236,12 @@ class CampaignService {
       const { status, type, brand_id, min_budget, max_budget, search } =
         filters;
 
-      const { page = 1, limit = 20 } = pagination;
+      // Accept offset + limit for infinite scroll support
+      const { limit = 20, offset = 0 } = pagination;
       
       // Validate pagination parameters
-      const validatedPage = Math.max(1, parseInt(page) || 1);
-      const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20)); // Max 100 items per page
-      const offset = (validatedPage - 1) * validatedLimit;
+      const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20)); // Max 100 items
+      const validatedOffset = Math.max(0, parseInt(offset) || 0);
 
       // Build query - select only required fields
       let query = supabaseAdmin
@@ -281,7 +281,7 @@ class CampaignService {
       }
 
       // Apply pagination
-      query = query.range(offset, offset + validatedLimit - 1);
+      query = query.range(validatedOffset, validatedOffset + validatedLimit - 1);
 
       const { data, error, count } = await query;
 
@@ -335,14 +335,17 @@ class CampaignService {
         };
       });
 
+      const hasMore = (validatedOffset + validatedLimit) < (count || 0);
+
       return {
         success: true,
         campaigns: campaignsWithBrand,
         pagination: {
-          page: validatedPage,
           limit: validatedLimit,
+          offset: validatedOffset,
+          count: campaignsWithBrand.length,
           total: count || 0,
-          totalPages: Math.ceil((count || 0) / validatedLimit),
+          hasMore,
         },
       };
     } catch (err) {
@@ -524,12 +527,13 @@ class CampaignService {
   async getBrandCampaigns(brandId, filters = {}, pagination = {}) {
     try {
       const { status, type, min_budget, max_budget, search } = filters;
-      const { page = 1, limit = 20 } = pagination;
+      
+      // Accept offset + limit for infinite scroll support
+      const { limit = 20, offset = 0 } = pagination;
 
       // Validate pagination parameters
-      const validatedPage = Math.max(1, parseInt(page) || 1);
-      const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20)); // Max 100 items per page
-      const offset = (validatedPage - 1) * validatedLimit;
+      const validatedLimit = Math.max(1, Math.min(100, parseInt(limit) || 20)); // Max 100 items
+      const validatedOffset = Math.max(0, parseInt(offset) || 0);
 
       // Build base query for campaigns with count
       let query = supabaseAdmin
@@ -566,7 +570,7 @@ class CampaignService {
       }
 
       // Apply pagination
-      query = query.range(offset, offset + validatedLimit - 1);
+      query = query.range(validatedOffset, validatedOffset + validatedLimit - 1);
 
       // Fetch campaigns and get counts in parallel for better performance
       const [campaignsResult, ...countResults] = await Promise.all([
@@ -641,6 +645,8 @@ class CampaignService {
         created_at: campaign.created_at
       }));
 
+      const hasMore = (validatedOffset + validatedLimit) < (totalCount || 0);
+
       return {
         success: true,
         campaigns: formattedCampaigns,
@@ -649,10 +655,11 @@ class CampaignService {
         count_active_campaigns: count_active_campaigns || 0,
         count_completed_campaigns: count_completed_campaigns || 0,
         pagination: {
-          page: validatedPage,
           limit: validatedLimit,
+          offset: validatedOffset,
+          count: formattedCampaigns.length,
           total: totalCount || 0,
-          totalPages: Math.ceil((totalCount || 0) / validatedLimit),
+          hasMore,
         },
       };
     } catch (err) {
