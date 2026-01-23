@@ -26,11 +26,11 @@ router.post(
 );
 
 /**
- * GET /api/v1/chat/:applicationId
- * Get chat details for an application
+ * GET /api/v1/chat/:chatId
+ * Get chat details by chat ID
  */
 router.get(
-  '/:applicationId',
+  '/:chatId',
   authMiddleware.authenticateToken,
   chatController.getChat
 );
