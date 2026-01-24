@@ -363,7 +363,8 @@ const initSocket = (server) => {
     });
 
     // Handle leaving chat room
-    socket.on('leave_chat', ({ applicationId }) => {
+    socket.on('leave_chat', (payload = {}) => {
+      const { applicationId } = payload;
       const roomName = applicationId ? `app_${applicationId}` : socket.currentRoom;
       
       if (roomName && socket.rooms.has(roomName)) {
