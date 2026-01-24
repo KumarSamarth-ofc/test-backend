@@ -474,6 +474,255 @@ class NotificationService {
     }
   }
 
+  async notifyChatMessage(applicationId, senderId, recipientId, messagePreview) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, v1_campaigns(title)')
+        .eq('id', applicationId)
+        .single();
+
+      const { data: sender } = await supabaseAdmin
+        .from('v1_users')
+        .select('name')
+        .eq('id', senderId)
+        .maybeSingle();
+
+      const notificationData = {
+        type: 'CHAT_MESSAGE',
+        title: 'New Message',
+        body: `${sender?.name || 'Someone'} sent you a message${messagePreview ? `: ${messagePreview.substring(0, 50)}${messagePreview.length > 50 ? '...' : ''}` : ''}`,
+        clickAction: `/applications/${applicationId}/chat`,
+        data: { applicationId, senderId, recipientId },
+      };
+
+      return await this.sendAndStoreNotification(recipientId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] Chat message error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async notifyPayoutReleased(payoutId, applicationId, influencerId, amount) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, v1_campaigns(title)')
+        .eq('id', applicationId)
+        .single();
+
+      const notificationData = {
+        type: 'PAYOUT_RELEASED',
+        title: 'Payout Released! 💸',
+        body: `Your payout of ₹${amount || 0} has been released for "${application?.v1_campaigns?.title || 'campaign'}"`,
+        clickAction: `/applications/${applicationId}`,
+        data: { payoutId, applicationId, influencerId, amount },
+      };
+
+      return await this.sendAndStoreNotification(influencerId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] Payout released error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async notifyApplicationCreated(applicationId, campaignId, influencerId, brandId) {
+    try {
+      const { data: campaign } = await supabaseAdmin
+        .from('v1_campaigns')
+        .select('id, title, image_url')
+        .eq('id', campaignId)
+        .single();
+
+      const { data: influencer } = await supabaseAdmin
+        .from('v1_users')
+        .select('name')
+        .eq('id', influencerId)
+        .single();
+
+      const notificationData = {
+        type: 'APPLICATION_CREATED',
+        title: 'New Application Received',
+        body: `${influencer?.name || 'An influencer'} sent an application for "${campaign?.title || 'campaign'}"`,
+        clickAction: `/applications/${applicationId}`,
+        data: { applicationId, campaignId, influencerId, brandId },
+      };
+
+      return await this.sendAndStoreNotification(brandId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] Application created error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async notifyApplicationApproved(applicationId, influencerId, brandId) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, v1_campaigns(title)')
+        .eq('id', applicationId)
+        .single();
+
+      const { data: brand } = await supabaseAdmin
+        .from('v1_brand_profiles')
+        .select('brand_name')
+        .eq('user_id', brandId)
+        .single();
+
+      const notificationData = {
+        type: 'APPLICATION_APPROVED',
+        title: 'Application Approved! 🎉',
+        body: `${brand?.brand_name || 'Brand'} approved your application for "${application?.v1_campaigns?.title || 'campaign'}"`,
+        clickAction: `/applications/${applicationId}`,
+        data: { applicationId, brandId, influencerId },
+      };
+
+      return await this.sendAndStoreNotification(influencerId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] Application approved error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async notifyFlowStateChange(applicationId, newPhase, userId, customMessage = null) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, v1_campaigns(title)')
+        .eq('id', applicationId)
+        .single();
+
+      const phaseMessages = {
+        'APPLIED': 'Your application has been submitted',
+        'ACCEPTED': 'Your application has been accepted! You can now proceed with payment',
+        'SCRIPT': 'Time to submit your script',
+        'WORK': 'Time to submit your work',
+        'PAYOUT': 'Your work has been approved! Payout will be processed soon',
+        'COMPLETED': 'Application completed successfully! 🎊',
+        'CANCELLED': 'Application has been cancelled'
+      };
+
+      const message = customMessage || phaseMessages[newPhase] || `Application phase changed to ${newPhase}`;
+
+      const notificationData = {
+        type: 'FLOW_STATE_CHANGE',
+        title: 'Application Update',
+        body: message,
+        clickAction: `/applications/${applicationId}`,
+        data: { applicationId, newPhase, userId },
+      };
+
+      return await this.sendAndStoreNotification(userId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] Flow state change error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async notifyConversationClosed(applicationId, closedById, otherUserId, message = null) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, v1_campaigns(title)')
+        .eq('id', applicationId)
+        .single();
+
+      const { data: closer } = await supabaseAdmin
+        .from('v1_users')
+        .select('name')
+        .eq('id', closedById)
+        .maybeSingle();
+
+      const notificationData = {
+        type: 'CONVERSATION_CLOSED',
+        title: 'Conversation Closed',
+        body: message || `Conversation for "${application?.v1_campaigns?.title || 'campaign'}" has been closed by ${closer?.name || 'admin'}`,
+        clickAction: `/applications/${applicationId}/chat`,
+        data: { applicationId, closedById, otherUserId },
+      };
+
+      return await this.sendAndStoreNotification(otherUserId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] Conversation closed error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async notifyCampaignUpdate(campaignId, userId, title, body, data = {}) {
+    try {
+      const notificationData = {
+        type: 'CAMPAIGN_UPDATE',
+        title: title || 'Campaign Update',
+        body: body || 'Your campaign has been updated',
+        clickAction: `/campaigns/${campaignId}`,
+        data: { campaignId, userId, ...data },
+      };
+
+      return await this.sendAndStoreNotification(userId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] Campaign update error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async notifyScriptSubmitted(scriptId, applicationId, brandId, influencerId) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, v1_campaigns(title)')
+        .eq('id', applicationId)
+        .single();
+
+      const { data: influencer } = await supabaseAdmin
+        .from('v1_users')
+        .select('name')
+        .eq('id', influencerId)
+        .maybeSingle();
+
+      const notificationData = {
+        type: 'SCRIPT_SUBMITTED',
+        title: 'New Script Submitted',
+        body: `${influencer?.name || 'Influencer'} submitted a script for "${application?.v1_campaigns?.title || 'campaign'}"`,
+        clickAction: `/applications/${applicationId}/scripts`,
+        data: { scriptId, applicationId, brandId, influencerId },
+      };
+
+      return await this.sendAndStoreNotification(brandId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] Script submitted error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async notifyWorkSubmitted(workSubmissionId, applicationId, brandId, influencerId) {
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('id, v1_campaigns(title)')
+        .eq('id', applicationId)
+        .single();
+
+      const { data: influencer } = await supabaseAdmin
+        .from('v1_users')
+        .select('name')
+        .eq('id', influencerId)
+        .maybeSingle();
+
+      const notificationData = {
+        type: 'WORK_SUBMITTED',
+        title: 'New Work Submitted',
+        body: `${influencer?.name || 'Influencer'} submitted work for "${application?.v1_campaigns?.title || 'campaign'}"`,
+        clickAction: `/applications/${applicationId}/work`,
+        data: { workSubmissionId, applicationId, brandId, influencerId },
+      };
+
+      return await this.sendAndStoreNotification(brandId, notificationData);
+    } catch (error) {
+      console.error('[v1/Notification] Work submitted error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
 }
 
 module.exports = new NotificationService();

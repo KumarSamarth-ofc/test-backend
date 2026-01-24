@@ -257,6 +257,31 @@ const ChatService = {
   },
 
   /**
+   * getChatByApplication
+   * Gets chat by application ID (used by socket for validation)
+   * @param {string} applicationId - The application ID
+   * @returns {Promise<Object|null>} - The chat object or null
+   */
+  async getChatByApplication(applicationId) {
+    if (!applicationId) {
+      return null;
+    }
+
+    const { data: chat, error } = await supabaseAdmin
+      .from('v1_chats')
+      .select('id, status, application_id')
+      .eq('application_id', applicationId)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Error getting chat by application:', error);
+      return null;
+    }
+
+    return chat;
+  },
+
+  /**
    * saveMessage
    * Validates status, masks content, and persists to DB.
    * @param {string} userId - The sender's user ID
@@ -331,6 +356,36 @@ const ChatService = {
     if (saveError) {
       console.error('Error saving message:', saveError);
       throw new Error(`Failed to save message: ${saveError.message}`);
+    }
+
+    // Get application to find recipient and send notification
+    try {
+      const { data: application } = await supabaseAdmin
+        .from('v1_applications')
+        .select('influencer_id, v1_campaigns!inner(brand_id)')
+        .eq('id', applicationId)
+        .single();
+
+      if (application) {
+        // Determine recipient (the other party)
+        const recipientId = userId === application.influencer_id 
+          ? application.v1_campaigns?.brand_id 
+          : application.influencer_id;
+
+        if (recipientId) {
+          const NotificationService = require('./notificationService');
+          // Send notification (socket will handle if online, FCM if offline)
+          await NotificationService.notifyChatMessage(
+            applicationId,
+            userId,
+            recipientId,
+            safeMessage
+          );
+        }
+      }
+    } catch (notifError) {
+      console.error('[ChatService/saveMessage] Failed to send notification:', notifError);
+      // Don't fail message saving if notification fails
     }
 
     return savedMessage;
@@ -417,12 +472,20 @@ const ChatService = {
    * closeChat
    * Call when Application moves to COMPLETED by admin (not when work is completed)
    * @param {string} applicationId - The application ID
+   * @param {string} closedById - The user ID who closed the chat (optional, defaults to system)
    * @returns {Promise<void>}
    */
-  async closeChat(applicationId) {
+  async closeChat(applicationId, closedById = null) {
     if (!applicationId) {
       throw new Error('applicationId is required');
     }
+
+    // Get application details to find participants
+    const { data: application } = await supabaseAdmin
+      .from('v1_applications')
+      .select('influencer_id, brand_id')
+      .eq('id', applicationId)
+      .single();
 
     const { error } = await supabaseAdmin
       .from('v1_chats')
@@ -432,6 +495,27 @@ const ChatService = {
     if (error) {
       console.error('Error closing chat:', error);
       throw new Error(`Failed to close chat: ${error.message}`);
+    }
+
+    // Send notification to the other party
+    if (application) {
+      try {
+        const NotificationService = require('./notificationService');
+        const otherUserId = closedById === application.influencer_id 
+          ? application.brand_id 
+          : application.influencer_id;
+        
+        if (otherUserId) {
+          await NotificationService.notifyConversationClosed(
+            applicationId,
+            closedById || 'system',
+            otherUserId
+          );
+        }
+      } catch (notifError) {
+        console.error('[ChatService/closeChat] Failed to send notification:', notifError);
+        // Don't fail chat closure if notification fails
+      }
     }
   },
 
