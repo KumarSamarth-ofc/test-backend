@@ -89,7 +89,7 @@ const createChat = async (req, res) => {
     if (!hasAccess) {
       return res.status(403).json({ 
         success: false, 
-        message: 'Access denied to this application' 
+        message: 'Access denied to this application. Invalid user access' 
       });
     }
 
