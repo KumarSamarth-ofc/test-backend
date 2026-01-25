@@ -870,7 +870,8 @@ const ChatService = {
 
   /**
    * updateMessageStatus
-   * Updates the status of a message (SENT, DELIVERED, READ)
+   * Updates the status of a message (SENDING, SENT, DELIVERED, READ)
+   * Note: SENDING is accepted but not set by backend (intended for frontend optimistic updates)
    * @param {string} messageId - The message ID
    * @param {string} status - The new status
    * @returns {Promise<Object>} - The updated message
