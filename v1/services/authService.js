@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const whatsappService = require("../utils/whatsapp");
 const emailService = require("../utils/emailService");
+const { normalizeGender } = require("../../utils/enumNormalizer");
 
 class AuthService {
   constructor() {
@@ -482,6 +483,13 @@ class AuthService {
     const update = {};
     if (userData.name !== undefined) update.name = userData.name;
     if (userData.email !== undefined) update.email = userData.email;
+    // Handle gender - now stored in v1_users table
+    if (userData.gender !== undefined) {
+      const normalizedGender = normalizeGender(userData.gender);
+      if (normalizedGender !== null) {
+        update.gender = normalizedGender;
+      }
+    }
 
     if (Object.keys(update).length === 0) return;
 

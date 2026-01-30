@@ -1,4 +1,9 @@
 const { supabaseAdmin } = require("../db/config");
+const {
+  normalizeTier,
+  normalizeCampaignType,
+  normalizeCampaignStatus,
+} = require("../../utils/enumNormalizer");
 
 /**
  * Campaign Service
@@ -34,7 +39,7 @@ class CampaignService {
    */
   normalizeStatus(status) {
     if (!status) return "DRAFT";
-    return status.toUpperCase();
+    return normalizeCampaignStatus(status) || "DRAFT";
   }
 
   /**
@@ -42,17 +47,14 @@ class CampaignService {
    */
   normalizeType(type) {
     if (!type) return "NORMAL";
-    return type.toUpperCase();
+    return normalizeCampaignType(type) || "NORMAL";
   }
 
   /**
    * Normalize influencer tier
    */
   normalizeTier(tier) {
-    if (!tier) return null;
-    const normalized = String(tier).toUpperCase().trim();
-    const validTiers = ["NANO", "MICRO", "MID", "MACRO"];
-    return validTiers.includes(normalized) ? normalized : null;
+    return normalizeTier(tier);
   }
 
   /**
@@ -92,7 +94,7 @@ class CampaignService {
     async createCampaign(brandId, campaignData) {
       try {
         // Validate type
-        const type = this.normalizeType(campaignData.type);
+        const type = normalizeCampaignType(campaignData.type) || "NORMAL";
         if (!this.validateType(type)) {
           return {
             success: false,
@@ -101,7 +103,7 @@ class CampaignService {
         }
   
         // Validate status
-        const status = this.normalizeStatus(campaignData.status || "DRAFT");
+        const status = normalizeCampaignStatus(campaignData.status) || "DRAFT";
         if (!this.validateStatus(status)) {
           return {
             success: false,
@@ -185,7 +187,7 @@ class CampaignService {
           content_type: Array.isArray(campaignData.content_type) 
             ? campaignData.content_type 
             : [],
-          influencer_tier: this.normalizeTier(campaignData.influencer_tier),
+          influencer_tier: normalizeTier(campaignData.influencer_tier),
           categories: campaignData.categories ?? null,
           language: campaignData.language ?? null,
           brand_guideline: campaignData.brand_guideline ?? null,
@@ -251,14 +253,14 @@ class CampaignService {
 
       // Apply filters
       if (status) {
-        const normalizedStatus = this.normalizeStatus(status);
+        const normalizedStatus = normalizeCampaignStatus(status) || "DRAFT";
         if (this.validateStatus(normalizedStatus)) {
           query = query.eq("status", normalizedStatus);
         }
       }
 
       if (type) {
-        const normalizedType = this.normalizeType(type);
+        const normalizedType = normalizeCampaignType(type) || "NORMAL";
         if (this.validateType(normalizedType)) {
           query = query.eq("type", normalizedType);
         }
@@ -544,14 +546,14 @@ class CampaignService {
 
       // Apply filters
       if (status) {
-        const normalizedStatus = this.normalizeStatus(status);
+        const normalizedStatus = normalizeCampaignStatus(status) || "DRAFT";
         if (this.validateStatus(normalizedStatus)) {
           query = query.eq("status", normalizedStatus);
         }
       }
 
       if (type) {
-        const normalizedType = this.normalizeType(type);
+        const normalizedType = normalizeCampaignType(type) || "NORMAL";
         if (this.validateType(normalizedType)) {
           query = query.eq("type", normalizedType);
         }
@@ -694,7 +696,7 @@ class CampaignService {
         }
   
         if (updateData.type !== undefined) {
-          const type = this.normalizeType(updateData.type);
+          const type = normalizeCampaignType(updateData.type) || "NORMAL";
           if (!this.validateType(type)) {
             return {
               success: false,
@@ -705,7 +707,7 @@ class CampaignService {
         }
   
         if (updateData.status !== undefined) {
-          const status = this.normalizeStatus(updateData.status);
+          const status = normalizeCampaignStatus(updateData.status) || "DRAFT";
           if (!this.validateStatus(status)) {
             return {
               success: false,
@@ -766,7 +768,7 @@ class CampaignService {
         }
   
         if (updateData.influencer_tier !== undefined) {
-          update.influencer_tier = this.normalizeTier(updateData.influencer_tier);
+          update.influencer_tier = normalizeTier(updateData.influencer_tier);
         }
   
         if (updateData.categories !== undefined) {

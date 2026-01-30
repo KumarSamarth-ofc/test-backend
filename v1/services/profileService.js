@@ -1,70 +1,12 @@
 const { supabaseAdmin } = require("../db/config");
 const { uploadImageToStorage, deleteImageFromStorage } = require("../utils/imageUpload");
+const {
+  normalizeGender,
+  normalizeTier,
+  normalizePlatform,
+} = require("../../utils/enumNormalizer");
 
 class ProfileService {
-  /**
-   * Normalize gender value to match database constraint (uppercase)
-   */
-  normalizeGender(gender) {
-    if (!gender) return null;
-
-    const normalized = String(gender).toUpperCase().trim();
-    const validGenders = ["MALE", "FEMALE", "OTHER"];
-
-    if (validGenders.includes(normalized)) {
-      return normalized;
-    }
-
-    // If lowercase provided, convert to uppercase
-    const lower = normalized.toLowerCase();
-    if (lower === "male") return "MALE";
-    if (lower === "female") return "FEMALE";
-    if (lower === "other") return "OTHER";
-
-    return null; // Invalid gender, return null
-  }
-
-  normalizeTier(tier) {
-    if (!tier) return null;
-  
-    const normalized = String(tier).toUpperCase().trim();
-    const validTiers = ["NANO", "MICRO", "MID", "MACRO"];
-  
-    if (validTiers.includes(normalized)) {
-      return normalized;
-    }
-  
-    // Handle lowercase variations
-    const lower = normalized.toLowerCase();
-    if (lower === "nano") return "NANO";
-    if (lower === "micro") return "MICRO";
-    if (lower === "mid") return "MID";
-    if (lower === "macro") return "MACRO";
-  
-    return null; // Invalid tier, return null
-  }
-
-  /**
-   * Normalize platform name to match database constraint (INSTAGRAM | FACEBOOK | YOUTUBE)
-   */
-  normalizePlatform(platformName) {
-    if (!platformName) return null;
-
-    const normalized = String(platformName).toUpperCase().trim();
-    const validPlatforms = ["INSTAGRAM", "FACEBOOK", "YOUTUBE"];
-
-    if (validPlatforms.includes(normalized)) {
-      return normalized;
-    }
-
-    // Handle common variations
-    const lower = normalized.toLowerCase();
-    if (lower === "instagram" || lower === "ig") return "INSTAGRAM";
-    if (lower === "facebook" || lower === "fb") return "FACEBOOK";
-    if (lower === "youtube" || lower === "yt") return "YOUTUBE";
-
-    return null; // Invalid platform
-  }
 
   /**
    * Upsert social platforms for influencer
@@ -80,7 +22,7 @@ class ProfileService {
 
       for (const platform of platforms) {
         try {
-          const platformName = this.normalizePlatform(
+          const platformName = normalizePlatform(
             platform.platform_name || platform.platform || platform.platformName
           );
           const username = platform.username || null;
@@ -314,6 +256,15 @@ class ProfileService {
         }
       }
 
+      // Handle gender - now stored in v1_users table (must be before userUpdate execution)
+      if (profileData.gender !== undefined) {
+        const normalizedGender = normalizeGender(profileData.gender);
+        // Only add to update if normalization succeeded (not null)
+        if (normalizedGender !== null) {
+          userUpdate.gender = normalizedGender;
+        }
+      }
+
       if (Object.keys(userUpdate).length > 0) {
         // First check if user exists
         const { data: existingUser, error: checkError } = await supabaseAdmin
@@ -430,18 +381,9 @@ class ProfileService {
           : null;
       }
 
-      // Handle gender
-      if (profileData.gender !== undefined) {
-        const normalizedGender = this.normalizeGender(profileData.gender);
-        // Only add to update if normalization succeeded (not null)
-        if (normalizedGender !== null) {
-          profileUpdate.gender = normalizedGender;
-        }
-      }
-
       // Handle tier
       if (profileData.tier !== undefined) {
-        profileUpdate.tier = this.normalizeTier(profileData.tier);
+        profileUpdate.tier = normalizeTier(profileData.tier);
       }
 
       // Handle min_value
@@ -715,6 +657,15 @@ class ProfileService {
         }
       }
 
+      // Handle gender - now stored in v1_users table (must be before userUpdate execution)
+      if (profileData.gender !== undefined) {
+        const normalizedGender = normalizeGender(profileData.gender);
+        // Only add to update if normalization succeeded (not null)
+        if (normalizedGender !== null) {
+          userUpdate.gender = normalizedGender;
+        }
+      }
+
       if (Object.keys(userUpdate).length > 0) {
         // First check if user exists
         const { data: existingUser, error: checkError } = await supabaseAdmin
@@ -813,15 +764,6 @@ class ProfileService {
         } else {
           const trimmed = String(profileData.brand_description).trim();
           profileUpdate.brand_description = trimmed || null;
-        }
-      }
-
-      // Update gender if provided
-      if (profileData.gender !== undefined) {
-        const normalizedGender = this.normalizeGender(profileData.gender);
-        // Only add to update if normalization succeeded (not null)
-        if (normalizedGender !== null) {
-          profileUpdate.gender = normalizedGender;
         }
       }
 
@@ -952,8 +894,8 @@ class ProfileService {
         country: userData?.address_country || userData?.country || null,
         primary_language: primaryLanguage,
         languages: languagesArray,
-        gender: this.normalizeGender(userData?.gender),
-        tier: this.normalizeTier(userData?.tier),
+        // gender: removed - now stored in v1_users table
+        tier: normalizeTier(userData?.tier),
         pan_number: userData?.pan_number || null,
         pan_verified: false,
         profile_completion_pct: 0,
@@ -1000,7 +942,7 @@ class ProfileService {
           placeholderLogoUrl,
         bio: userData?.bio || null,
         brand_description: userData?.brand_description || null,
-        gender: this.normalizeGender(userData?.gender),
+        // gender: removed - now stored in v1_users table
         pan_number: userData?.pan_number || null,
         pan_verified: false,
         profile_completion_pct: 0,
@@ -1073,8 +1015,8 @@ class ProfileService {
           pendingSteps.push("role_selection");
         }
 
-        // 2. Gender Selection - v1_influencer_profiles.gender
-        if (profile?.gender) {
+        // 2. Gender Selection - v1_users.gender
+        if (user.gender) {
           completedSteps.push("gender_selection");
         } else {
           pendingSteps.push("gender_selection");
@@ -1177,8 +1119,8 @@ class ProfileService {
           pendingSteps.push("role_selection");
         }
 
-        // 2. Gender Selection - v1_brand_profiles.gender
-        if (profile?.gender) {
+        // 2. Gender Selection - v1_users.gender
+        if (user.gender) {
           completedSteps.push("gender_selection");
         } else {
           pendingSteps.push("gender_selection");
