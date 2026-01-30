@@ -421,7 +421,7 @@ class ProfileService {
         // First check if profile exists
         const { data: existingProfile, error: checkError } = await supabaseAdmin
           .from("v1_influencer_profiles")
-          .select("id")
+          .select("user_id")
           .eq("user_id", userId)
           .eq("is_deleted", false)
           .maybeSingle();
@@ -482,7 +482,7 @@ class ProfileService {
           const { data, error: updateError } = await supabaseAdmin
             .from("v1_influencer_profiles")
             .update(profileUpdate)
-            .eq("id", existingProfile.id)
+            .eq("user_id", existingProfile.user_id)
             .select()
             .single();
 
@@ -849,7 +849,7 @@ class ProfileService {
         // First check if profile exists
         const { data: existingProfile, error: checkError } = await supabaseAdmin
           .from("v1_brand_profiles")
-          .select("id")
+          .select("user_id")
           .eq("user_id", userId)
           .eq("is_deleted", false)
           .maybeSingle();
@@ -903,7 +903,7 @@ class ProfileService {
           const { data, error: updateError } = await supabaseAdmin
             .from("v1_brand_profiles")
             .update(profileUpdate)
-            .eq("id", existingProfile.id)
+            .eq("user_id", existingProfile.user_id)
             .select()
             .single();
 
