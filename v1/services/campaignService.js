@@ -64,7 +64,7 @@ class CampaignService {
     try {
       const { data, error } = await supabaseAdmin
         .from("v1_campaigns")
-        .select("brand_id")
+        .select("brand_id, is_deleted")
         .eq("id", campaignId)
         .maybeSingle();
 
@@ -75,6 +75,10 @@ class CampaignService {
 
       if (!data) {
         return { success: false, message: "Campaign not found" };
+      }
+
+      if (data.is_deleted) {
+        return { success: false, message: "Campaign already deleted" };
       }
 
       if (data.brand_id !== brandId) {
@@ -194,7 +198,7 @@ class CampaignService {
           // Deadline fields
           work_deadline: campaignData.work_deadline ?? null,
           script_deadline: campaignData.script_deadline ?? null,
-          acception_applications_till: campaignData.acception_applications_till ?? null,
+          applications_accepted_till: campaignData.applications_accepted_till ?? null,
           buffer_days: campaignData.buffer_days ?? 0,
         };
   
@@ -249,6 +253,7 @@ class CampaignService {
       let query = supabaseAdmin
         .from("v1_campaigns")
         .select("id, title, cover_image_url, budget, platform, content_type, brand_id", { count: "exact" })
+        .eq("is_deleted", false)
         .order("created_at", { ascending: false });
 
       // Apply filters
@@ -371,6 +376,7 @@ class CampaignService {
         .from("v1_campaigns")
         .select("id, title, cover_image_url, description, status, type, budget, platform, content_type, buffer_days, requires_script, language, work_deadline, script_deadline, acception_applications_till")
         .eq("id", campaignId)
+        .eq("is_deleted", false)
         .maybeSingle();
 
       if (campaignError) {
@@ -542,6 +548,7 @@ class CampaignService {
         .from("v1_campaigns")
         .select("id, title, cover_image_url, type, budget, status, language, created_at", { count: "exact" })
         .eq("brand_id", brandId)
+        .eq("is_deleted", false)
         .order("created_at", { ascending: false });
 
       // Apply filters
@@ -581,24 +588,28 @@ class CampaignService {
         supabaseAdmin
           .from("v1_campaigns")
           .select("*", { count: "exact", head: true })
-          .eq("brand_id", brandId),
+          .eq("brand_id", brandId)
+          .eq("is_deleted", false),
         // Get live campaigns count
         supabaseAdmin
           .from("v1_campaigns")
           .select("*", { count: "exact", head: true })
           .eq("brand_id", brandId)
+          .eq("is_deleted", false)
           .eq("status", "LIVE"),
         // Get active campaigns count
         supabaseAdmin
           .from("v1_campaigns")
           .select("*", { count: "exact", head: true })
           .eq("brand_id", brandId)
+          .eq("is_deleted", false)
           .eq("status", "ACTIVE"),
         // Get completed campaigns count
         supabaseAdmin
           .from("v1_campaigns")
           .select("*", { count: "exact", head: true })
           .eq("brand_id", brandId)
+          .eq("is_deleted", false)
           .eq("status", "COMPLETED"),
       ]);
 
@@ -842,6 +853,10 @@ class CampaignService {
 
   /**
    * Delete campaign (Brand Owner only)
+   * Soft deletes by setting is_deleted = true
+   * Campaign can only be deleted if:
+   * - No applications have been accepted, OR
+   * - If applications were accepted, all accepted applications must be in PAYOUT or COMPLETED state
    */
   async deleteCampaign(campaignId, brandId) {
     try {
@@ -854,10 +869,47 @@ class CampaignService {
         return ownershipCheck;
       }
 
-      // Hard delete
+      // Check if campaign has any applications in progress
+      // Campaign can only be deleted if:
+      // - No applications have been accepted, OR
+      // - If applications were accepted, all must be in PAYOUT or COMPLETED state
+      const { data: allApplications, error: appsError } = await supabaseAdmin
+        .from("v1_applications")
+        .select("id, phase")
+        .eq("campaign_id", campaignId);
+
+      if (appsError) {
+        console.error("[v1/deleteCampaign] Error fetching applications:", appsError);
+        return {
+          success: false,
+          message: "Failed to validate campaign deletion",
+          error: appsError.message,
+        };
+      }
+
+      if (!allApplications || allApplications.length === 0) {
+        // No applications, safe to delete
+      } else {
+        // Check if any application is in a state that prevents deletion
+        // Allowed states for deletion: APPLIED, CANCELLED, PAYOUT, COMPLETED
+        // Not allowed: ACCEPTED, SCRIPT, WORK (in progress states)
+        const invalidPhases = ["ACCEPTED", "SCRIPT", "WORK"];
+        const invalidApplications = allApplications.filter(app => 
+          invalidPhases.includes(app.phase)
+        );
+
+        if (invalidApplications.length > 0) {
+          return {
+            success: false,
+            message: "Cannot delete campaign. Some applications are still in progress (ACCEPTED, SCRIPT, or WORK phase). All applications must be in APPLIED, PAYOUT, or COMPLETED state before deletion.",
+          };
+        }
+      }
+
+      // Soft delete - set is_deleted = true
       const { error } = await supabaseAdmin
         .from("v1_campaigns")
-        .delete()
+        .update({ is_deleted: true })
         .eq("id", campaignId);
 
       if (error) {
@@ -880,6 +932,84 @@ class CampaignService {
         message: "Internal server error",
         error: err.message,
       };
+    }
+  }
+
+  /**
+   * Check and auto-complete NORMAL campaigns when all applications are completed
+   * This should be called after an application is completed
+   */
+  async checkAndCompleteNormalCampaign(campaignId) {
+    try {
+      // Get campaign details
+      const { data: campaign, error: campaignError } = await supabaseAdmin
+        .from("v1_campaigns")
+        .select("id, type, status, is_deleted")
+        .eq("id", campaignId)
+        .maybeSingle();
+
+      if (campaignError) {
+        console.error("[v1/checkAndCompleteNormalCampaign] Campaign fetch error:", campaignError);
+        return { success: false, error: campaignError.message };
+      }
+
+      if (!campaign || campaign.is_deleted) {
+        return { success: false, message: "Campaign not found or deleted" };
+      }
+
+      // Only auto-complete NORMAL campaigns
+      if (campaign.type !== "NORMAL") {
+        return { success: true, message: "Not a NORMAL campaign, skipping auto-completion" };
+      }
+
+      // Don't update if already completed
+      if (campaign.status === "COMPLETED") {
+        return { success: true, message: "Campaign already completed" };
+      }
+
+      // Get all applications for this campaign
+      const { data: applications, error: appsError } = await supabaseAdmin
+        .from("v1_applications")
+        .select("id, phase")
+        .eq("campaign_id", campaignId);
+
+      if (appsError) {
+        console.error("[v1/checkAndCompleteNormalCampaign] Applications fetch error:", appsError);
+        return { success: false, error: appsError.message };
+      }
+
+      if (!applications || applications.length === 0) {
+        return { success: true, message: "No applications found, campaign not completed" };
+      }
+
+      // Check if all applications are in COMPLETED or CANCELLED state
+      const allCompleted = applications.every(app => 
+        app.phase === "COMPLETED" || app.phase === "CANCELLED"
+      );
+
+      if (allCompleted) {
+        // Update campaign status to COMPLETED
+        const { error: updateError } = await supabaseAdmin
+          .from("v1_campaigns")
+          .update({ status: "COMPLETED" })
+          .eq("id", campaignId);
+
+        if (updateError) {
+          console.error("[v1/checkAndCompleteNormalCampaign] Update error:", updateError);
+          return { success: false, error: updateError.message };
+        }
+
+        return { 
+          success: true, 
+          message: "Campaign auto-completed successfully",
+          campaignCompleted: true
+        };
+      }
+
+      return { success: true, message: "Not all applications completed yet" };
+    } catch (err) {
+      console.error("[v1/checkAndCompleteNormalCampaign] Exception:", err);
+      return { success: false, error: err.message };
     }
   }
 

@@ -691,6 +691,18 @@ class ApplicationService {
         // Don't fail completion if chat closure fails, but log it
       }
 
+      // Auto-complete NORMAL campaigns when all applications are completed
+      try {
+        const CampaignService = require('./campaignService');
+        const campaignResult = await CampaignService.checkAndCompleteNormalCampaign(app.campaign_id);
+        if (campaignResult.success && campaignResult.campaignCompleted) {
+          console.log(`[ApplicationService/complete] Campaign ${app.campaign_id} auto-completed`);
+        }
+      } catch (campaignError) {
+        console.error(`[ApplicationService/complete] Failed to check campaign completion:`, campaignError);
+        // Don't fail application completion if campaign check fails, but log it
+      }
+
       return {
         success: true,
         message: 'Application completed successfully',
