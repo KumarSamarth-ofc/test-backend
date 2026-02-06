@@ -36,7 +36,6 @@ class AuthController {
     }
   }
 
-
   async sendRegistrationOTP(req, res) {
     try {
       const errors = validationResult(req);
@@ -67,7 +66,6 @@ class AuthController {
       });
     }
   }
-
 
   async sendReactivationOTP(req, res) {
     try {
@@ -102,7 +100,6 @@ class AuthController {
       });
     }
   }
-
 
   async verifyOTP(req, res) {
     try {
@@ -171,7 +168,7 @@ class AuthController {
 
       const status =
         result.code === "REFRESH_TOKEN_EXPIRED" ||
-          result.code === "INVALID_TOKEN_TYPE"
+        result.code === "INVALID_TOKEN_TYPE"
           ? 401
           : 400;
 
@@ -202,25 +199,29 @@ class AuthController {
 
       const { email, password, name } = req.body;
 
-      const result = await AuthService.registerBrandOwner(
+      const result = await AuthService.registerBrandOwner({
+        ...req.body,
         email,
         password,
-        name
-      );
+        name,
+      });
 
       if (result.success) {
         // Register FCM token if provided
         if (req.body.fcm_token && result.user) {
           try {
-            const fcmService = require('../services/fcmService');
+            const fcmService = require("../services/fcmService");
             await fcmService.registerToken(
               result.user.id,
               req.body.fcm_token,
-              req.body.device_type || 'unknown',
+              req.body.device_type || "unknown",
               req.body.device_id || null
             );
           } catch (fcmError) {
-            console.error('[v1/registerBrandOwner] Failed to register FCM token:', fcmError);
+            console.error(
+              "[v1/registerBrandOwner] Failed to register FCM token:",
+              fcmError
+            );
             // Don't fail registration if FCM registration fails
           }
         }
@@ -265,15 +266,18 @@ class AuthController {
         // Register FCM token if provided
         if (req.body.fcm_token) {
           try {
-            const fcmService = require('../services/fcmService');
+            const fcmService = require("../services/fcmService");
             await fcmService.registerToken(
               result.user.id,
               req.body.fcm_token,
-              req.body.device_type || 'unknown',
+              req.body.device_type || "unknown",
               req.body.device_id || null
             );
           } catch (fcmError) {
-            console.error('[v1/loginBrandOwner] Failed to register FCM token:', fcmError);
+            console.error(
+              "[v1/loginBrandOwner] Failed to register FCM token:",
+              fcmError
+            );
             // Don't fail authentication if FCM registration fails
           }
         }
@@ -462,7 +466,8 @@ class AuthController {
       if (!req.user || !req.user.id || !req.user.role) {
         return res.status(401).json({
           success: false,
-          message: "Authentication required. Invalid or missing user information.",
+          message:
+            "Authentication required. Invalid or missing user information.",
         });
       }
 
@@ -489,14 +494,14 @@ class AuthController {
       if (!result.success) {
         const statusCode =
           result.error_type === "invalid_format" ||
-            result.error_type === "different_pan_exists" ||
-            result.error_type === "duplicate_pan"
+          result.error_type === "different_pan_exists" ||
+          result.error_type === "duplicate_pan"
             ? 400
             : result.error_type === "timeout"
-              ? 504
-              : result.error_type === "service_unavailable"
-                ? 503
-                : result.http_status || 500;
+            ? 504
+            : result.error_type === "service_unavailable"
+            ? 503
+            : result.http_status || 500;
 
         return res.status(statusCode).json({
           success: false,

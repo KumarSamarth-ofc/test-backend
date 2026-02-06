@@ -25,7 +25,8 @@ class AuthService {
 
     const role = String(userDataRole).toLowerCase().trim();
     if (role === "influencer") return "INFLUENCER";
-    if (role === "brand_owner" || role === "brand" || role === "owner") return "BRAND_OWNER";
+    if (role === "brand_owner" || role === "brand" || role === "owner")
+      return "BRAND_OWNER";
     if (role === "admin") return "ADMIN";
     return "INFLUENCER"; // default
   }
@@ -57,7 +58,11 @@ class AuthService {
     try {
       // Bypass OTP for mock users (only if enabled)
       const mockUsersService = require("./mockUsersService");
-      if (mockUsersService.isMockUsersEnabled() && mockUsersService.isMockUser(phone) && otp === "123456") {
+      if (
+        mockUsersService.isMockUsersEnabled() &&
+        mockUsersService.isMockUser(phone) &&
+        otp === "123456"
+      ) {
         return { success: true };
       }
 
@@ -112,7 +117,6 @@ class AuthService {
     }
   }
 
-
   // ---------- Send OTP (login existing v1 user) ----------
 
   async sendOTP(phone, role = null) {
@@ -136,7 +140,10 @@ class AuthService {
 
       // Bypass for mock users (only if enabled)
       const mockUsersService = require("./mockUsersService");
-      if (mockUsersService.isMockUsersEnabled() && mockUsersService.isMockUser(phone)) {
+      if (
+        mockUsersService.isMockUsersEnabled() &&
+        mockUsersService.isMockUser(phone)
+      ) {
         return {
           success: true,
           message: "OTP sent successfully",
@@ -179,7 +186,8 @@ class AuthService {
         if (!validRoles.includes(role)) {
           return {
             success: false,
-            message: "Invalid role. Must be one of: BRAND_OWNER, INFLUENCER, ADMIN",
+            message:
+              "Invalid role. Must be one of: BRAND_OWNER, INFLUENCER, ADMIN",
             code: "INVALID_ROLE",
           };
         }
@@ -230,7 +238,10 @@ class AuthService {
 
       // Bypass for mock users (only if enabled)
       const mockUsersService = require("./mockUsersService");
-      if (mockUsersService.isMockUsersEnabled() && mockUsersService.isMockUser(phone)) {
+      if (
+        mockUsersService.isMockUsersEnabled() &&
+        mockUsersService.isMockUser(phone)
+      ) {
         return {
           success: true,
           message: "OTP sent successfully",
@@ -343,7 +354,8 @@ class AuthService {
         if (!validRoles.includes(role)) {
           return {
             success: false,
-            message: "Invalid role. Must be one of: BRAND_OWNER, INFLUENCER, ADMIN",
+            message:
+              "Invalid role. Must be one of: BRAND_OWNER, INFLUENCER, ADMIN",
             code: "INVALID_ROLE",
           };
         }
@@ -375,7 +387,6 @@ class AuthService {
     }
   }
 
-
   // ---------- Verify OTP & create/update v1 users + profiles ----------
 
   async verifyOTP(phone, token, userData) {
@@ -401,7 +412,11 @@ class AuthService {
 
         // Handle dob - accept ISO8601 date strings or null, always save in ISO format
         let dobValue = null;
-        if (userData?.dob !== undefined && userData?.dob !== null && userData?.dob !== "") {
+        if (
+          userData?.dob !== undefined &&
+          userData?.dob !== null &&
+          userData?.dob !== ""
+        ) {
           const dobDate = new Date(userData.dob);
           if (!isNaN(dobDate.getTime())) {
             dobValue = dobDate.toISOString();
@@ -449,7 +464,10 @@ class AuthService {
             // Continue anyway - user is created, profile can be added later
           }
         } else if (role === "BRAND_OWNER") {
-          const profileResult = await ProfileService.createBrandProfile(user, userData);
+          const profileResult = await ProfileService.createBrandProfile(
+            user,
+            userData
+          );
           if (!profileResult.success) {
             console.error(
               "[v1/verifyOTP] Failed to create brand profile:",
@@ -459,12 +477,10 @@ class AuthService {
           }
         }
         // ADMIN and AGENT don't need profiles for now
-      }
-      else if (user && user.is_deleted === true) {
+      } else if (user && user.is_deleted === true) {
         // reactivate user
         await this.reactivateUser(user);
-      }
-      else {
+      } else {
         // Existing user: optionally update basic fields
         await this.updateBasicUserFields(user, userData);
       }
@@ -485,7 +501,6 @@ class AuthService {
       return { success: false, message: "Authentication failed" };
     }
   }
-
 
   async updateBasicUserFields(user, userData) {
     if (!userData) return;
@@ -508,7 +523,10 @@ class AuthService {
         if (!isNaN(dobDate.getTime())) {
           update.dob = dobDate.toISOString();
         } else {
-          console.warn("[v1/updateBasicUserFields] Invalid dob format:", dobInput);
+          console.warn(
+            "[v1/updateBasicUserFields] Invalid dob format:",
+            dobInput
+          );
         }
       } else {
         update.dob = null;
@@ -665,7 +683,6 @@ class AuthService {
       };
     }
   }
-
 
   // ---------- JWT helpers ----------
 
@@ -840,15 +857,20 @@ class AuthService {
   // ---------- Brand Owner Registration ----------
 
   /**
-   * Register brand owner with email and password
+   * Register brand owner with email, password, and initial profile data
    */
-  async registerBrandOwner(email, password, name) {
+  async registerBrandOwner(userData) {
     let createdUserId = null; // Track created user ID for cleanup
 
     try {
+      // Extract core auth fields from payload
+      const email = userData?.email;
+      const password = userData?.password;
+      const name = userData?.name;
+
       // 1) Validate email format
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
+      if (!email || !emailRegex.test(email)) {
         return { success: false, message: "Invalid email format" };
       }
 
@@ -863,7 +885,8 @@ class AuthService {
       if (existing) {
         return {
           success: false,
-          message: "This email is already registered. Please use a different email",
+          message:
+            "This email is already registered. Please use a different email",
           code: "EMAIL_ALREADY_EXISTS",
         };
       }
@@ -895,6 +918,8 @@ class AuthService {
           password_hash: passwordHash,
           role: "BRAND_OWNER",
           name: name || null,
+          // Optional basic fields from registration payload
+          phone_number: userData?.phone_number || null,
           email_verified: false,
           password_reset_token: emailVerificationToken, // Temporarily store here
           password_reset_token_expires_at: verificationExpiresAt.toISOString(),
@@ -915,11 +940,12 @@ class AuthService {
       createdUserId = created.id;
 
       // 7) Create brand profile in v1_brand_profiles table
-      // brand_name will be empty string (required field) - will be updated in complete profile
+      // Use registration payload so brand_name, brand_description, etc. are saved
       const ProfileService = require("./profileService");
-      const profileResult = await ProfileService.createBrandProfile(created, {
-        brand_name: "", // Empty string - required field, will be set in complete profile
-      });
+      const profileResult = await ProfileService.createBrandProfile(
+        created,
+        userData || {}
+      );
 
       if (!profileResult.success) {
         console.error(
@@ -959,8 +985,9 @@ class AuthService {
 
         return {
           success: false,
-          message: `Failed to create brand profile: ${profileResult.error || "Unknown error"
-            }`,
+          message: `Failed to create brand profile: ${
+            profileResult.error || "Unknown error"
+          }`,
         };
       }
 
@@ -1104,7 +1131,7 @@ class AuthService {
 
       return {
         success: false,
-        message: `Registration failed: ${err.message || "Unknown error"}`
+        message: `Registration failed: ${err.message || "Unknown error"}`,
       };
     }
   }
@@ -1474,8 +1501,6 @@ class AuthService {
       return { success: false, message: "Failed to reset password" };
     }
   }
-
-
 }
 
 module.exports = new AuthService();
