@@ -36,7 +36,9 @@ const validateBrandRegister = [
       const normalized = String(value).toLowerCase().trim();
       const validValues = ["android", "ios", "web", "unknown"];
       if (!validValues.includes(normalized)) {
-        throw new Error("device_type must be one of: android, ios, web, unknown");
+        throw new Error(
+          "device_type must be one of: android, ios, web, unknown"
+        );
       }
       return true;
     }),
@@ -52,9 +54,7 @@ const validateBrandLogin = [
     .isEmail()
     .withMessage("Valid email address required")
     .normalizeEmail(),
-  body("password")
-    .notEmpty()
-    .withMessage("Password is required"),
+  body("password").notEmpty().withMessage("Password is required"),
   body("fcm_token")
     .optional()
     .isString()
@@ -69,7 +69,9 @@ const validateBrandLogin = [
       const normalized = String(value).toLowerCase().trim();
       const validValues = ["android", "ios", "web", "unknown"];
       if (!validValues.includes(normalized)) {
-        throw new Error("device_type must be one of: android, ios, web, unknown");
+        throw new Error(
+          "device_type must be one of: android, ios, web, unknown"
+        );
       }
       return true;
     }),
@@ -81,9 +83,7 @@ const validateBrandLogin = [
 ];
 
 const validateEmailVerification = [
-  body("token")
-    .notEmpty()
-    .withMessage("Verification token is required"),
+  body("token").notEmpty().withMessage("Verification token is required"),
 ];
 
 const validateResendEmailVerification = [
@@ -101,9 +101,21 @@ const validateForgotPassword = [
 ];
 
 const validateResetPassword = [
-  body("token")
+  body("token").notEmpty().withMessage("Reset token is required"),
+  body("new_password")
+    .isLength({ min: 8 })
+    .withMessage("Password must be at least 8 characters")
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
+    .withMessage(
+      "Password must contain at least one uppercase letter, one lowercase letter, and one number"
+    ),
+];
+
+// Change password (authenticated, requires current & new password)
+const validateChangePassword = [
+  body("current_password")
     .notEmpty()
-    .withMessage("Reset token is required"),
+    .withMessage("Current password is required"),
   body("new_password")
     .isLength({ min: 8 })
     .withMessage("Password must be at least 8 characters")
@@ -120,5 +132,5 @@ module.exports = {
   validateResendEmailVerification,
   validateForgotPassword,
   validateResetPassword,
+  validateChangePassword,
 };
-

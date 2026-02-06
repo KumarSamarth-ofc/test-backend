@@ -442,6 +442,59 @@ class AuthController {
     }
   }
 
+  /**
+   * Change password for authenticated brand owner (no reset token)
+   */
+  async changePassword(req, res) {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      if (!req.user || !req.user.id) {
+        return res.status(401).json({
+          success: false,
+          message: "Authentication required",
+        });
+      }
+
+      const userId = req.user.id;
+      const { current_password, new_password } = req.body;
+
+      const result = await AuthService.changePassword(
+        userId,
+        current_password,
+        new_password
+      );
+
+      if (result.success) {
+        return res.json({
+          success: true,
+          message: result.message,
+        });
+      }
+
+      const status =
+        result.code === "INVALID_CURRENT_PASSWORD" ||
+        result.code === "PASSWORD_NOT_SET"
+          ? 400
+          : 400;
+
+      return res.status(status).json({
+        success: false,
+        message: result.message,
+        code: result.code,
+      });
+    } catch (err) {
+      console.error("[v1/changePassword] error:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  }
+
   // ============================================
   // PAN VERIFICATION
   // ============================================

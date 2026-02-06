@@ -11,6 +11,7 @@ const {
   validateForgotPassword,
   validateResetPassword,
   validateVerifyPAN,
+  validateChangePassword,
 } = require("../validators");
 const AuthService = require("../services/authService");
 const authMiddleware = require("../middleware/authMiddleware");
@@ -24,7 +25,12 @@ const { upload } = require("../../utils/imageUpload");
 // ============================================
 // PUBLIC ROUTES - OTP Authentication (Influencers)
 // ============================================
-router.post("/send-otp", normalizeEnums, validateSendOTP, AuthController.sendOTP);
+router.post(
+  "/send-otp",
+  normalizeEnums,
+  validateSendOTP,
+  AuthController.sendOTP
+);
 router.post(
   "/send-registration-otp",
   validateSendOTP,
@@ -77,6 +83,14 @@ router.post(
   "/brand/reset-password",
   validateResetPassword,
   AuthController.resetPassword
+);
+
+// Change password (authenticated brand owner, requires current + new password)
+router.post(
+  "/brand/change-password",
+  authMiddleware.authenticateToken,
+  validateChangePassword,
+  AuthController.changePassword
 );
 
 // ============================================

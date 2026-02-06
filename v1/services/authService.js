@@ -1501,6 +1501,85 @@ class AuthService {
       return { success: false, message: "Failed to reset password" };
     }
   }
+
+  /**
+   * Change password for authenticated brand owner using current password
+   */
+  async changePassword(userId, currentPassword, newPassword) {
+    try {
+      // 1) Basic length check (strength is enforced by validator)
+      if (!newPassword || newPassword.length < 8) {
+        return {
+          success: false,
+          message: "Password must be at least 8 characters",
+        };
+      }
+
+      // 2) Load user
+      const { data: user, error } = await supabaseAdmin
+        .from("v1_users")
+        .select("*")
+        .eq("id", userId)
+        .eq("role", "BRAND_OWNER")
+        .eq("is_deleted", false)
+        .maybeSingle();
+
+      if (error || !user) {
+        return {
+          success: false,
+          message: "User not found",
+          code: "USER_NOT_FOUND",
+        };
+      }
+
+      if (!user.password_hash) {
+        return {
+          success: false,
+          message: "Password not set. Please use password reset.",
+          code: "PASSWORD_NOT_SET",
+        };
+      }
+
+      // 3) Verify current password
+      const matches = await this.comparePassword(
+        currentPassword,
+        user.password_hash
+      );
+
+      if (!matches) {
+        return {
+          success: false,
+          message: "Current password is incorrect",
+          code: "INVALID_CURRENT_PASSWORD",
+        };
+      }
+
+      // 4) Hash new password
+      const passwordHash = await this.hashPassword(newPassword);
+
+      // 5) Save new password
+      const { error: updateError } = await supabaseAdmin
+        .from("v1_users")
+        .update({
+          password_hash: passwordHash,
+        })
+        .eq("id", user.id)
+        .eq("is_deleted", false);
+
+      if (updateError) {
+        console.error("[v1/changePassword] Update error:", updateError);
+        return { success: false, message: "Failed to change password" };
+      }
+
+      return {
+        success: true,
+        message: "Password changed successfully",
+      };
+    } catch (err) {
+      console.error("[v1/changePassword] Exception:", err);
+      return { success: false, message: "Failed to change password" };
+    }
+  }
 }
 
 module.exports = new AuthService();
